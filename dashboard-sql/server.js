@@ -105,17 +105,23 @@ async function query(text, params = {}) {
  * mutation  = NGAY cua AMOS (UTC), mutation_t = GIO cua AMOS (UTC).
  * (Chi del_time / reci_time la kieu datetime that; mutation/mutation_t can ghep.)
  *
- * >>> DAY LA CHO DUY NHAT can chinh neu dinh dang mutation_t khac. <<<
- *     Gia dinh: mutation_t la so gio dang HHmmss (vd 143000 = 14:30:00),
- *     mutation la ngay (date/datetime hoac chuoi yyyymmdd).
+ * Dinh dang thuc te trong DB (AMOS/Progress):
+ *   - mutation   : ngay dang yyyymmdd (vd 20260708) hoac kieu date.
+ *   - mutation_t : SO MILLISECOND ke tu 00:00 (vd 71820341 = 19:57:00).
+ *
+ * Cach ghep: lay ngay (mutation) + so ms (mutation_t) roi cong @tzOffset gio.
+ * Dung TRY_CONVERT nen neu du lieu loi -> tra NULL thay vi bao loi truy van.
+ *
+ * >>> DAY LA CHO DUY NHAT can chinh neu dinh dang mutation/mutation_t khac. <<<
  *
  * @param {string} a  alias cua bang (vd 'k')
  */
 function amosToVN(a) {
-  return `DATEADD(HOUR, @tzOffset, TRY_CONVERT(datetime,
-      CONVERT(varchar(8), ${a}.[mutation], 112) + ' ' +
-      STUFF(STUFF(RIGHT('000000' + CONVERT(varchar(6), ${a}.[mutation_t]), 6), 5, 0, ':'), 3, 0, ':')
-  ))`;
+  return `DATEADD(HOUR, @tzOffset,
+      DATEADD(MILLISECOND,
+        TRY_CONVERT(int, TRY_CONVERT(bigint, ${a}.[mutation_t]) % 86400000),
+        TRY_CONVERT(datetime, TRY_CONVERT(varchar(8), ${a}.[mutation], 112))
+      ))`;
 }
 
 /**
