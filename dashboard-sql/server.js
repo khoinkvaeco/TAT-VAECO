@@ -204,14 +204,15 @@ function resolveRange(q) {
  * Dinh nghia: tu luc XUAT KHO (kho_ser1 vm='T', voucher P-...) den luc TRA
  * UNSERVICE (real_us1.del_time). TAT tinh theo GIO.
  *  - Link: kho_ser1(partno,serialno,voucherno) = real_us1(partno,serialno,voucher_s)
- *  - Department: uu tien real_us1.department; neu trong -> tra SIGN theo action_per;
- *    van trong -> 'PA'.
+ *  - Department: UU TIEN bang SIGN (don vi moi nhat theo nhan vien) tra theo
+ *    real_us1.action_per; neu SIGN khong co -> dung real_us1.department;
+ *    van trong -> 'PA'. (Neu co khac biet don vi thi SIGN la nguon chuan.)
  */
 async function qTatDepartments(range, f) {
   const params = { from: range.from, to: range.to, tzOffset: CONFIG.tzOffset, top: CONFIG.maxRows };
   let where = buildFilterClause(
     f,
-    { station: 'k.[station]', store: 'k.[store]', department: "COALESCE(NULLIF(r.[department],''), s.[DEPARTMENT], 'PA')" },
+    { station: 'k.[station]', store: 'k.[store]', department: "COALESCE(s.[DEPARTMENT], NULLIF(r.[department],''), 'PA')" },
     params
   );
   const text = `
@@ -223,7 +224,7 @@ async function qTatDepartments(range, f) {
       k.[station]     AS station,
       k.[store]       AS store,
       k.[voucherno]   AS voucher_issue,
-      COALESCE(NULLIF(r.[department], ''), s.[DEPARTMENT], 'PA') AS department,
+      COALESCE(s.[DEPARTMENT], NULLIF(r.[department], ''), 'PA') AS department,
       ${amosToVN('k')}                       AS issue_time_vn,
       r.[del_time]                           AS return_unservice_time,
       CAST(DATEDIFF(MINUTE, ${amosToVN('k')}, r.[del_time]) AS float) / 60.0 AS tat_hours
@@ -233,7 +234,7 @@ async function qTatDepartments(range, f) {
      AND k.[serialno] = r.[serialno]
      AND k.[voucherno] = r.[voucher_s]
     LEFT JOIN [DWH_DB]..[STG_AMOS].[SIGN] s
-      ON k.[action_per] = s.[USER_SIGN]
+      ON r.[action_per] = s.[USER_SIGN]
     WHERE k.[vm] = 'T'
       AND k.[voucherno] LIKE 'P-%'
       AND r.[del_time] >= @from AND r.[del_time] < @to
@@ -250,7 +251,7 @@ async function qTatCuvt(range, f) {
   const params = { from: range.from, to: range.to, top: CONFIG.maxRows };
   let where = buildFilterClause(
     f,
-    { station: 'r.[station]', store: 'r.[store]', department: "COALESCE(NULLIF(r.[department],''),'PA')" },
+    { station: 'r.[station]', store: 'r.[store]', department: "COALESCE(s.[DEPARTMENT], NULLIF(r.[department],''), 'PA')" },
     params
   );
   const text = `
@@ -261,11 +262,13 @@ async function qTatCuvt(range, f) {
       r.[descriptio] AS description,
       r.[station]    AS station,
       r.[store]      AS store,
-      COALESCE(NULLIF(r.[department], ''), 'PA') AS department,
+      COALESCE(s.[DEPARTMENT], NULLIF(r.[department], ''), 'PA') AS department,
       r.[del_time]   AS return_unservice_time,
       r.[reci_time]  AS receive_unservice_time,
       CAST(DATEDIFF(MINUTE, r.[del_time], r.[reci_time]) AS float) / 60.0 AS tat_hours
     FROM [NQT].[dbo].[real_us1] r
+    LEFT JOIN [DWH_DB]..[STG_AMOS].[SIGN] s
+      ON r.[action_per] = s.[USER_SIGN]
     WHERE r.[del_time] IS NOT NULL
       AND r.[reci_time] IS NOT NULL
       AND r.[del_time] >= @from AND r.[del_time] < @to
@@ -474,7 +477,7 @@ async function qOther(range, f) {
   const params = { from: range.from, to: range.to, top: CONFIG.maxRows };
   let where = buildFilterClause(
     f,
-    { station: 'r.[station]', store: null, department: "COALESCE(NULLIF(r.[department],''),'PA')" },
+    { station: 'r.[station]', store: null, department: "COALESCE(s.[DEPARTMENT], NULLIF(r.[department],''), 'PA')" },
     params
   );
   const text = `
@@ -484,11 +487,13 @@ async function qOther(range, f) {
       r.[batchno_of]  AS batchno_off,
       r.[qty_off]     AS qty_off,
       r.[station]     AS station,
-      COALESCE(NULLIF(r.[department], ''), 'PA') AS department,
+      COALESCE(s.[DEPARTMENT], NULLIF(r.[department], ''), 'PA') AS department,
       r.[del_staff]   AS del_staff,
       r.[del_time]    AS del_time,
       r.[on_ac]       AS note
     FROM [NQT].[dbo].[real_us1] r
+    LEFT JOIN [DWH_DB]..[STG_AMOS].[SIGN] s
+      ON r.[action_per] = s.[USER_SIGN]
     WHERE r.[on_ac] IS NOT NULL AND LTRIM(RTRIM(r.[on_ac])) <> ''
       AND r.[del_time] >= @from AND r.[del_time] < @to
       ${where}
