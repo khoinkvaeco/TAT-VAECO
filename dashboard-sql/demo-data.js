@@ -63,6 +63,8 @@ function tatDepartments(range, f) {
     const ret = new Date(issue.getTime() + tat * 3600 * 1000);
     rows.push({
       ...d,
+      event_perf: 'E' + rndInt(100000, 999999),
+      receiver: 'RCV' + rndInt(100, 999),
       voucher_issue: 'P-' + rndInt(10000, 99999),
       department: rnd(DEPARTMENTS),
       issue_time_vn: issue.toISOString(),
@@ -161,19 +163,16 @@ function removedBeforeInstalled(range, f) {
   const rows = [];
   for (let i = 0; i < 25; i++) {
     const d = baseDevice(i);
-    const removed = rndDate(range.from, range.to);
-    const tat = +(Math.random() * 24 + 0.5).toFixed(1);
-    const installed = new Date(removed.getTime() + tat * 3600 * 1000);
     rows.push({
       partno: d.partno,
       serialno: d.serialno,
       labelno: d.labelno,
-      station: d.station,
-      store: d.store,
+      description: d.description,
       ac_registr: d.ac_registr,
-      removed_time_vn: removed.toISOString(),
-      installed_time_vn: installed.toISOString(),
-      tat_hours: tat,
+      department: rnd(DEPARTMENTS),
+      station: d.station,
+      del_staff: 'NV' + rndInt(100, 999),
+      removed_time_vn: rndDate(range.from, range.to).toISOString(),
     });
   }
   return applyFilter(rows, f);

@@ -218,10 +218,12 @@ const fmtTatCell = (cell) => {
 
 /** Cot chung cho bang chi tiet TAT theo don vi. */
 const COLS_TAT_DEPT = [
+  { title: 'Event Perf', field: 'event_perf', headerFilter: 'input' },
   { title: 'Part No', field: 'partno', headerFilter: 'input' },
   { title: 'Serial No', field: 'serialno', headerFilter: 'input' },
   { title: 'Label', field: 'labelno' },
   { title: 'Mo ta', field: 'description' },
+  { title: 'Receiver', field: 'receiver', headerFilter: 'input' },
   { title: 'Don vi', field: 'department', headerFilter: 'input' },
   { title: 'Station', field: 'station', headerFilter: 'input' },
   { title: 'Store', field: 'store' },
@@ -278,18 +280,18 @@ const REPORT_DEFS = {
     ],
   },
   'removed-before-installed': {
-    title: 'Thiet bi thao truoc, lap sau (TAT rieng)',
-    desc: 'Su kien thao (YA) xay ra truoc su kien lap (YE) cua cung thiet bi.',
+    title: 'Thiet bi thao truoc, lap sau',
+    desc: 'Thiet bi thao xuong (nhan unservice) chua tim duoc khoi xuat ra doi ung theo labelno.',
     columns: [
       { title: 'Part No', field: 'partno', headerFilter: 'input' },
       { title: 'Serial No', field: 'serialno', headerFilter: 'input' },
-      { title: 'Label', field: 'labelno' },
+      { title: 'Label', field: 'labelno', headerFilter: 'input' },
+      { title: 'Mo ta', field: 'description' },
       { title: 'AC', field: 'ac_registr' },
+      { title: 'Don vi', field: 'department', headerFilter: 'input' },
       { title: 'Station', field: 'station', headerFilter: 'input' },
-      { title: 'Store', field: 'store' },
+      { title: 'NV giao', field: 'del_staff' },
       { title: 'Gio thao (VN)', field: 'removed_time_vn', formatter: fmtDateCell },
-      { title: 'Gio lap (VN)', field: 'installed_time_vn', formatter: fmtDateCell },
-      { title: 'TAT (gio)', field: 'tat_hours', formatter: fmtTatCell, hozAlign: 'right', sorter: 'number' },
     ],
   },
   other: {

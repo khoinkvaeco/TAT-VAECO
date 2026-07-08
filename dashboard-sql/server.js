@@ -253,10 +253,12 @@ async function qTatDepartments(range, f) {
   );
   const text = `
     SELECT TOP (@top)
+      k.[event_perf]  AS event_perf,
       k.[partno]      AS partno,
       k.[serialno]    AS serialno,
       k.[labelno]     AS labelno,
       k.[descriptio]  AS description,
+      k.[receiver]    AS receiver,
       k.[station]     AS station,
       k.[store]       AS store,
       k.[voucherno]   AS voucher_issue,
@@ -275,6 +277,9 @@ async function qTatDepartments(range, f) {
       ON r.[del_staff] = sd.[USER_SIGN]
     WHERE k.[vm] = 'T'
       AND k.[voucherno] LIKE 'P-%'
+      -- Bo qua ban ghi receiver rong; chi tinh khi costcenter rong
+      AND LTRIM(RTRIM(ISNULL(k.[receiver], ''))) <> ''
+      AND LTRIM(RTRIM(ISNULL(k.[costcenter], ''))) = ''
       AND r.[del_time] >= @from AND r.[del_time] < @to
       ${where}
     ORDER BY tat_hours DESC`;
@@ -320,8 +325,8 @@ async function qTatCuvt(range, f) {
 }
 
 /**
- * TAT HOAN KHO: thiet bi hoan kho (vm='TC', voucher P-CA-...) doi chieu voi
- * phieu xuat tuong ung (vm='T', voucher P-...) cung partno/serialno/labelno.
+ * TAT HOAN KHO: thiet bi hoan kho (vm='TC', voucher 'P-CA-<PS>') doi chieu voi
+ * phieu XUAT tuong ung (vm='T', voucher 'P-<PS>') - CUNG so PS - va CUNG labelno.
  * TAT = thoi diem hoan kho - thoi diem xuat kho (gio).
  */
 async function qTatReturnStore(range, f) {
@@ -347,9 +352,9 @@ async function qTatReturnStore(range, f) {
       CAST(DATEDIFF(MINUTE, ${amosToVN('t')}, ${amosToVN('tc')}) AS float) / 60.0 AS tat_hours
     FROM [NQT].[dbo].[kho_ser1] tc
     INNER JOIN [NQT].[dbo].[kho_ser1] t
-      ON tc.[partno] = t.[partno]
-     AND tc.[serialno] = t.[serialno]
-     AND tc.[labelno] = t.[labelno]
+      -- Doi chieu so PS: 'P-CA-<PS>' (hoan) <-> 'P-<PS>' (xuat), va cung labelno
+      ON RTRIM(t.[voucherno]) = 'P-' + SUBSTRING(RTRIM(tc.[voucherno]), 6, 50)
+     AND t.[labelno] = tc.[labelno]
      AND t.[vm] = 'T'
      AND t.[voucherno] LIKE 'P-%'
     LEFT JOIN [DWH_DB]..[STG_AMOS].[SIGN] s
@@ -439,6 +444,7 @@ async function qRemovedNotReturned(range, f) {
  * BAO CAO 3: Thiet bi CHUA DOI UNG.
  * Co XUAT service (kho_ser1 vm='T', P-...) nhung KHONG co tra unservice (real_us1).
  * Link kho_ser1 <-> real_us1 qua (partno, serialno, voucherno=voucher_s).
+ * BO QUA thiet bi da HOAN KHO (vm='TC', P-CA-...) - coi nhu da xu ly xong.
  */
 async function qNotReconciled(range, f) {
   const params = { from: range.from, to: range.to, tzOffset: CONFIG.tzOffset, top: CONFIG.maxRows };
@@ -468,6 +474,14 @@ async function qNotReconciled(range, f) {
     WHERE k.[vm] = 'T'
       AND k.[voucherno] LIKE 'P-%'
       AND r.[partno] IS NULL
+      -- Bo qua neu thiet bi da duoc hoan kho (P-CA-...)
+      AND NOT EXISTS (
+        SELECT 1 FROM [NQT].[dbo].[kho_ser1] tc
+        WHERE tc.[vm] = 'TC' AND tc.[voucherno] LIKE 'P-CA-%'
+          AND tc.[partno] = k.[partno]
+          AND tc.[serialno] = k.[serialno]
+          AND tc.[labelno] = k.[labelno]
+      )
       AND ${amosToVN('k')} >= @from AND ${amosToVN('k')} < @to
       ${where}
     ORDER BY issue_time_vn DESC`;
@@ -475,39 +489,42 @@ async function qNotReconciled(range, f) {
 }
 
 /**
- * BAO CAO 4: Thiet bi THAO TRUOC, LAP SAU -> co TAT rieng.
- * So sanh su kien thao (on_off vm='YA') va lap (on_off vm='YE') cung thiet bi,
- * lay cac cap ma thoi diem THAO < thoi diem LAP. TAT = lap - thao (gio).
+ * BAO CAO 4: Thiet bi THAO TRUOC, LAP SAU.
+ * Tim thiet bi THAO XUONG (nhan unservice - real_us1) ma CHUA tim duoc khoi
+ * XUAT RA doi ung (kho_ser1 vm='T', P-...) theo [labelno].
  */
 async function qRemovedBeforeInstalled(range, f) {
-  const params = { from: range.from, to: range.to, tzOffset: CONFIG.tzOffset, top: CONFIG.maxRows };
+  const params = { from: range.from, to: range.to, top: CONFIG.maxRows };
+  const dept = pickDept(['s.[DEPARTMENT]', 'sd.[DEPARTMENT]', 'r.[department]']);
   let where = buildFilterClause(
     f,
-    { station: 'ya.[station]', store: 'ya.[store]', department: null },
+    { station: 'r.[station]', store: null, department: dept },
     params
   );
   const text = `
     SELECT TOP (@top)
-      ya.[partno]   AS partno,
-      ya.[serialno] AS serialno,
-      ya.[labelno]  AS labelno,
-      ya.[station]  AS station,
-      ya.[store]    AS store,
-      ya.[ac_registr] AS ac_registr,
-      ${amosToVN('ya')} AS removed_time_vn,
-      ${amosToVN('ye')} AS installed_time_vn,
-      CAST(DATEDIFF(MINUTE, ${amosToVN('ya')}, ${amosToVN('ye')}) AS float) / 60.0 AS tat_hours
-    FROM [NQT].[dbo].[on_off] ya
-    INNER JOIN [NQT].[dbo].[on_off] ye
-      ON ya.[partno] = ye.[partno]
-     AND ya.[serialno] = ye.[serialno]
-     AND ya.[labelno] = ye.[labelno]
-     AND ye.[vm] = 'YE'
-    WHERE ya.[vm] = 'YA'
-      AND ${amosToVN('ya')} < ${amosToVN('ye')}
-      AND ${amosToVN('ya')} >= @from AND ${amosToVN('ya')} < @to
+      r.[partno]     AS partno,
+      r.[serialno]   AS serialno,
+      r.[labelno]    AS labelno,
+      r.[descriptio] AS description,
+      r.[ac_registr] AS ac_registr,
+      r.[station]    AS station,
+      ${dept} AS department,
+      r.[del_staff]  AS del_staff,
+      r.[del_time]   AS removed_time_vn
+    FROM [NQT].[dbo].[real_us1] r
+    LEFT JOIN [NQT].[dbo].[kho_ser1] k
+      ON k.[labelno] = r.[labelno]
+     AND k.[vm] = 'T'
+     AND k.[voucherno] LIKE 'P-%'
+    LEFT JOIN [DWH_DB]..[STG_AMOS].[SIGN] s
+      ON r.[action_per] = s.[USER_SIGN]
+    LEFT JOIN [DWH_DB]..[STG_AMOS].[SIGN] sd
+      ON r.[del_staff] = sd.[USER_SIGN]
+    WHERE k.[labelno] IS NULL          -- chua tim thay khoi xuat ra doi ung theo labelno
+      AND r.[del_time] >= @from AND r.[del_time] < @to
       ${where}
-    ORDER BY tat_hours DESC`;
+    ORDER BY r.[del_time] DESC`;
   return query(text, params);
 }
 
