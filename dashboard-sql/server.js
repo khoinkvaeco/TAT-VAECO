@@ -31,8 +31,8 @@ const CONFIG = {
   maxRows: parseInt(process.env.MAX_ROWS || '5000', 10),
   tzOffset: parseInt(process.env.AMOS_TZ_OFFSET_HOURS || '7', 10), // AMOS(UTC) -> VN
   // Moc (epoch) cua cot ngay AMOS: mutation = SO NGAY ke tu ngay nay.
-  // Xem /debug.html cot implied_epoch de biet gia tri dung cho DB cua ban.
-  amosEpoch: process.env.AMOS_DATE_EPOCH || '1972-01-01',
+  // Xac dinh tu moc neo: hom nay 2026-07-08 = AMOS 19913 -> epoch = 1971-12-31.
+  amosEpoch: process.env.AMOS_DATE_EPOCH || '1971-12-31',
   demoMode: String(process.env.DEMO_MODE || 'false').toLowerCase() === 'true',
 };
 
