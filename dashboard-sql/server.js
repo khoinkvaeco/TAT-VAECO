@@ -117,11 +117,16 @@ async function query(text, params = {}) {
  * @param {string} a  alias cua bang (vd 'k')
  */
 function amosToVN(a) {
-  return `DATEADD(HOUR, @tzOffset,
-      DATEADD(MILLISECOND,
-        TRY_CONVERT(int, TRY_CONVERT(bigint, ${a}.[mutation_t]) % 86400000),
-        TRY_CONVERT(datetime, TRY_CONVERT(varchar(8), ${a}.[mutation], 112))
-      ))`;
+  // Ngay (mutation): thu truc tiep (kieu date/datetime hoac chuoi 'yyyymmdd'),
+  //   neu that bai thi coi la SO yyyymmdd (vd 20260708.000000) -> lay phan nguyen -> chuoi -> datetime.
+  const dateExpr = `COALESCE(
+      TRY_CONVERT(datetime, ${a}.[mutation]),
+      TRY_CONVERT(datetime, TRY_CONVERT(varchar(8), TRY_CONVERT(bigint, TRY_CONVERT(float, ${a}.[mutation]))))
+    )`;
+  // Gio (mutation_t): SO MILLISECOND ke tu 00:00. Qua float truoc de chiu duoc
+  //   ca kieu numeric/decimal lan chuoi co phan thap phan '71820341.000000'.
+  const msExpr = `TRY_CONVERT(int, TRY_CONVERT(bigint, TRY_CONVERT(float, ${a}.[mutation_t])) % 86400000)`;
+  return `DATEADD(HOUR, @tzOffset, DATEADD(MILLISECOND, ${msExpr}, ${dateExpr}))`;
 }
 
 /**
@@ -271,6 +276,7 @@ async function qTatCuvt(range, f) {
       ON r.[action_per] = s.[USER_SIGN]
     WHERE r.[del_time] IS NOT NULL
       AND r.[reci_time] IS NOT NULL
+      AND r.[reci_time] >= r.[del_time]      -- loai ban ghi chua nhan (reci_time sentinel < del_time) -> tranh TAT am
       AND r.[del_time] >= @from AND r.[del_time] < @to
       ${where}
     ORDER BY tat_hours DESC`;
@@ -692,6 +698,76 @@ app.get(
       stores: stores.map((r) => r.v),
       departments: departments.map((r) => r.v),
     });
+  })
+);
+
+// --- DEBUG: khao sat du lieu that de kiem tra logic/dinh dang cot ---
+//     Mo http://localhost:3000/api/debug roi gui ket qua JSON de doi chieu.
+app.get(
+  '/api/debug',
+  h(async (req, res) => {
+    if (CONFIG.demoMode) return res.json({ note: 'Dang o DEMO_MODE, khong co du lieu that.' });
+
+    // Chay tung truy van doc lap, loi query nao thi ghi loi query do (khong vo het).
+    const safe = async (label, text) => {
+      try {
+        return { [label]: await query(text, { tzOffset: CONFIG.tzOffset }) };
+      } catch (e) {
+        return { [label]: { error: e.message } };
+      }
+    };
+
+    const parts = await Promise.all([
+      // 1. Kieu du lieu + gia tri mau + gio tinh ra, doi chieu del_time
+      safe(
+        'timeSample',
+        `SELECT TOP 8
+           k.[mutation] AS mutation, k.[mutation_t] AS mutation_t,
+           CAST(SQL_VARIANT_PROPERTY(CAST(k.[mutation] AS sql_variant),'BaseType') AS varchar(30))   AS mutation_type,
+           CAST(SQL_VARIANT_PROPERTY(CAST(k.[mutation_t] AS sql_variant),'BaseType') AS varchar(30)) AS mutation_t_type,
+           ${amosToVN('k')} AS issue_vn_computed,
+           r.[del_time]     AS del_time
+         FROM [NQT].[dbo].[kho_ser1] k
+         JOIN [NQT].[dbo].[real_us1] r
+           ON k.[partno]=r.[partno] AND k.[serialno]=r.[serialno] AND k.[voucherno]=r.[voucher_s]
+         WHERE k.[vm]='T' AND k.[voucherno] LIKE 'P-%'`
+      ),
+      // 2. Phan bo vm trong kho_ser1
+      safe('khoVm', `SELECT [vm] AS vm, COUNT(*) AS c FROM [NQT].[dbo].[kho_ser1] GROUP BY [vm]`),
+      // 3. Phan bo vm trong on_off (YE=lap, YA=thao)
+      safe('onoffVm', `SELECT [vm] AS vm, COUNT(*) AS c FROM [NQT].[dbo].[on_off] GROUP BY [vm]`),
+      // 4. Mau voucher xuat/hoan trong kho_ser1
+      safe(
+        'voucherSample',
+        `SELECT TOP 10 [vm] AS vm, [voucherno] AS voucherno FROM [NQT].[dbo].[kho_ser1]
+         WHERE [voucherno] IS NOT NULL ORDER BY NEWID()`
+      ),
+      // 5. reci_time / del_time - kiem tra sentinel gay TAT am
+      safe(
+        'reciSample',
+        `SELECT TOP 8 r.[del_time] AS del_time, r.[reci_time] AS reci_time,
+           DATEDIFF(MINUTE, r.[del_time], r.[reci_time]) AS diff_minutes
+         FROM [NQT].[dbo].[real_us1] r
+         WHERE r.[reci_time] IS NOT NULL ORDER BY NEWID()`
+      ),
+      safe(
+        'reciRange',
+        `SELECT MIN(r.[reci_time]) AS min_reci, MAX(r.[reci_time]) AS max_reci,
+           MIN(r.[del_time]) AS min_del, MAX(r.[del_time]) AS max_del
+         FROM [NQT].[dbo].[real_us1] r`
+      ),
+      // 6. Dem link on_off <-> real_us1 va kho_ser1 <-> on_off (kiem tra join)
+      safe(
+        'joinCounts',
+        `SELECT
+          (SELECT COUNT(*) FROM [NQT].[dbo].[kho_ser1] WHERE [vm]='T' AND [voucherno] LIKE 'P-%')   AS issued_T,
+          (SELECT COUNT(*) FROM [NQT].[dbo].[kho_ser1] WHERE [vm]='TC' AND [voucherno] LIKE 'P-CA-%') AS return_TC,
+          (SELECT COUNT(*) FROM [NQT].[dbo].[on_off] WHERE [vm]='YE') AS install_YE,
+          (SELECT COUNT(*) FROM [NQT].[dbo].[on_off] WHERE [vm]='YA') AS remove_YA`
+      ),
+    ]);
+
+    res.json(Object.assign({ tzOffset: CONFIG.tzOffset }, ...parts));
   })
 );
 
