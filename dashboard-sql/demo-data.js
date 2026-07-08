@@ -18,9 +18,11 @@ function rnd(arr) {
 function rndInt(a, b) {
   return Math.floor(a + Math.random() * (b - a + 1));
 }
-/** Ngay ngau nhien trong khoang [from, to). */
+/** Ngay ngau nhien trong khoang [from, to). Chap nhan Date hoac chuoi. */
 function rndDate(from, to) {
-  const t = from.getTime() + Math.random() * (to.getTime() - from.getTime());
+  const f = new Date(from).getTime();
+  const t2 = new Date(to).getTime();
+  const t = f + Math.random() * (t2 - f);
   return new Date(t);
 }
 function pad(n) {

@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Debug du lieu - Dashboard TAT</title>
+  <style>
+    body { font-family: system-ui, "Segoe UI", sans-serif; margin: 20px; color: #111; }
+    h1 { font-size: 18px; }
+    h2 { font-size: 15px; margin: 22px 0 6px; color: #1d4ed8; }
+    table { border-collapse: collapse; font-size: 12px; margin-bottom: 8px; }
+    th, td { border: 1px solid #ccc; padding: 4px 8px; text-align: left; white-space: nowrap; }
+    th { background: #f1f5f9; }
+    .err { color: #b91c1c; font-weight: 600; }
+    .hint { background: #fef9c3; border: 1px solid #fde047; padding: 10px 14px; border-radius: 8px; font-size: 13px; }
+    code { background: #eee; padding: 1px 5px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <h1>🔎 Debug du lieu thuc (doi chieu logic TAT)</h1>
+  <div class="hint">
+    Trang nay chi de <b>chan doan</b>. Hay <b>chup man hinh toan bo</b> (dac biet bang
+    <b>timeSample</b>) va gui lai. Chu y cot <code>issue_vn_computed</code> phai NHO HON va GAN
+    <code>del_time</code>.
+  </div>
+  <div id="content">Dang tai...</div>
+
+  <script>
+    const NICE = {
+      timeSample: 'timeSample — Kieu & gia tri that cua mutation/mutation_t, gio tinh ra vs del_time',
+      khoVm: 'khoVm — Phan bo vm trong kho_ser1',
+      onoffVm: 'onoffVm — Phan bo vm trong on_off (YE=lap, YA=thao)',
+      voucherSample: 'voucherSample — Dinh dang voucherno',
+      reciSample: 'reciSample — del_time / reci_time / chenh lech (phut)',
+      reciRange: 'reciRange — Min/Max cua reci_time va del_time',
+      joinCounts: 'joinCounts — So luong ban ghi moi loai',
+    };
+
+    function renderTable(rows) {
+      if (!Array.isArray(rows)) {
+        if (rows && rows.error) return `<div class="err">Loi: ${rows.error}</div>`;
+        return `<pre>${JSON.stringify(rows, null, 2)}</pre>`;
+      }
+      if (rows.length === 0) return '<i>(khong co dong nao)</i>';
+      const cols = Object.keys(rows[0]);
+      let h = '<table><thead><tr>' + cols.map((c) => `<th>${c}</th>`).join('') + '</tr></thead><tbody>';
+      for (const r of rows) {
+        h += '<tr>' + cols.map((c) => `<td>${r[c] === null ? '<i>null</i>' : r[c]}</td>`).join('') + '</tr>';
+      }
+      return h + '</tbody></table>';
+    }
+
+    fetch('/api/debug')
+      .then((r) => r.json())
+      .then((data) => {
+        let html = `<p>tzOffset (AMOS→VN): <b>+${data.tzOffset}</b> gio</p>`;
+        for (const key of Object.keys(data)) {
+          if (key === 'tzOffset') continue;
+          html += `<h2>${NICE[key] || key}</h2>` + renderTable(data[key]);
+        }
+        document.getElementById('content').innerHTML = html;
+      })
+      .catch((e) => {
+        document.getElementById('content').innerHTML = `<div class="err">Loi tai /api/debug: ${e.message}</div>`;
+      });
+  </script>
+</body>
+</html>

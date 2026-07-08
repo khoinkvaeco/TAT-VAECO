@@ -130,6 +130,23 @@ function amosToVN(a) {
 }
 
 /**
+ * Lam sach 1 gia tri department: bo khoang trang, coi '' va 'UNKNOWN' la KHONG co.
+ * @param {string} expr  bieu thuc cot (vd 's.[DEPARTMENT]')
+ */
+function cleanDept(expr) {
+  return `NULLIF(NULLIF(LTRIM(RTRIM(${expr})), ''), 'UNKNOWN')`;
+}
+
+/**
+ * Bieu thuc chon department theo thu tu uu tien (nguon nao co truoc thi dung).
+ * Bo qua cac gia tri rong / 'UNKNOWN'. Cuoi cung mac dinh 'PA'.
+ * @param {string[]} sources  danh sach bieu thuc cot department theo do uu tien
+ */
+function pickDept(sources) {
+  return `COALESCE(${sources.map(cleanDept).join(', ')}, 'PA')`;
+}
+
+/**
  * Build menh de WHERE dong tu cac filter chung (station/store/department).
  * Tra ve { clause, params } - clause bat dau bang ' AND ...' hoac ''.
  * @param {Object} f  { station, store, department }
@@ -156,7 +173,14 @@ function buildFilterClause(f, cols, params) {
 // 4. TAO KHOANG THOI GIAN (thang / tuan)
 // ---------------------------------------------------------------------------
 
-/** Tra ve khoang [from, to) cua 1 thang. period='YYYY-MM'. */
+/** Dinh dang 1 Date thanh chuoi datetime dia phuong 'YYYY-MM-DDTHH:mm:ss' (khong kem mui gio).
+ *  Truyen chuoi nay xuong SQL de so sanh voi cot datetime (gio VN) -> tranh lech 7h do UTC. */
+function toLocalStr(d) {
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
+/** Tra ve khoang [from, to) cua 1 thang (chuoi datetime dia phuong). period='YYYY-MM'. */
 function monthRange(period) {
   let year, month;
   if (period && /^\d{4}-\d{2}$/.test(period)) {
@@ -166,9 +190,9 @@ function monthRange(period) {
     year = now.getFullYear();
     month = now.getMonth() + 1;
   }
-  const from = new Date(Date.UTC(year, month - 1, 1, 0, 0, 0));
-  const to = new Date(Date.UTC(year, month, 1, 0, 0, 0)); // dau thang sau
-  return { from, to };
+  const from = new Date(year, month - 1, 1, 0, 0, 0);
+  const to = new Date(year, month, 1, 0, 0, 0); // dau thang sau
+  return { from: toLocalStr(from), to: toLocalStr(to) };
 }
 
 /**
@@ -186,7 +210,7 @@ function weekRange(ref) {
   thisThu.setDate(d.getDate() - backToThu);
   const lastThu = new Date(thisThu);
   lastThu.setDate(thisThu.getDate() - 7);
-  return { from: lastThu, to: thisThu };
+  return { from: toLocalStr(lastThu), to: toLocalStr(thisThu) };
 }
 
 /** Tra ve { from, to, label } tu query params. */
@@ -215,9 +239,12 @@ function resolveRange(q) {
  */
 async function qTatDepartments(range, f) {
   const params = { from: range.from, to: range.to, tzOffset: CONFIG.tzOffset, top: CONFIG.maxRows };
+  // Department: SIGN theo action_per; neu UNKNOWN/rong -> SIGN theo del_staff;
+  //   -> department luu trong real_us1; cuoi cung 'PA'.
+  const dept = pickDept(['s.[DEPARTMENT]', 'sd.[DEPARTMENT]', 'r.[department]']);
   let where = buildFilterClause(
     f,
-    { station: 'k.[station]', store: 'k.[store]', department: "COALESCE(s.[DEPARTMENT], NULLIF(r.[department],''), 'PA')" },
+    { station: 'k.[station]', store: 'k.[store]', department: dept },
     params
   );
   const text = `
@@ -229,7 +256,7 @@ async function qTatDepartments(range, f) {
       k.[station]     AS station,
       k.[store]       AS store,
       k.[voucherno]   AS voucher_issue,
-      COALESCE(s.[DEPARTMENT], NULLIF(r.[department], ''), 'PA') AS department,
+      ${dept} AS department,
       ${amosToVN('k')}                       AS issue_time_vn,
       r.[del_time]                           AS return_unservice_time,
       CAST(DATEDIFF(MINUTE, ${amosToVN('k')}, r.[del_time]) AS float) / 60.0 AS tat_hours
@@ -240,6 +267,8 @@ async function qTatDepartments(range, f) {
      AND k.[voucherno] = r.[voucher_s]
     LEFT JOIN [DWH_DB]..[STG_AMOS].[SIGN] s
       ON r.[action_per] = s.[USER_SIGN]
+    LEFT JOIN [DWH_DB]..[STG_AMOS].[SIGN] sd
+      ON r.[del_staff] = sd.[USER_SIGN]
     WHERE k.[vm] = 'T'
       AND k.[voucherno] LIKE 'P-%'
       AND r.[del_time] >= @from AND r.[del_time] < @to
@@ -254,9 +283,10 @@ async function qTatDepartments(range, f) {
  */
 async function qTatCuvt(range, f) {
   const params = { from: range.from, to: range.to, top: CONFIG.maxRows };
+  const dept = pickDept(['s.[DEPARTMENT]', 'sd.[DEPARTMENT]', 'r.[department]']);
   let where = buildFilterClause(
     f,
-    { station: 'r.[station]', store: 'r.[store]', department: "COALESCE(s.[DEPARTMENT], NULLIF(r.[department],''), 'PA')" },
+    { station: 'r.[station]', store: 'r.[store]', department: dept },
     params
   );
   const text = `
@@ -267,13 +297,15 @@ async function qTatCuvt(range, f) {
       r.[descriptio] AS description,
       r.[station]    AS station,
       r.[store]      AS store,
-      COALESCE(s.[DEPARTMENT], NULLIF(r.[department], ''), 'PA') AS department,
+      ${dept} AS department,
       r.[del_time]   AS return_unservice_time,
       r.[reci_time]  AS receive_unservice_time,
       CAST(DATEDIFF(MINUTE, r.[del_time], r.[reci_time]) AS float) / 60.0 AS tat_hours
     FROM [NQT].[dbo].[real_us1] r
     LEFT JOIN [DWH_DB]..[STG_AMOS].[SIGN] s
       ON r.[action_per] = s.[USER_SIGN]
+    LEFT JOIN [DWH_DB]..[STG_AMOS].[SIGN] sd
+      ON r.[del_staff] = sd.[USER_SIGN]
     WHERE r.[del_time] IS NOT NULL
       AND r.[reci_time] IS NOT NULL
       AND r.[reci_time] >= r.[del_time]      -- loai ban ghi chua nhan (reci_time sentinel < del_time) -> tranh TAT am
@@ -292,7 +324,7 @@ async function qTatReturnStore(range, f) {
   const params = { from: range.from, to: range.to, tzOffset: CONFIG.tzOffset, top: CONFIG.maxRows };
   let where = buildFilterClause(
     f,
-    { station: 'tc.[station]', store: 'tc.[store]', department: 's.[DEPARTMENT]' },
+    { station: 'tc.[station]', store: 'tc.[store]', department: "COALESCE(NULLIF(NULLIF(LTRIM(RTRIM(s.[DEPARTMENT])), ''), 'UNKNOWN'), 'PA')" },
     params
   );
   const text = `
@@ -305,7 +337,7 @@ async function qTatReturnStore(range, f) {
       tc.[store]      AS store,
       t.[voucherno]   AS voucher_issue,
       tc.[voucherno]  AS voucher_return,
-      COALESCE(s.[DEPARTMENT], 'PA') AS department,
+      COALESCE(NULLIF(NULLIF(LTRIM(RTRIM(s.[DEPARTMENT])), ''), 'UNKNOWN'), 'PA') AS department,
       ${amosToVN('t')}  AS issue_time_vn,
       ${amosToVN('tc')} AS return_store_time_vn,
       CAST(DATEDIFF(MINUTE, ${amosToVN('t')}, ${amosToVN('tc')}) AS float) / 60.0 AS tat_hours
@@ -335,7 +367,7 @@ async function qIssuedNotInstalled(range, f) {
   const params = { from: range.from, to: range.to, tzOffset: CONFIG.tzOffset, top: CONFIG.maxRows };
   let where = buildFilterClause(
     f,
-    { station: 'k.[station]', store: 'k.[store]', department: 's.[DEPARTMENT]' },
+    { station: 'k.[station]', store: 'k.[store]', department: "COALESCE(NULLIF(NULLIF(LTRIM(RTRIM(s.[DEPARTMENT])), ''), 'UNKNOWN'), 'PA')" },
     params
   );
   const text = `
@@ -348,7 +380,7 @@ async function qIssuedNotInstalled(range, f) {
       k.[store]      AS store,
       k.[voucherno]  AS voucher_issue,
       k.[ac_registr] AS ac_registr,
-      COALESCE(s.[DEPARTMENT], 'PA') AS department,
+      COALESCE(NULLIF(NULLIF(LTRIM(RTRIM(s.[DEPARTMENT])), ''), 'UNKNOWN'), 'PA') AS department,
       ${amosToVN('k')} AS issue_time_vn
     FROM [NQT].[dbo].[kho_ser1] k
     LEFT JOIN [NQT].[dbo].[on_off] o
@@ -408,7 +440,7 @@ async function qNotReconciled(range, f) {
   const params = { from: range.from, to: range.to, tzOffset: CONFIG.tzOffset, top: CONFIG.maxRows };
   let where = buildFilterClause(
     f,
-    { station: 'k.[station]', store: 'k.[store]', department: 's.[DEPARTMENT]' },
+    { station: 'k.[station]', store: 'k.[store]', department: "COALESCE(NULLIF(NULLIF(LTRIM(RTRIM(s.[DEPARTMENT])), ''), 'UNKNOWN'), 'PA')" },
     params
   );
   const text = `
@@ -420,7 +452,7 @@ async function qNotReconciled(range, f) {
       k.[station]    AS station,
       k.[store]      AS store,
       k.[voucherno]  AS voucher_issue,
-      COALESCE(s.[DEPARTMENT], 'PA') AS department,
+      COALESCE(NULLIF(NULLIF(LTRIM(RTRIM(s.[DEPARTMENT])), ''), 'UNKNOWN'), 'PA') AS department,
       ${amosToVN('k')} AS issue_time_vn
     FROM [NQT].[dbo].[kho_ser1] k
     LEFT JOIN [NQT].[dbo].[real_us1] r
@@ -481,9 +513,10 @@ async function qRemovedBeforeInstalled(range, f) {
  */
 async function qOther(range, f) {
   const params = { from: range.from, to: range.to, top: CONFIG.maxRows };
+  const dept = pickDept(['s.[DEPARTMENT]', 'sd.[DEPARTMENT]', 'r.[department]']);
   let where = buildFilterClause(
     f,
-    { station: 'r.[station]', store: null, department: "COALESCE(s.[DEPARTMENT], NULLIF(r.[department],''), 'PA')" },
+    { station: 'r.[station]', store: null, department: dept },
     params
   );
   const text = `
@@ -493,13 +526,15 @@ async function qOther(range, f) {
       r.[batchno_of]  AS batchno_off,
       r.[qty_off]     AS qty_off,
       r.[station]     AS station,
-      COALESCE(s.[DEPARTMENT], NULLIF(r.[department], ''), 'PA') AS department,
+      ${dept} AS department,
       r.[del_staff]   AS del_staff,
       r.[del_time]    AS del_time,
       r.[on_ac]       AS note
     FROM [NQT].[dbo].[real_us1] r
     LEFT JOIN [DWH_DB]..[STG_AMOS].[SIGN] s
       ON r.[action_per] = s.[USER_SIGN]
+    LEFT JOIN [DWH_DB]..[STG_AMOS].[SIGN] sd
+      ON r.[del_staff] = sd.[USER_SIGN]
     WHERE r.[on_ac] IS NOT NULL AND LTRIM(RTRIM(r.[on_ac])) <> ''
       AND r.[del_time] >= @from AND r.[del_time] < @to
       ${where}
