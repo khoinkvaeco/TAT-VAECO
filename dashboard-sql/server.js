@@ -30,6 +30,9 @@ const CONFIG = {
   port: parseInt(process.env.PORT || '3000', 10),
   maxRows: parseInt(process.env.MAX_ROWS || '5000', 10),
   tzOffset: parseInt(process.env.AMOS_TZ_OFFSET_HOURS || '7', 10), // AMOS(UTC) -> VN
+  // Moc (epoch) cua cot ngay AMOS: mutation = SO NGAY ke tu ngay nay.
+  // Xem /debug.html cot implied_epoch de biet gia tri dung cho DB cua ban.
+  amosEpoch: process.env.AMOS_DATE_EPOCH || '1972-01-01',
   demoMode: String(process.env.DEMO_MODE || 'false').toLowerCase() === 'true',
 };
 
@@ -89,6 +92,9 @@ function getPool() {
 async function query(text, params = {}) {
   const pool = await getPool();
   const req = pool.request();
+  // Tham so mac dinh luon co san cho cac bieu thuc doi gio/ngay AMOS
+  if (!('tzOffset' in params)) params.tzOffset = CONFIG.tzOffset;
+  if (!('amosEpoch' in params)) params.amosEpoch = CONFIG.amosEpoch;
   for (const [key, val] of Object.entries(params)) {
     req.input(key, val);
   }
@@ -105,24 +111,22 @@ async function query(text, params = {}) {
  * mutation  = NGAY cua AMOS (UTC), mutation_t = GIO cua AMOS (UTC).
  * (Chi del_time / reci_time la kieu datetime that; mutation/mutation_t can ghep.)
  *
- * Dinh dang thuc te trong DB (AMOS/Progress):
- *   - mutation   : ngay dang yyyymmdd (vd 20260708) hoac kieu date.
- *   - mutation_t : SO MILLISECOND ke tu 00:00 (vd 71820341 = 19:57:00).
+ * Dinh dang thuc te trong DB (AMOS/Progress) - xac nhan qua /debug.html:
+ *   - mutation   : SO NGAY ke tu moc @amosEpoch (vd 19360). Kieu float.
+ *   - mutation_t : SO MILLISECOND ke tu 00:00 (vd 71820341 = 19:57:00). Kieu float.
  *
- * Cach ghep: lay ngay (mutation) + so ms (mutation_t) roi cong @tzOffset gio.
+ * Cach ghep: @amosEpoch + mutation(ngay) + mutation_t(ms) roi cong @tzOffset gio.
  * Dung TRY_CONVERT nen neu du lieu loi -> tra NULL thay vi bao loi truy van.
  *
- * >>> DAY LA CHO DUY NHAT can chinh neu dinh dang mutation/mutation_t khac. <<<
+ * >>> Neu ngay ra sai, chi can chinh AMOS_DATE_EPOCH trong .env (xem cot
+ *     implied_epoch o /debug.html). <<<
  *
  * @param {string} a  alias cua bang (vd 'k')
  */
 function amosToVN(a) {
-  // Ngay (mutation): thu truc tiep (kieu date/datetime hoac chuoi 'yyyymmdd'),
-  //   neu that bai thi coi la SO yyyymmdd (vd 20260708.000000) -> lay phan nguyen -> chuoi -> datetime.
-  const dateExpr = `COALESCE(
-      TRY_CONVERT(datetime, ${a}.[mutation]),
-      TRY_CONVERT(datetime, TRY_CONVERT(varchar(8), TRY_CONVERT(bigint, TRY_CONVERT(float, ${a}.[mutation]))))
-    )`;
+  // So ngay ke tu moc epoch -> cong vao @amosEpoch.
+  const days = `TRY_CONVERT(int, TRY_CONVERT(float, ${a}.[mutation]))`;
+  const dateExpr = `DATEADD(DAY, ${days}, TRY_CONVERT(datetime, @amosEpoch))`;
   // Gio (mutation_t): SO MILLISECOND ke tu 00:00. Qua float truoc de chiu duoc
   //   ca kieu numeric/decimal lan chuoi co phan thap phan '71820341.000000'.
   const msExpr = `TRY_CONVERT(int, TRY_CONVERT(bigint, TRY_CONVERT(float, ${a}.[mutation_t])) % 86400000)`;
@@ -753,6 +757,20 @@ app.get(
     };
 
     const parts = await Promise.all([
+      // 0. TU TINH EPOCH: real_us1 co ca mutation (ngay AMOS) lan del_time (gio VN)
+      //    cho CUNG 1 ban ghi -> cot implied_epoch = del_time - mutation ngay.
+      //    Neu implied_epoch GIONG NHAU o moi dong => do la moc epoch dung.
+      safe(
+        'epochCalib',
+        `SELECT TOP 12
+           r.[mutation] AS mutation,
+           r.[del_time] AS del_time,
+           CAST(DATEADD(DAY, -TRY_CONVERT(int, TRY_CONVERT(float, r.[mutation])), CAST(r.[del_time] AS date)) AS date) AS implied_epoch,
+           DATEADD(DAY, TRY_CONVERT(int, TRY_CONVERT(float, r.[mutation])), TRY_CONVERT(datetime, @amosEpoch)) AS date_from_current_epoch
+         FROM [NQT].[dbo].[real_us1] r
+         WHERE r.[mutation] IS NOT NULL AND r.[del_time] IS NOT NULL
+         ORDER BY r.[del_time] DESC`
+      ),
       // 1. Kieu du lieu + gia tri mau + gio tinh ra, doi chieu del_time
       safe(
         'timeSample',
