@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dashboard TAT - VAECO</title>
+
+  <!-- Tailwind CSS (CDN) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Chart.js (CDN) -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <!-- Tabulator (CDN) -->
+  <link href="https://unpkg.com/tabulator-tables@6.2.1/dist/css/tabulator.min.css" rel="stylesheet" />
+  <script src="https://unpkg.com/tabulator-tables@6.2.1/dist/js/tabulator.min.js"></script>
+  <!-- SheetJS (xlsx) - phuc vu export Excel cua Tabulator -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+  <!-- CSS tuy chinh (bang mau da validate + theme sang/toi) -->
+  <link rel="stylesheet" href="style.css" />
+</head>
+
+<body class="bg-plane text-primary min-h-screen">
+  <!-- ===================== HEADER ===================== -->
+  <header class="sticky top-0 z-30 border-b border-hair bg-surface/95 backdrop-blur">
+    <div class="max-w-[1600px] mx-auto px-4 py-3 flex items-center gap-3 flex-wrap">
+      <div class="flex items-center gap-2">
+        <div class="w-9 h-9 rounded-lg grid place-items-center" style="background:var(--series-1)">
+          <span class="text-white font-bold">TAT</span>
+        </div>
+        <div>
+          <h1 class="text-lg font-bold leading-tight">Dashboard Bao cao TAT</h1>
+          <p class="text-xs text-muted">Turn-Around-Time · VAECO</p>
+        </div>
+      </div>
+
+      <div class="ml-auto flex items-center gap-2">
+        <span id="modeBadge" class="text-xs px-2 py-1 rounded-full border border-hair text-muted">--</span>
+        <button id="themeToggle" title="Doi giao dien sang/toi"
+          class="text-sm px-3 py-1.5 rounded-lg border border-hair hover:bg-hover transition">🌓</button>
+      </div>
+    </div>
+
+    <!-- ===================== FILTER BAR ===================== -->
+    <div class="max-w-[1600px] mx-auto px-4 pb-3 flex items-end gap-3 flex-wrap">
+      <!-- Kieu ky: thang / tuan -->
+      <div>
+        <label class="block text-xs text-muted mb-1">Ky bao cao</label>
+        <div class="inline-flex rounded-lg border border-hair overflow-hidden">
+          <button data-period="month" class="periodBtn px-3 py-1.5 text-sm">Thang</button>
+          <button data-period="week" class="periodBtn px-3 py-1.5 text-sm border-l border-hair">Tuan (T5→T5)</button>
+        </div>
+      </div>
+
+      <!-- Chon thang (khi ky = thang) -->
+      <div id="monthWrap">
+        <label class="block text-xs text-muted mb-1">Thang</label>
+        <input type="month" id="monthInput"
+          class="px-3 py-1.5 text-sm rounded-lg border border-hair bg-surface" />
+      </div>
+
+      <!-- Chon tuan (khi ky = tuan) -->
+      <div id="weekWrap" class="hidden">
+        <label class="block text-xs text-muted mb-1">Ngay tham chieu (tuan)</label>
+        <input type="date" id="weekInput"
+          class="px-3 py-1.5 text-sm rounded-lg border border-hair bg-surface" />
+      </div>
+
+      <!-- Station -->
+      <div>
+        <label class="block text-xs text-muted mb-1">Station</label>
+        <select id="stationSelect" class="px-3 py-1.5 text-sm rounded-lg border border-hair bg-surface min-w-[110px]">
+          <option value="">Tat ca</option>
+        </select>
+      </div>
+
+      <!-- Store -->
+      <div>
+        <label class="block text-xs text-muted mb-1">Store</label>
+        <select id="storeSelect" class="px-3 py-1.5 text-sm rounded-lg border border-hair bg-surface min-w-[110px]">
+          <option value="">Tat ca</option>
+        </select>
+      </div>
+
+      <!-- Department -->
+      <div>
+        <label class="block text-xs text-muted mb-1">Don vi (Department)</label>
+        <select id="deptSelect" class="px-3 py-1.5 text-sm rounded-lg border border-hair bg-surface min-w-[140px]">
+          <option value="">Tat ca</option>
+        </select>
+      </div>
+
+      <button id="applyBtn"
+        class="px-4 py-1.5 text-sm rounded-lg text-white font-medium" style="background:var(--series-1)">
+        Ap dung
+      </button>
+
+      <!-- Loading indicator -->
+      <div id="loading" class="hidden items-center gap-2 text-sm text-muted">
+        <span class="spinner"></span> Dang tai...
+      </div>
+      <span id="rangeLabel" class="text-xs text-muted ml-auto"></span>
+    </div>
+  </header>
+
+  <!-- Thong bao loi -->
+  <div id="errorBox" class="hidden max-w-[1600px] mx-auto mt-3 px-4">
+    <div class="rounded-lg border border-red-300 bg-red-50 text-red-800 px-4 py-3 text-sm flex items-start gap-2">
+      <span>⚠️</span><span id="errorMsg"></span>
+    </div>
+  </div>
+
+  <!-- ===================== TAB NAV ===================== -->
+  <nav class="max-w-[1600px] mx-auto px-4 mt-4">
+    <div class="flex gap-1 border-b border-hair">
+      <button data-tab="dashboard" class="mainTab px-4 py-2 text-sm font-medium">📊 Dashboard</button>
+      <button data-tab="reports" class="mainTab px-4 py-2 text-sm font-medium">📋 Bao cao don vi</button>
+    </div>
+  </nav>
+
+  <main class="max-w-[1600px] mx-auto px-4 py-5">
+    <!-- ============ TAB DASHBOARD ============ -->
+    <section id="tab-dashboard">
+      <!-- KPI Cards -->
+      <div id="kpiGrid" class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3 mb-5"></div>
+
+      <!-- Charts -->
+      <div class="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-5">
+        <div class="card">
+          <h3 class="card-title">TAT trung binh theo don vi (gio)</h3>
+          <div class="chart-box"><canvas id="chartBarDept"></canvas></div>
+        </div>
+        <div class="card">
+          <h3 class="card-title">Phan bo thiet bi theo Station</h3>
+          <div class="chart-box"><canvas id="chartPieStation"></canvas></div>
+        </div>
+        <div class="card">
+          <h3 class="card-title">TAT trung binh theo ngay (gio)</h3>
+          <div class="chart-box"><canvas id="chartLineDay"></canvas></div>
+        </div>
+        <div class="card">
+          <h3 class="card-title">Top 10 don vi theo so luong thiet bi</h3>
+          <div class="chart-box"><canvas id="chartTop10"></canvas></div>
+        </div>
+      </div>
+
+      <!-- Bang du lieu chinh -->
+      <div class="card">
+        <div class="flex items-center justify-between gap-3 flex-wrap mb-3">
+          <h3 class="card-title mb-0">Chi tiet TAT theo thiet bi</h3>
+          <div class="flex items-center gap-2">
+            <input id="mainSearch" type="text" placeholder="Tim kiem..."
+              class="px-3 py-1.5 text-sm rounded-lg border border-hair bg-surface" />
+            <button id="mainExport" class="btn-export">⬇ Excel</button>
+          </div>
+        </div>
+        <div id="mainTable"></div>
+      </div>
+    </section>
+
+    <!-- ============ TAB REPORTS ============ -->
+    <section id="tab-reports" class="hidden">
+      <!-- Sub-tabs cho tung bao cao -->
+      <div class="flex gap-1 flex-wrap mb-4">
+        <button data-report="issued-not-installed" class="reportTab">Xuat kho chua lap</button>
+        <button data-report="removed-not-returned" class="reportTab">Thao chua tra US</button>
+        <button data-report="not-reconciled" class="reportTab">Chua doi ung</button>
+        <button data-report="removed-before-installed" class="reportTab">Thao truoc lap sau</button>
+        <button data-report="other" class="reportTab">Other (on_ac)</button>
+        <button data-report="return-store-tat" class="reportTab">TAT hoan kho</button>
+      </div>
+
+      <div class="card">
+        <div class="flex items-center justify-between gap-3 flex-wrap mb-3">
+          <div>
+            <h3 id="reportTitle" class="card-title mb-0">--</h3>
+            <p id="reportDesc" class="text-xs text-muted mt-0.5"></p>
+          </div>
+          <div class="flex items-center gap-2">
+            <input id="reportSearch" type="text" placeholder="Tim kiem..."
+              class="px-3 py-1.5 text-sm rounded-lg border border-hair bg-surface" />
+            <span id="reportCount" class="text-xs text-muted"></span>
+            <button id="reportExport" class="btn-export">⬇ Excel</button>
+          </div>
+        </div>
+        <div id="reportTable"></div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="max-w-[1600px] mx-auto px-4 py-6 text-xs text-muted">
+    Dashboard TAT · Du lieu tu SQL Server (NQT / DWH_DB · AMOS). Gio da doi sang mui gio Viet Nam (+7).
+  </footer>
+
+  <script src="script.js"></script>
+</body>
+</html>

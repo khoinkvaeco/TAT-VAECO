@@ -1,0 +1,151 @@
+/* ==========================================================================
+ *  style.css  -  Giao dien Dashboard TAT
+ *  Bang mau da qua validate (dataviz) - ho tro theme SANG / TOI.
+ *  Bien mau khai bao theo "role" de doi 1 cho la doi toan bo.
+ * ========================================================================== */
+
+:root {
+  /* --- Be mat & chu (light) --- */
+  --surface-1: #fcfcfb;   /* be mat card/chart */
+  --plane:     #f9f9f7;   /* nen trang */
+  --text-primary:   #0b0b0b;
+  --text-secondary: #52514e;
+  --text-muted:     #898781;
+  --hair:      #e1e0d9;   /* duong ke mo */
+  --hover:     #f0efec;
+
+  /* --- Bang mau categorical (light) - thu tu co dinh, khong xoay vong --- */
+  --series-1: #2a78d6; /* blue   */
+  --series-2: #1baf7a; /* aqua   */
+  --series-3: #eda100; /* yellow */
+  --series-4: #008300; /* green  */
+  --series-5: #4a3aa7; /* violet */
+  --series-6: #e34948; /* red    */
+  --series-7: #e87ba4; /* magenta*/
+  --series-8: #eb6834; /* orange */
+
+  /* --- Trang thai --- */
+  --good:     #0ca30c;
+  --warning:  #fab219;
+  --critical: #d03b3b;
+}
+
+/* --- Che do TOI (chon thu cong, khong lat tu dong) --- */
+:root[data-theme="dark"] {
+  --surface-1: #1a1a19;
+  --plane:     #0d0d0d;
+  --text-primary:   #ffffff;
+  --text-secondary: #c3c2b7;
+  --text-muted:     #898781;
+  --hair:      #2c2c2a;
+  --hover:     #232322;
+
+  --series-1: #3987e5;
+  --series-2: #199e70;
+  --series-3: #c98500;
+  --series-4: #008300;
+  --series-5: #9085e9;
+  --series-6: #e66767;
+  --series-7: #d55181;
+  --series-8: #d95926;
+}
+
+/* Mac dinh theo he thong neu chua chon thu cong */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --surface-1: #1a1a19;
+    --plane:     #0d0d0d;
+    --text-primary:   #ffffff;
+    --text-secondary: #c3c2b7;
+    --hair:      #2c2c2a;
+    --hover:     #232322;
+    --series-1: #3987e5; --series-2: #199e70; --series-3: #c98500; --series-4: #008300;
+    --series-5: #9085e9; --series-6: #e66767; --series-7: #d55181; --series-8: #d95926;
+  }
+}
+
+/* --- Anh xa role -> tien ich Tailwind qua class thuong --- */
+.bg-plane   { background: var(--plane); }
+.bg-surface { background: var(--surface-1); }
+.text-primary   { color: var(--text-primary); }
+.text-secondary { color: var(--text-secondary); }
+.text-muted     { color: var(--text-muted); }
+.border-hair    { border-color: var(--hair) !important; }
+.hover\:bg-hover:hover { background: var(--hover); }
+
+body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+
+/* --- Card --- */
+.card {
+  background: var(--surface-1);
+  border: 1px solid var(--hair);
+  border-radius: 14px;
+  padding: 16px;
+}
+.card-title { font-size: 14px; font-weight: 600; color: var(--text-secondary); margin-bottom: 10px; }
+
+/* --- KPI Card --- */
+.kpi {
+  background: var(--surface-1);
+  border: 1px solid var(--hair);
+  border-radius: 14px;
+  padding: 14px 16px;
+  position: relative;
+  overflow: hidden;
+}
+.kpi::before {
+  content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px;
+  background: var(--accent, var(--series-1));
+}
+.kpi-label { font-size: 12px; color: var(--text-muted); }
+.kpi-value { font-size: 26px; font-weight: 700; line-height: 1.1; margin-top: 4px;
+             font-variant-numeric: tabular-nums; }
+.kpi-unit  { font-size: 12px; color: var(--text-muted); font-weight: 500; }
+
+/* --- Chart box (chieu cao co dinh de responsive) --- */
+.chart-box { position: relative; height: 300px; }
+
+/* --- Tabs --- */
+.mainTab { color: var(--text-muted); border-bottom: 2px solid transparent; }
+.mainTab.active { color: var(--text-primary); border-bottom-color: var(--series-1); }
+
+.periodBtn { color: var(--text-muted); background: var(--surface-1); }
+.periodBtn.active { color: #fff; background: var(--series-1); }
+
+.reportTab {
+  font-size: 13px; padding: 6px 12px; border-radius: 999px;
+  border: 1px solid var(--hair); color: var(--text-secondary); background: var(--surface-1);
+}
+.reportTab.active { background: var(--series-1); color: #fff; border-color: var(--series-1); }
+
+/* --- Nut export --- */
+.btn-export {
+  font-size: 13px; padding: 6px 12px; border-radius: 8px;
+  border: 1px solid var(--hair); color: var(--text-secondary); background: var(--surface-1);
+}
+.btn-export:hover { background: var(--hover); }
+
+/* --- Spinner loading --- */
+.spinner {
+  width: 16px; height: 16px; border-radius: 50%;
+  border: 2px solid var(--hair); border-top-color: var(--series-1);
+  display: inline-block; animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* --- Tabulator theo theme --- */
+.tabulator {
+  background: transparent; border: none; font-size: 13px;
+}
+.tabulator .tabulator-header,
+.tabulator .tabulator-header .tabulator-col {
+  background: var(--surface-1); border-color: var(--hair); color: var(--text-secondary);
+}
+.tabulator-row { background: var(--surface-1); color: var(--text-primary); border-color: var(--hair); }
+.tabulator-row.tabulator-row-even { background: var(--hover); }
+.tabulator .tabulator-footer { background: var(--surface-1); color: var(--text-secondary); border-color: var(--hair); }
+.tabulator .tabulator-footer .tabulator-page { background: var(--surface-1); color: var(--text-secondary); border-color: var(--hair); }
+.tabulator .tabulator-footer .tabulator-page.active { color: #fff; background: var(--series-1); }
+
+/* Badge TAT tra ve trong cell */
+.tat-badge { padding: 1px 8px; border-radius: 999px; font-variant-numeric: tabular-nums; font-weight: 600; }
