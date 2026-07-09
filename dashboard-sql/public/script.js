@@ -360,11 +360,12 @@ async function loadDashboard() {
     renderKPIs(dash.kpis);
     renderCharts(dash.charts);
 
-    // Bang chi tiet
-    const tat = await api('/api/tat/departments');
+    // Bang chi tiet: dung "rows" tra kem trong /api/dashboard (tranh query 2 lan);
+    // neu server cu chua co rows thi moi goi them endpoint rieng.
+    const rows = dash.rows || (await api('/api/tat/departments')).rows;
     if (!mainTable) {
       mainTable = new Tabulator('#mainTable', {
-        data: tat.rows,
+        data: rows,
         columns: COLS_TAT_DEPT,
         layout: 'fitDataFill',
         pagination: true,
@@ -375,7 +376,7 @@ async function loadDashboard() {
       });
     } else {
       mainTable.setColumns(COLS_TAT_DEPT);
-      mainTable.replaceData(tat.rows);
+      mainTable.replaceData(rows);
     }
   } catch (err) {
     showError(err.message);

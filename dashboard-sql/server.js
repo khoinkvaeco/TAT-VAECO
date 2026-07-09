@@ -134,6 +134,24 @@ function amosToVN(a) {
 }
 
 /**
+ * Doi khoang thoi gian [from, to) sang KHOANG SO NGAY AMOS (mutation).
+ * Muc dich TOI UU: cot [mutation] la so thuan (float) nen dieu kien
+ * "mutation BETWEEN @fromDay AND @toDay" dung duoc INDEX (sargable),
+ * SQL loc tho truoc bang index roi moi tinh amosToVN() chinh xac cho so it dong.
+ * Dem +/-2 ngay de bu tru chenh lech mui gio.
+ */
+function amosDayParams(range) {
+  const epoch = new Date(CONFIG.amosEpoch + 'T00:00:00Z');
+  const from = new Date(String(range.from) + 'Z');
+  const to = new Date(String(range.to) + 'Z');
+  const DAY = 86400000;
+  return {
+    fromDay: Math.floor((from - epoch) / DAY) - 2,
+    toDay: Math.ceil((to - epoch) / DAY) + 2,
+  };
+}
+
+/**
  * Lam sach 1 gia tri department: bo khoang trang, coi '' va 'UNKNOWN' la KHONG co.
  * @param {string} expr  bieu thuc cot (vd 's.[DEPARTMENT]')
  */
@@ -330,7 +348,7 @@ async function qTatCuvt(range, f) {
  * TAT = thoi diem hoan kho - thoi diem xuat kho (gio).
  */
 async function qTatReturnStore(range, f) {
-  const params = { from: range.from, to: range.to, tzOffset: CONFIG.tzOffset, top: CONFIG.maxRows };
+  const params = { from: range.from, to: range.to, tzOffset: CONFIG.tzOffset, top: CONFIG.maxRows, ...amosDayParams(range) };
   let where = buildFilterClause(
     f,
     { station: 'tc.[station]', store: 'tc.[store]', department: "COALESCE(NULLIF(NULLIF(LTRIM(RTRIM(s.[DEPARTMENT])), ''), 'UNKNOWN'), 'PA')" },
@@ -361,6 +379,7 @@ async function qTatReturnStore(range, f) {
       ON tc.[action_per] = s.[USER_SIGN]
     WHERE tc.[vm] = 'TC'
       AND tc.[voucherno] LIKE 'P-CA-%'
+      AND tc.[mutation] BETWEEN @fromDay AND @toDay  -- loc tho theo index (sargable)
       AND ${amosToVN('tc')} >= @from AND ${amosToVN('tc')} < @to
       ${where}
     ORDER BY tat_days DESC`;
@@ -373,7 +392,7 @@ async function qTatReturnStore(range, f) {
  * Link kho_ser1 <-> on_off qua (partno, serialno, labelno).
  */
 async function qIssuedNotInstalled(range, f) {
-  const params = { from: range.from, to: range.to, tzOffset: CONFIG.tzOffset, top: CONFIG.maxRows };
+  const params = { from: range.from, to: range.to, tzOffset: CONFIG.tzOffset, top: CONFIG.maxRows, ...amosDayParams(range) };
   let where = buildFilterClause(
     f,
     { station: 'k.[station]', store: 'k.[store]', department: "COALESCE(NULLIF(NULLIF(LTRIM(RTRIM(s.[DEPARTMENT])), ''), 'UNKNOWN'), 'PA')" },
@@ -402,6 +421,7 @@ async function qIssuedNotInstalled(range, f) {
     WHERE k.[vm] = 'T'
       AND k.[voucherno] LIKE 'P-%'
       AND o.[partno] IS NULL
+      AND k.[mutation] BETWEEN @fromDay AND @toDay  -- loc tho theo index (sargable)
       AND ${amosToVN('k')} >= @from AND ${amosToVN('k')} < @to
       ${where}
     ORDER BY issue_time_vn DESC`;
@@ -413,7 +433,7 @@ async function qIssuedNotInstalled(range, f) {
  * on_off vm='YA' (thao xuong) khong co ban ghi real_us1 (link qua historyno_).
  */
 async function qRemovedNotReturned(range, f) {
-  const params = { from: range.from, to: range.to, tzOffset: CONFIG.tzOffset, top: CONFIG.maxRows };
+  const params = { from: range.from, to: range.to, tzOffset: CONFIG.tzOffset, top: CONFIG.maxRows, ...amosDayParams(range) };
   let where = buildFilterClause(
     f,
     { station: 'o.[station]', store: 'o.[store]', department: null },
@@ -434,6 +454,7 @@ async function qRemovedNotReturned(range, f) {
       ON o.[historyno_] = r.[historyno_]
     WHERE o.[vm] = 'YA'
       AND r.[historyno_] IS NULL
+      AND o.[mutation] BETWEEN @fromDay AND @toDay  -- loc tho theo index (sargable)
       AND ${amosToVN('o')} >= @from AND ${amosToVN('o')} < @to
       ${where}
     ORDER BY removed_time_vn DESC`;
@@ -447,7 +468,7 @@ async function qRemovedNotReturned(range, f) {
  * BO QUA thiet bi da HOAN KHO (vm='TC', P-CA-...) - coi nhu da xu ly xong.
  */
 async function qNotReconciled(range, f) {
-  const params = { from: range.from, to: range.to, tzOffset: CONFIG.tzOffset, top: CONFIG.maxRows };
+  const params = { from: range.from, to: range.to, tzOffset: CONFIG.tzOffset, top: CONFIG.maxRows, ...amosDayParams(range) };
   let where = buildFilterClause(
     f,
     { station: 'k.[station]', store: 'k.[store]', department: "COALESCE(NULLIF(NULLIF(LTRIM(RTRIM(s.[DEPARTMENT])), ''), 'UNKNOWN'), 'PA')" },
@@ -482,6 +503,7 @@ async function qNotReconciled(range, f) {
           AND tc.[serialno] = k.[serialno]
           AND tc.[labelno] = k.[labelno]
       )
+      AND k.[mutation] BETWEEN @fromDay AND @toDay  -- loc tho theo index (sargable)
       AND ${amosToVN('k')} >= @from AND ${amosToVN('k')} < @to
       ${where}
     ORDER BY issue_time_vn DESC`;
@@ -750,6 +772,40 @@ function h(fn) {
   };
 }
 
+// --- CACHE bo nho (TTL) cho response API ---
+//     Muc dich: doi tab / bam Ap dung lai / nhieu nguoi cung xem -> khong query lai DB.
+//     Chi cache o che do LIVE; du lieu demo re nen khong can.
+const apiCache = new Map(); // url -> { t: timestamp, data }
+const CACHE_MAX_ENTRIES = 300;
+
+/**
+ * Boc route co cache theo URL day du (path + query string).
+ * @param {number} ttlMs  thoi gian song cua cache (ms)
+ */
+function cached(ttlMs, fn) {
+  return h(async (req, res) => {
+    if (CONFIG.demoMode) return fn(req, res); // demo: khong cache
+    const key = req.originalUrl;
+    const hit = apiCache.get(key);
+    if (hit && Date.now() - hit.t < ttlMs) {
+      res.set('X-Cache', 'HIT');
+      return res.json(hit.data);
+    }
+    // Chan res.json de luu ket qua vao cache truoc khi tra ve
+    const origJson = res.json.bind(res);
+    res.json = (data) => {
+      if (!data || data.error !== true) {
+        if (apiCache.size >= CACHE_MAX_ENTRIES) {
+          apiCache.delete(apiCache.keys().next().value); // xoa entry cu nhat
+        }
+        apiCache.set(key, { t: Date.now(), data });
+      }
+      return origJson(data);
+    };
+    return fn(req, res);
+  });
+}
+
 /** Doc filter chung tu query string. */
 function readFilters(q) {
   return {
@@ -772,9 +828,10 @@ app.get(
 );
 
 // --- Danh sach gia tri cho cac filter (station/store/department) ---
+//     Cache 10 phut: danh muc it thay doi, do 3 lan DISTINCT scan moi luot mo trang.
 app.get(
   '/api/filters',
-  h(async (req, res) => {
+  cached(10 * 60 * 1000, async (req, res) => {
     if (CONFIG.demoMode) return res.json(DEMO.filters());
     const stations = await query(
       `SELECT DISTINCT LTRIM(RTRIM([station])) AS v FROM [NQT].[dbo].[kho_ser1]
@@ -880,13 +937,19 @@ app.get(
   })
 );
 
-// --- Dashboard tong hop (KPI + charts) ---
+// --- Dashboard tong hop (KPI + charts + rows) ---
+//     Tra kem "rows" (chi tiet TAT) de frontend KHONG phai goi them
+//     /api/tat/departments (tranh chay lai query nang 2 lan). Cache 60s.
 app.get(
   '/api/dashboard',
-  h(async (req, res) => {
+  cached(60 * 1000, async (req, res) => {
     const range = resolveRange(req.query);
     const f = readFilters(req.query);
-    if (CONFIG.demoMode) return res.json(DEMO.dashboard(range, f));
+    if (CONFIG.demoMode) {
+      const d = DEMO.dashboard(range, f);
+      d.rows = DEMO.tatDepartments(range, f);
+      return res.json(d);
+    }
 
     // Chay song song cac truy van can thiet
     const [dept, cuvt, retStore, issuedNI, notRec] = await Promise.all([
@@ -896,14 +959,16 @@ app.get(
       qIssuedNotInstalled(range, f),
       qNotReconciled(range, f),
     ]);
-    res.json(buildDashboard(range, dept, cuvt, retStore, issuedNI, notRec));
+    const out = buildDashboard(range, dept, cuvt, retStore, issuedNI, notRec);
+    out.rows = dept; // dung lai ket qua, khong query lai
+    res.json(out);
   })
 );
 
-// --- Bang du lieu chi tiet TAT theo don vi (cho bang chinh o Dashboard) ---
+// --- Bang du lieu chi tiet TAT theo don vi (van giu endpoint rieng) ---
 app.get(
   '/api/tat/departments',
-  h(async (req, res) => {
+  cached(60 * 1000, async (req, res) => {
     const range = resolveRange(req.query);
     const f = readFilters(req.query);
     const data = CONFIG.demoMode ? DEMO.tatDepartments(range, f) : await qTatDepartments(range, f);
@@ -913,7 +978,7 @@ app.get(
 
 app.get(
   '/api/tat/cuvt',
-  h(async (req, res) => {
+  cached(60 * 1000, async (req, res) => {
     const range = resolveRange(req.query);
     const f = readFilters(req.query);
     const data = CONFIG.demoMode ? DEMO.tatCuvt(range, f) : await qTatCuvt(range, f);
@@ -934,7 +999,7 @@ const REPORTS = {
 
 app.get(
   '/api/reports/:name',
-  h(async (req, res) => {
+  cached(60 * 1000, async (req, res) => {
     const def = REPORTS[req.params.name];
     if (!def) return res.status(404).json({ error: true, message: 'Bao cao khong ton tai.' });
     const range = resolveRange(req.query);

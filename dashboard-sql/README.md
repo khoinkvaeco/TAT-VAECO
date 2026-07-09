@@ -104,6 +104,38 @@ Mở trình duyệt: **http://localhost:3000**
 - Mọi query dùng **tham số hóa** (`@param`) — tránh SQL injection.
 - Giới hạn `TOP (@MAX_ROWS)` mỗi query để không tải quá nhiều dữ liệu một lúc.
 - Bật `compression` (gzip) cho response.
+- **Cache bộ nhớ (TTL)**: dashboard/báo cáo 60 giây, danh mục filter 10 phút — đổi tab hoặc nhiều người cùng xem không query lại DB.
+- **Lọc thô sargable**: điều kiện `mutation BETWEEN @fromDay AND @toDay` cho phép SQL dùng index trên cột `mutation` trước, rồi mới tính biểu thức đổi giờ chính xác trên số ít dòng còn lại.
+- `/api/dashboard` trả kèm `rows` chi tiết — frontend không phải gọi thêm `/api/tat/departments` (tránh chạy query nặng 2 lần).
+
+### Tăng tốc phía SQL Server (khuyến nghị — chạy 1 lần)
+
+Hiệu quả lớn nhất đến từ **index trong DB**. Chạy script sau (bỏ qua index đã có):
+
+```sql
+-- kho_ser1: loc theo vm + voucher + thoi gian, join theo part/serial/label
+CREATE INDEX IX_kho_ser1_vm_mutation ON [NQT].[dbo].[kho_ser1] ([vm], [mutation])
+  INCLUDE ([voucherno], [partno], [serialno], [labelno], [station], [store], [receiver], [costcenter], [action_per], [mutation_t]);
+CREATE INDEX IX_kho_ser1_keys ON [NQT].[dbo].[kho_ser1] ([partno], [serialno], [voucherno]);
+CREATE INDEX IX_kho_ser1_label ON [NQT].[dbo].[kho_ser1] ([labelno]) INCLUDE ([vm], [voucherno]);
+
+-- real_us1: loc theo del_time, join theo voucher_s / historyno_
+CREATE INDEX IX_real_us1_del_time ON [NQT].[dbo].[real_us1] ([del_time])
+  INCLUDE ([reci_time], [partno], [serialno], [labelno], [department], [action_per], [del_staff], [station], [store]);
+CREATE INDEX IX_real_us1_voucher ON [NQT].[dbo].[real_us1] ([partno], [serialno], [voucher_s]);
+CREATE INDEX IX_real_us1_history ON [NQT].[dbo].[real_us1] ([historyno_]);
+CREATE INDEX IX_real_us1_label ON [NQT].[dbo].[real_us1] ([labelno]);
+
+-- on_off: loc theo vm + thoi gian, join theo label / historyno_
+CREATE INDEX IX_on_off_vm_mutation ON [NQT].[dbo].[on_off] ([vm], [mutation])
+  INCLUDE ([partno], [serialno], [labelno], [historyno_], [station], [store], [ac_registr], [mutation_t]);
+CREATE INDEX IX_on_off_history ON [NQT].[dbo].[on_off] ([historyno_]);
+
+-- SIGN: tra cuu nhan vien -> don vi
+CREATE INDEX IX_SIGN_user ON [DWH_DB].[STG_AMOS].[SIGN] ([USER_SIGN]) INCLUDE ([DEPARTMENT]);
+```
+
+> Lưu ý: tên schema `STG_AMOS` — nếu là database khác schema, chỉnh lại cho đúng. Nếu bảng do hệ thống khác đồng bộ (không được phép tạo index), có thể tạo **indexed view** hoặc bảng trung gian refresh định kỳ.
 
 ## 8. API
 
