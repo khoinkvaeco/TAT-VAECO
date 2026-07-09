@@ -20,13 +20,15 @@ function seriesColors() {
   return [1, 2, 3, 4, 5, 6, 7, 8].map((i) => cssVar(`--series-${i}`));
 }
 
-/** Dinh dang ngay gio (VN). */
+/** Dinh dang ngay gio (VN).
+ *  LUU Y: gia tri tu API la gio VN nhung duoc serialize dang UTC ('...Z').
+ *  Phai doc bang getUTC* de KHONG bi trinh duyet cong them mui gio lan nua. */
 function fmtDateTime(v) {
   if (!v) return '';
   const d = new Date(v);
   if (isNaN(d)) return v;
   const p = (n) => String(n).padStart(2, '0');
-  return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  return `${p(d.getUTCDate())}/${p(d.getUTCMonth() + 1)}/${d.getUTCFullYear()} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
 }
 
 /** Dinh dang so gio TAT. */
@@ -96,9 +98,9 @@ function showError(msg) {
 // --------------------------------------------------------------------------
 function renderKPIs(kpis) {
   const cards = [
-    { label: 'TAT TB don vi', value: kpis.tatDeptAvg, unit: 'gio', accent: '--series-1' },
-    { label: 'TAT CUVT', value: kpis.tatCuvtAvg, unit: 'gio', accent: '--series-2' },
-    { label: 'TAT hoan kho', value: kpis.tatReturnStoreAvg, unit: 'gio', accent: '--series-5' },
+    { label: 'TAT TB don vi', value: kpis.tatDeptAvg, unit: 'ngay', accent: '--series-1' },
+    { label: 'TAT CUVT', value: kpis.tatCuvtAvg, unit: 'ngay', accent: '--series-2' },
+    { label: 'TAT hoan kho', value: kpis.tatReturnStoreAvg, unit: 'ngay', accent: '--series-5' },
     { label: 'Thiet bi xuat kho', value: kpis.countIssued, unit: 'thiet bi', accent: '--series-3' },
     { label: 'Chua doi ung', value: kpis.countNotReconciled, unit: 'thiet bi', accent: '--series-6' },
     { label: 'Ty le doi ung', value: kpis.reconcileRate, unit: '%', accent: '--series-4' },
@@ -155,7 +157,7 @@ function renderCharts(c) {
     type: 'bar',
     data: {
       labels: c.barDept.labels,
-      datasets: [{ label: 'TAT (gio)', data: c.barDept.values, backgroundColor: cssVar('--series-1'), borderRadius: 4 }],
+      datasets: [{ label: 'TAT (ngay)', data: c.barDept.values, backgroundColor: cssVar('--series-1'), borderRadius: 4 }],
     },
     options: { ...d.common, plugins: { ...d.common.plugins, legend: { display: false } } },
   });
@@ -178,7 +180,7 @@ function renderCharts(c) {
     data: {
       labels: c.lineDay.labels,
       datasets: [{
-        label: 'TAT (gio)', data: c.lineDay.values,
+        label: 'TAT (ngay)', data: c.lineDay.values,
         borderColor: cssVar('--series-1'), backgroundColor: 'transparent',
         borderWidth: 2, tension: 0.25, pointRadius: 3, pointBackgroundColor: cssVar('--series-1'),
       }],
@@ -211,8 +213,8 @@ const fmtTatCell = (cell) => {
   if (!isFinite(v)) return '';
   // Mau theo nguong (chi de nhan biet nhanh; kem chu so nen khong phu thuoc mau)
   let color = cssVar('--good');
-  if (v > 48) color = cssVar('--critical');
-  else if (v > 24) color = cssVar('--warning');
+  if (v > 2) color = cssVar('--critical');   // nguong theo NGAY
+  else if (v > 1) color = cssVar('--warning');
   return `<span class="tat-badge" style="background:${color}22;color:${color}">${v.toFixed(1)}</span>`;
 };
 
@@ -230,7 +232,7 @@ const COLS_TAT_DEPT = [
   { title: 'Phieu xuat', field: 'voucher_issue' },
   { title: 'Gio xuat (VN)', field: 'issue_time_vn', formatter: fmtDateCell },
   { title: 'Gio tra US', field: 'return_unservice_time', formatter: fmtDateCell },
-  { title: 'TAT (gio)', field: 'tat_hours', formatter: fmtTatCell, hozAlign: 'right', sorter: 'number' },
+  { title: 'TAT (ngay)', field: 'tat_days', formatter: fmtTatCell, hozAlign: 'right', sorter: 'number' },
 ];
 
 /** Dinh nghia cot cho tung bao cao. */
@@ -262,6 +264,24 @@ const REPORT_DEFS = {
       { title: 'Station', field: 'station', headerFilter: 'input' },
       { title: 'Store', field: 'store' },
       { title: 'Gio thao (VN)', field: 'removed_time_vn', formatter: fmtDateCell },
+    ],
+  },
+  'returned-unservice': {
+    title: 'Danh muc tra unservice',
+    desc: 'Thiet bi da tra unservice (real_us1) trong ky, kem thoi gian & nhan vien giao.',
+    columns: [
+      { title: 'Part No', field: 'partno', headerFilter: 'input' },
+      { title: 'Serial No', field: 'serialno', headerFilter: 'input' },
+      { title: 'Label', field: 'labelno', headerFilter: 'input' },
+      { title: 'Mo ta', field: 'description' },
+      { title: 'History No', field: 'historyno' },
+      { title: 'AC', field: 'ac_registr' },
+      { title: 'Station', field: 'station', headerFilter: 'input' },
+      { title: 'Store', field: 'store' },
+      { title: 'Don vi', field: 'department', headerFilter: 'input' },
+      { title: 'NV giao', field: 'del_staff', headerFilter: 'input' },
+      { title: 'Gio giao (del_time)', field: 'del_time', formatter: fmtDateCell },
+      { title: 'Gio nhan (reci_time)', field: 'reci_time', formatter: fmtDateCell },
     ],
   },
   'not-reconciled': {
@@ -323,7 +343,7 @@ const REPORT_DEFS = {
       { title: 'Phieu hoan', field: 'voucher_return' },
       { title: 'Gio xuat (VN)', field: 'issue_time_vn', formatter: fmtDateCell },
       { title: 'Gio hoan (VN)', field: 'return_store_time_vn', formatter: fmtDateCell },
-      { title: 'TAT (gio)', field: 'tat_hours', formatter: fmtTatCell, hozAlign: 'right', sorter: 'number' },
+      { title: 'TAT (ngay)', field: 'tat_days', formatter: fmtTatCell, hozAlign: 'right', sorter: 'number' },
     ],
   },
 };

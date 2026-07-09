@@ -265,7 +265,7 @@ async function qTatDepartments(range, f) {
       ${dept} AS department,
       ${amosToVN('k')}                       AS issue_time_vn,
       r.[del_time]                           AS return_unservice_time,
-      CAST(DATEDIFF(MINUTE, ${amosToVN('k')}, r.[del_time]) AS float) / 60.0 AS tat_hours
+      CAST(DATEDIFF(MINUTE, ${amosToVN('k')}, r.[del_time]) AS float) / 1440.0 AS tat_days
     FROM [NQT].[dbo].[kho_ser1] k
     INNER JOIN [NQT].[dbo].[real_us1] r
       ON k.[partno] = r.[partno]
@@ -282,7 +282,7 @@ async function qTatDepartments(range, f) {
       AND LTRIM(RTRIM(ISNULL(k.[costcenter], ''))) = ''
       AND r.[del_time] >= @from AND r.[del_time] < @to
       ${where}
-    ORDER BY tat_hours DESC`;
+    ORDER BY tat_days DESC`;
   return query(text, params);
 }
 
@@ -309,7 +309,7 @@ async function qTatCuvt(range, f) {
       ${dept} AS department,
       r.[del_time]   AS return_unservice_time,
       r.[reci_time]  AS receive_unservice_time,
-      CAST(DATEDIFF(MINUTE, r.[del_time], r.[reci_time]) AS float) / 60.0 AS tat_hours
+      CAST(DATEDIFF(MINUTE, r.[del_time], r.[reci_time]) AS float) / 1440.0 AS tat_days
     FROM [NQT].[dbo].[real_us1] r
     LEFT JOIN [DWH_DB]..[STG_AMOS].[SIGN] s
       ON r.[action_per] = s.[USER_SIGN]
@@ -320,7 +320,7 @@ async function qTatCuvt(range, f) {
       AND r.[reci_time] >= r.[del_time]      -- loai ban ghi chua nhan (reci_time sentinel < del_time) -> tranh TAT am
       AND r.[del_time] >= @from AND r.[del_time] < @to
       ${where}
-    ORDER BY tat_hours DESC`;
+    ORDER BY tat_days DESC`;
   return query(text, params);
 }
 
@@ -349,7 +349,7 @@ async function qTatReturnStore(range, f) {
       COALESCE(NULLIF(NULLIF(LTRIM(RTRIM(s.[DEPARTMENT])), ''), 'UNKNOWN'), 'PA') AS department,
       ${amosToVN('t')}  AS issue_time_vn,
       ${amosToVN('tc')} AS return_store_time_vn,
-      CAST(DATEDIFF(MINUTE, ${amosToVN('t')}, ${amosToVN('tc')}) AS float) / 60.0 AS tat_hours
+      CAST(DATEDIFF(MINUTE, ${amosToVN('t')}, ${amosToVN('tc')}) AS float) / 1440.0 AS tat_days
     FROM [NQT].[dbo].[kho_ser1] tc
     INNER JOIN [NQT].[dbo].[kho_ser1] t
       -- Doi chieu so PS: 'P-CA-<PS>' (hoan) <-> 'P-<PS>' (xuat), va cung labelno
@@ -363,7 +363,7 @@ async function qTatReturnStore(range, f) {
       AND tc.[voucherno] LIKE 'P-CA-%'
       AND ${amosToVN('tc')} >= @from AND ${amosToVN('tc')} < @to
       ${where}
-    ORDER BY tat_hours DESC`;
+    ORDER BY tat_days DESC`;
   return query(text, params);
 }
 
@@ -529,6 +529,45 @@ async function qRemovedBeforeInstalled(range, f) {
 }
 
 /**
+ * BAO CAO 4b: DANH MUC TRA UNSERVICE.
+ * Liet ke thiet bi da tra unservice (real_us1) trong ky, kem del_time/del_staff
+ * va cac thong tin nhu bang "thao xuong chua tra unservice".
+ */
+async function qReturnedUnservice(range, f) {
+  const params = { from: range.from, to: range.to, top: CONFIG.maxRows };
+  const dept = pickDept(['s.[DEPARTMENT]', 'sd.[DEPARTMENT]', 'r.[department]']);
+  let where = buildFilterClause(
+    f,
+    { station: 'r.[station]', store: 'r.[store]', department: dept },
+    params
+  );
+  const text = `
+    SELECT TOP (@top)
+      r.[partno]     AS partno,
+      r.[serialno]   AS serialno,
+      r.[labelno]    AS labelno,
+      r.[descriptio] AS description,
+      r.[historyno_] AS historyno,
+      r.[ac_registr] AS ac_registr,
+      r.[station]    AS station,
+      r.[store]      AS store,
+      ${dept} AS department,
+      r.[del_staff]  AS del_staff,
+      r.[del_time]   AS del_time,
+      r.[reci_time]  AS reci_time
+    FROM [NQT].[dbo].[real_us1] r
+    LEFT JOIN [DWH_DB]..[STG_AMOS].[SIGN] s
+      ON r.[action_per] = s.[USER_SIGN]
+    LEFT JOIN [DWH_DB]..[STG_AMOS].[SIGN] sd
+      ON r.[del_staff] = sd.[USER_SIGN]
+    WHERE r.[del_time] IS NOT NULL
+      AND r.[del_time] >= @from AND r.[del_time] < @to
+      ${where}
+    ORDER BY r.[del_time] DESC`;
+  return query(text, params);
+}
+
+/**
  * BAO CAO 5: OTHER - lay note trong cot on_ac cua real_us1.
  * Cot: partno_off, serialno_o, batchno_of, qty_off, station, department, del_staff, del_time.
  */
@@ -578,9 +617,9 @@ function avg(arr, sel) {
 function buildDashboard(range, dept, cuvt, retStore, issuedNI, notRec) {
   // --- KPI cards ---
   const kpis = {
-    tatDeptAvg: round1(avg(dept, (d) => d.tat_hours)),
-    tatCuvtAvg: round1(avg(cuvt, (d) => d.tat_hours)),
-    tatReturnStoreAvg: round1(avg(retStore, (d) => d.tat_hours)),
+    tatDeptAvg: round1(avg(dept, (d) => d.tat_days)),
+    tatCuvtAvg: round1(avg(cuvt, (d) => d.tat_days)),
+    tatReturnStoreAvg: round1(avg(retStore, (d) => d.tat_days)),
     countIssued: dept.length + notRec.length, // tong so thiet bi xuat kho (da/chua doi ung)
     countNotReconciled: notRec.length,
     countIssuedNotInstalled: issuedNI.length,
@@ -591,7 +630,7 @@ function buildDashboard(range, dept, cuvt, retStore, issuedNI, notRec) {
   };
 
   // --- Bieu do cot: TAT trung binh theo tung don vi ---
-  const byDept = groupAvg(dept, 'department', 'tat_hours');
+  const byDept = groupAvg(dept, 'department', 'tat_days');
   const barDept = {
     labels: byDept.map((x) => x.key),
     values: byDept.map((x) => round1(x.avg)),
@@ -614,7 +653,7 @@ function buildDashboard(range, dept, cuvt, retStore, issuedNI, notRec) {
   };
 
   // --- Bieu do duong: TAT trung binh theo ngay (theo return time) ---
-  const byDay = groupAvgByDay(dept, 'return_unservice_time', 'tat_hours');
+  const byDay = groupAvgByDay(dept, 'return_unservice_time', 'tat_days');
   const lineDay = {
     labels: byDay.map((x) => x.key),
     values: byDay.map((x) => round1(x.avg)),
@@ -886,6 +925,7 @@ app.get(
 const REPORTS = {
   'issued-not-installed': { live: qIssuedNotInstalled, demo: 'issuedNotInstalled' },
   'removed-not-returned': { live: qRemovedNotReturned, demo: 'removedNotReturned' },
+  'returned-unservice': { live: qReturnedUnservice, demo: 'returnedUnservice' },
   'not-reconciled': { live: qNotReconciled, demo: 'notReconciled' },
   'removed-before-installed': { live: qRemovedBeforeInstalled, demo: 'removedBeforeInstalled' },
   other: { live: qOther, demo: 'other' },

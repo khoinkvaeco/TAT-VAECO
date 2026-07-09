@@ -126,7 +126,7 @@
       <!-- Charts -->
       <div class="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-5">
         <div class="card">
-          <h3 class="card-title">TAT trung binh theo don vi (gio)</h3>
+          <h3 class="card-title">TAT trung binh theo don vi (ngay)</h3>
           <div class="chart-box"><canvas id="chartBarDept"></canvas></div>
         </div>
         <div class="card">
@@ -134,7 +134,7 @@
           <div class="chart-box"><canvas id="chartPieStation"></canvas></div>
         </div>
         <div class="card">
-          <h3 class="card-title">TAT trung binh theo ngay (gio)</h3>
+          <h3 class="card-title">TAT trung binh theo ngay (don vi: ngay)</h3>
           <div class="chart-box"><canvas id="chartLineDay"></canvas></div>
         </div>
         <div class="card">
@@ -163,6 +163,7 @@
       <div class="flex gap-1 flex-wrap mb-4">
         <button data-report="issued-not-installed" class="reportTab">Xuat kho chua lap</button>
         <button data-report="removed-not-returned" class="reportTab">Thao chua tra US</button>
+        <button data-report="returned-unservice" class="reportTab">Tra unservice</button>
         <button data-report="not-reconciled" class="reportTab">Chua doi ung</button>
         <button data-report="removed-before-installed" class="reportTab">Thao truoc lap sau</button>
         <button data-report="other" class="reportTab">Other (on_ac)</button>

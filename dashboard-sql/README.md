@@ -78,9 +78,9 @@ Mở trình duyệt: **http://localhost:3000**
 
 | Chỉ số | Định nghĩa |
 |--------|-----------|
-| **TAT đơn vị (department)** | Từ lúc **xuất kho** (`kho_ser1` `vm='T'`, voucher `P-...`) đến lúc **trả unservice** (`real_us1.del_time`). Tính theo **giờ**. Link `kho_ser1(partno,serialno,voucherno)`=`real_us1(partno,serialno,voucher_s)`. Department **ưu tiên bảng `SIGN`** (đơn vị mới nhất theo nhân viên) tra theo `action_per`; nếu SIGN không có → dùng `real_us1.department`; vẫn trống → `PA`. Khi có khác biệt đơn vị, SIGN là nguồn chuẩn. |
+| **TAT đơn vị (department)** | Từ lúc **xuất kho** (`kho_ser1` `vm='T'`, voucher `P-...`) đến lúc **trả unservice** (`real_us1.del_time`). Tính theo **ngày**. Link `kho_ser1(partno,serialno,voucherno)`=`real_us1(partno,serialno,voucher_s)`. Department **ưu tiên bảng `SIGN`** (đơn vị mới nhất theo nhân viên) tra theo `action_per`; nếu SIGN không có → dùng `real_us1.department`; vẫn trống → `PA`. Khi có khác biệt đơn vị, SIGN là nguồn chuẩn. |
 | **TAT CUVT** | `reci_time − del_time` trong `real_us1` (đều là datetime giờ VN). |
-| **TAT hoàn kho** | Thiết bị hoàn kho (`vm='TC'`, voucher `P-CA-...`) đối chiếu phiếu xuất (`vm='T'`, `P-...`) cùng `partno/serialno/labelno`. TAT = giờ hoàn − giờ xuất. |
+| **TAT hoàn kho** | Thiết bị hoàn kho (`vm='TC'`, voucher `P-CA-...`) đối chiếu phiếu xuất (`vm='T'`, `P-...`) cùng `partno/serialno/labelno`. TAT = thời điểm hoàn − thời điểm xuất (đơn vị: ngày). |
 | **Xuất kho chưa lắp** | `kho_ser1 vm='T'` không có `on_off vm='YE'` (link `partno,serialno,labelno`). |
 | **Tháo chưa trả US** | `on_off vm='YA'` không có `real_us1` (link `historyno_`). |
 | **Chưa đối ứng** | Có xuất service nhưng không có trả unservice. |

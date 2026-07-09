@@ -59,8 +59,8 @@ function tatDepartments(range, f) {
   for (let i = 0; i < 120; i++) {
     const d = baseDevice(i);
     const issue = rndDate(range.from, range.to);
-    const tat = +(Math.random() * 72 + 1).toFixed(1);
-    const ret = new Date(issue.getTime() + tat * 3600 * 1000);
+    const tat = +(Math.random() * 5 + 0.1).toFixed(1); // ngay
+    const ret = new Date(issue.getTime() + tat * 86400000);
     rows.push({
       ...d,
       event_perf: 'E' + rndInt(100000, 999999),
@@ -69,7 +69,7 @@ function tatDepartments(range, f) {
       department: rnd(DEPARTMENTS),
       issue_time_vn: issue.toISOString(),
       return_unservice_time: ret.toISOString(),
-      tat_hours: tat,
+      tat_days: tat,
     });
   }
   return applyFilter(rows, f);
@@ -80,14 +80,14 @@ function tatCuvt(range, f) {
   for (let i = 0; i < 80; i++) {
     const d = baseDevice(i);
     const del = rndDate(range.from, range.to);
-    const tat = +(Math.random() * 48 + 0.5).toFixed(1);
-    const rec = new Date(del.getTime() + tat * 3600 * 1000);
+    const tat = +(Math.random() * 2 + 0.05).toFixed(1); // ngay
+    const rec = new Date(del.getTime() + tat * 86400000);
     rows.push({
       ...d,
       department: 'CUVT',
       return_unservice_time: del.toISOString(),
       receive_unservice_time: rec.toISOString(),
-      tat_hours: tat,
+      tat_days: tat,
     });
   }
   return applyFilter(rows, f);
@@ -98,8 +98,8 @@ function returnStoreTat(range, f) {
   for (let i = 0; i < 60; i++) {
     const d = baseDevice(i);
     const issue = rndDate(range.from, range.to);
-    const tat = +(Math.random() * 200 + 5).toFixed(1);
-    const ret = new Date(issue.getTime() + tat * 3600 * 1000);
+    const tat = +(Math.random() * 10 + 0.5).toFixed(1); // ngay
+    const ret = new Date(issue.getTime() + tat * 86400000);
     rows.push({
       ...d,
       voucher_issue: 'P-' + rndInt(10000, 99999),
@@ -107,7 +107,7 @@ function returnStoreTat(range, f) {
       department: rnd(DEPARTMENTS),
       issue_time_vn: issue.toISOString(),
       return_store_time_vn: ret.toISOString(),
-      tat_hours: tat,
+      tat_days: tat,
     });
   }
   return applyFilter(rows, f);
@@ -140,6 +140,29 @@ function removedNotReturned(range, f) {
       store: d.store,
       ac_registr: d.ac_registr,
       removed_time_vn: rndDate(range.from, range.to).toISOString(),
+    });
+  }
+  return applyFilter(rows, f);
+}
+
+function returnedUnservice(range, f) {
+  const rows = [];
+  for (let i = 0; i < 50; i++) {
+    const d = baseDevice(i);
+    const del = rndDate(range.from, range.to);
+    rows.push({
+      partno: d.partno,
+      serialno: d.serialno,
+      labelno: d.labelno,
+      description: d.description,
+      historyno: 'H' + rndInt(100000, 999999),
+      ac_registr: d.ac_registr,
+      station: d.station,
+      store: d.store,
+      department: rnd(DEPARTMENTS),
+      del_staff: 'NV' + rndInt(100, 999),
+      del_time: del.toISOString(),
+      reci_time: Math.random() > 0.3 ? new Date(del.getTime() + rndInt(1, 48) * 3600000).toISOString() : null,
     });
   }
   return applyFilter(rows, f);
@@ -225,14 +248,14 @@ function dashboard(range, f) {
     });
     return [...m.entries()].map(([key, g]) => ({ key, avg: g.s / g.c, count: g.c }));
   };
-  const byDept = groupAvg(dept, 'department', 'tat_hours').sort((a, b) => b.avg - a.avg);
+  const byDept = groupAvg(dept, 'department', 'tat_days').sort((a, b) => b.avg - a.avg);
   const byStationMap = new Map();
   dept.forEach((r) => byStationMap.set(r.station, (byStationMap.get(r.station) || 0) + 1));
   const byDayMap = new Map();
   dept.forEach((r) => {
     const day = r.return_unservice_time.slice(0, 10);
     if (!byDayMap.has(day)) byDayMap.set(day, { s: 0, c: 0 });
-    byDayMap.get(day).s += r.tat_hours;
+    byDayMap.get(day).s += r.tat_days;
     byDayMap.get(day).c += 1;
   });
   const days = [...byDayMap.entries()].sort((a, b) => a[0].localeCompare(b[0]));
@@ -241,9 +264,9 @@ function dashboard(range, f) {
   return {
     range: { from: range.from, to: range.to, label: range.label },
     kpis: {
-      tatDeptAvg: r1(avg(dept, (d) => d.tat_hours)),
-      tatCuvtAvg: r1(avg(cuvt, (d) => d.tat_hours)),
-      tatReturnStoreAvg: r1(avg(ret, (d) => d.tat_hours)),
+      tatDeptAvg: r1(avg(dept, (d) => d.tat_days)),
+      tatCuvtAvg: r1(avg(cuvt, (d) => d.tat_days)),
+      tatReturnStoreAvg: r1(avg(ret, (d) => d.tat_days)),
       countIssued: dept.length + nr.length,
       countNotReconciled: nr.length,
       countIssuedNotInstalled: ni.length,
@@ -266,6 +289,7 @@ module.exports = {
   returnStoreTat,
   issuedNotInstalled,
   removedNotReturned,
+  returnedUnservice,
   notReconciled,
   removedBeforeInstalled,
   other,
