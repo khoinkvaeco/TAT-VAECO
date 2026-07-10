@@ -168,37 +168,45 @@ function pickDept(sources) {
   return `COALESCE(${sources.map(cleanDept).join(', ')}, 'PA')`;
 }
 
-// SIGN lookup an toan (khong nhan ban dong): OUTER APPLY TOP 1 theo cot mutator.
-// >>> Dung join thuong voi SIGN co the lam TANG so dong neu USER_SIGN trung. <<<
-function signApply(mutatorCol, alias) {
-  return `OUTER APPLY (
-      SELECT TOP 1 [DEPARTMENT] FROM [DWH_DB]..[STG_AMOS].[SIGN]
-      WHERE [USER_SIGN] = ${mutatorCol}
-    ) ${alias}`;
+/**
+ * SIGN lookup an toan qua LINKED SERVER Oracle (DWH_DB):
+ *  - GROUP BY USER_SIGN de khong nhan ban dong (USER_SIGN trung van chi ra 1 dong).
+ *  - LEFT JOIN voi bang con (derived table) de SQL keo SIGN ve MOT LAN,
+ *    KHONG hoi Oracle tung dong (OUTER APPLY tung dong gay loi
+ *    "Cannot get the data of the row from OLE DB provider OraOLEDB.Oracle").
+ * @param {string} staffCol  cot nhan vien de tra (vd 'r.[action_per]')
+ * @param {string} alias     alias cua bang con (vd 'sm')
+ */
+function signJoin(staffCol, alias) {
+  return `LEFT JOIN (
+      SELECT [USER_SIGN], MAX([DEPARTMENT]) AS [DEPARTMENT]
+      FROM [DWH_DB]..[STG_AMOS].[SIGN]
+      GROUP BY [USER_SIGN]
+    ) ${alias} ON ${alias}.[USER_SIGN] = ${staffCol}`;
 }
 
 /**
- * Trung tam (department) cho bang CO real_us1:
+ * Trung tam (department) cho bang real_us1:
  *   1) real_us1.department (bo '' / 'UNKNOWN')
- *   2) neu mutator bat dau bang 'PA' -> 'PA'
- *   3) tra SIGN theo mutator
+ *   2) neu action_per bat dau bang 'PA' -> 'PA'
+ *   3) tra SIGN theo action_per
  *   4) mac dinh 'PA'
  */
 function deptFromReal(rAlias, smAlias) {
   return `COALESCE(
       ${cleanDept(`${rAlias}.[department]`)},
-      CASE WHEN LEFT(LTRIM(RTRIM(${rAlias}.[mutator])), 2) = 'PA' THEN 'PA' END,
+      CASE WHEN LEFT(LTRIM(RTRIM(${rAlias}.[action_per])), 2) = 'PA' THEN 'PA' END,
       ${cleanDept(`${smAlias}.[DEPARTMENT]`)},
       'PA')`;
 }
 
 /**
- * Trung tam cho bang KHONG co cot department (kho_ser1 / on_off): dung mutator.
- *   1) mutator bat dau 'PA' -> 'PA'  2) SIGN theo mutator  3) 'PA'
+ * Trung tam cho bang kho_ser1 (khong co cot department): dung created_b2.
+ *   1) created_b2 bat dau 'PA' -> 'PA'  2) SIGN theo created_b2  3) 'PA'
  */
-function deptFromMutator(mutatorCol, smAlias) {
+function deptFromStaff(staffCol, smAlias) {
   return `COALESCE(
-      CASE WHEN LEFT(LTRIM(RTRIM(${mutatorCol})), 2) = 'PA' THEN 'PA' END,
+      CASE WHEN LEFT(LTRIM(RTRIM(${staffCol})), 2) = 'PA' THEN 'PA' END,
       ${cleanDept(`${smAlias}.[DEPARTMENT]`)},
       'PA')`;
 }
@@ -336,7 +344,7 @@ async function qTatDepartments(range, f) {
       ON k.[partno] = r.[partno]
      AND k.[serialno] = r.[serialno]
      AND k.[voucherno] = r.[voucher_s]
-    ${signApply('r.[mutator]', 'sm')}
+    ${signJoin('r.[action_per]', 'sm')}
     WHERE k.[vm] = 'T'
       AND k.[voucherno] LIKE 'P-%'
       -- Bo qua ban ghi receiver rong; chi tinh khi costcenter rong
@@ -373,7 +381,7 @@ async function qTatCuvt(range, f) {
       r.[reci_time]  AS receive_unservice_time,
       CAST(DATEDIFF(MINUTE, r.[del_time], r.[reci_time]) AS float) / 1440.0 AS tat_days
     FROM [NQT].[dbo].[real_us1] r
-    ${signApply('r.[mutator]', 'sm')}
+    ${signJoin('r.[action_per]', 'sm')}
     WHERE r.[del_time] IS NOT NULL
       AND r.[reci_time] IS NOT NULL
       AND r.[reci_time] >= r.[del_time]      -- loai ban ghi chua nhan (reci_time sentinel < del_time) -> tranh TAT am
@@ -390,7 +398,7 @@ async function qTatCuvt(range, f) {
  */
 async function qTatReturnStore(range, f) {
   const params = { from: range.from, to: range.to, tzOffset: CONFIG.tzOffset, top: CONFIG.maxRows, ...amosDayParams(range) };
-  const dept = deptFromMutator('tc.[mutator]', 'sm');
+  const dept = deptFromStaff('tc.[created_b2]', 'sm');
   let where = buildFilterClause(
     f,
     { station: 'tc.[station]', store: 'tc.[store]', department: dept },
@@ -417,7 +425,7 @@ async function qTatReturnStore(range, f) {
      AND t.[labelno] = tc.[labelno]
      AND t.[vm] = 'T'
      AND t.[voucherno] LIKE 'P-%'
-    ${signApply('tc.[mutator]', 'sm')}
+    ${signJoin('tc.[created_b2]', 'sm')}
     WHERE tc.[vm] = 'TC'
       AND tc.[voucherno] LIKE 'P-CA-%'
       AND tc.[mutation] BETWEEN @fromDay AND @toDay  -- loc tho theo index (sargable)
@@ -434,7 +442,7 @@ async function qTatReturnStore(range, f) {
  */
 async function qIssuedNotInstalled(range, f) {
   const params = { from: range.from, to: range.to, tzOffset: CONFIG.tzOffset, top: CONFIG.maxRows, ...amosDayParams(range) };
-  const dept = deptFromMutator('k.[mutator]', 'sm');
+  const dept = deptFromStaff('k.[created_b2]', 'sm');
   let where = buildFilterClause(
     f,
     { station: 'k.[station]', store: 'k.[store]', department: dept },
@@ -460,7 +468,7 @@ async function qIssuedNotInstalled(range, f) {
      AND k.[serialno] = o.[serialno]
      AND k.[labelno] = o.[labelno]
      AND o.[vm] = 'YE'
-    ${signApply('k.[mutator]', 'sm')}
+    ${signJoin('k.[created_b2]', 'sm')}
     WHERE k.[vm] = 'T'
       AND k.[voucherno] LIKE 'P-%'
       AND o.[partno] IS NULL
@@ -523,7 +531,7 @@ async function qRemovedNotReturned(range, f) {
  */
 async function qNotReconciled(range, f) {
   const params = { from: range.from, to: range.to, tzOffset: CONFIG.tzOffset, top: CONFIG.maxRows, ...amosDayParams(range) };
-  const dept = deptFromMutator('k.[mutator]', 'sm');
+  const dept = deptFromStaff('k.[created_b2]', 'sm');
   let where = buildFilterClause(
     f,
     { station: 'k.[station]', store: 'k.[store]', department: dept },
@@ -546,7 +554,7 @@ async function qNotReconciled(range, f) {
       ON k.[partno] = r.[partno]
      AND k.[serialno] = r.[serialno]
      AND k.[voucherno] = r.[voucher_s]
-    ${signApply('k.[mutator]', 'sm')}
+    ${signJoin('k.[created_b2]', 'sm')}
     WHERE k.[vm] = 'T'
       AND k.[voucherno] LIKE 'P-%'
       AND r.[partno] IS NULL
@@ -566,18 +574,17 @@ async function qNotReconciled(range, f) {
 }
 
 /**
- * BAO CAO 4: Thiet bi THAO TRUOC, LAP SAU -> 2 TAT rieng.
- * Voi moi thiet bi (partno/serialno/labelno) xuat kho service trong ky:
- *   - TAT xuat->lap  = tu luc XUAT KHO (kho_ser1 T) den luc LAP LEN tau (on_off YE).
- *   - TAT thao->traUS = tu luc THAO XUONG (on_off YA) den luc TRA UNSERVICE (real_us1.del_time).
- * The hien ca NGAY THAO va NGAY LAP de de doi chieu.
- *
- * >>> GIA DINH lien ket theo (partno,serialno,labelno) va real_us1 theo
- *     historyno_ cua su kien thao. Neu don vi lien ket khac, bao de chinh. <<<
+ * BAO CAO 4: THAO TRUOC, LAP SAU (thiet bi thao ra truoc, phieu xuat kho lam sau).
+ * Lien ket theo [labelno] (cung 1 label giao dich):
+ *   - Thiet bi LAP (YE) va thiet bi THAO (YA) lay tu on_off theo labelno cua
+ *     phieu xuat kho_ser1 (vm='T', P-...).
+ *   - "Dung logic" khi NGAY XUAT KHO > NGAY LAP -> chi lay cac dong nay.
+ *   - The hien RO thiet bi thao (partno/serial thao) vs thiet bi xuat (partno/serial xuat).
+ *   - 2 TAT: xuat sau lap bao nhieu ngay (issue - install) va thao -> tra US.
  */
 async function qRemovedBeforeInstalled(range, f) {
   const params = { from: range.from, to: range.to, top: CONFIG.maxRows, ...amosDayParams(range) };
-  const dept = deptFromMutator('k.[mutator]', 'sm');
+  const dept = deptFromStaff('k.[created_b2]', 'sm');
   let where = buildFilterClause(
     f,
     { station: 'k.[station]', store: 'k.[store]', department: dept },
@@ -585,42 +592,44 @@ async function qRemovedBeforeInstalled(range, f) {
   );
   const text = `
     SELECT TOP (@top)
-      k.[partno]     AS partno,
-      k.[serialno]   AS serialno,
       k.[labelno]    AS labelno,
+      k.[partno]     AS partno,          -- thiet bi XUAT KHO (xuat sau)
+      k.[serialno]   AS serialno,
       k.[descriptio] AS description,
+      ya.partno      AS partno_removed,  -- thiet bi THAO (thao truoc)
+      ya.serialno    AS serialno_removed,
       k.[ac_registr] AS ac_registr,
       k.[station]    AS station,
       ${dept} AS department,
-      ${amosToVN('k')}      AS issue_time_vn,
+      ya.removal_time       AS removed_time_vn,     -- ngay thao
       ye.install_time       AS installed_time_vn,   -- ngay lap
-      ya.removal_time       AS removed_time_vn,      -- ngay thao
+      ${amosToVN('k')}      AS issue_time_vn,       -- ngay xuat kho (sau ngay lap)
       r.[del_time]          AS return_unservice_time,
-      CAST(DATEDIFF(MINUTE, ${amosToVN('k')}, ye.install_time) AS float) / 1440.0 AS tat_issue_install_days,
+      CAST(DATEDIFF(MINUTE, ye.install_time, ${amosToVN('k')}) AS float) / 1440.0 AS tat_issue_install_days,
       CAST(DATEDIFF(MINUTE, ya.removal_time, r.[del_time]) AS float) / 1440.0    AS tat_removal_return_days
     FROM [NQT].[dbo].[kho_ser1] k
-    -- Lan LAP LEN tau (YE) dau tien cua thiet bi
+    -- Su kien LAP (YE) cung labelno (khong yeu cau cung part/serial:
+    --  thiet bi lap co the la thiet bi khac voi phieu xuat)
     OUTER APPLY (
       SELECT TOP 1 ${amosToVN('o')} AS install_time
       FROM [NQT].[dbo].[on_off] o
-      WHERE o.[partno] = k.[partno] AND o.[serialno] = k.[serialno]
-        AND o.[labelno] = k.[labelno] AND o.[vm] = 'YE'
+      WHERE RTRIM(o.[labelno]) = RTRIM(k.[labelno]) AND o.[vm] = 'YE'
       ORDER BY o.[mutation] ASC, o.[mutation_t] ASC
     ) ye
-    -- Lan THAO XUONG (YA) gan nhat cua thiet bi
+    -- Su kien THAO (YA) cung labelno
     OUTER APPLY (
-      SELECT TOP 1 ${amosToVN('o')} AS removal_time, o.[historyno_] AS historyno
+      SELECT TOP 1 ${amosToVN('o')} AS removal_time, o.[historyno_] AS historyno,
+             o.[partno] AS partno, o.[serialno] AS serialno
       FROM [NQT].[dbo].[on_off] o
-      WHERE o.[partno] = k.[partno] AND o.[serialno] = k.[serialno]
-        AND o.[labelno] = k.[labelno] AND o.[vm] = 'YA'
-      ORDER BY o.[mutation] DESC, o.[mutation_t] DESC
+      WHERE RTRIM(o.[labelno]) = RTRIM(k.[labelno]) AND o.[vm] = 'YA'
+      ORDER BY o.[mutation] ASC, o.[mutation_t] ASC
     ) ya
     LEFT JOIN [NQT].[dbo].[real_us1] r ON RTRIM(r.[historyno_]) = RTRIM(ya.historyno)
-    ${signApply('k.[mutator]', 'sm')}
+    ${signJoin('k.[created_b2]', 'sm')}
     WHERE k.[vm] = 'T'
       AND k.[voucherno] LIKE 'P-%'
       AND ye.install_time IS NOT NULL
-      -- Logic "thao truoc lap sau": ngay XUAT KHO SAU ngay LAP
+      -- "Thao truoc lap sau" dung logic: NGAY XUAT KHO > NGAY LAP
       AND ${amosToVN('k')} > ye.install_time
       AND k.[mutation] BETWEEN @fromDay AND @toDay
       AND ${amosToVN('k')} >= @from AND ${amosToVN('k')} < @to
@@ -656,7 +665,7 @@ async function qReturnedUnservice(range, f) {
       r.[del_time]   AS del_time,
       r.[reci_time]  AS reci_time
     FROM [NQT].[dbo].[real_us1] r
-    ${signApply('r.[mutator]', 'sm')}
+    ${signJoin('r.[action_per]', 'sm')}
     WHERE r.[del_time] IS NOT NULL
       AND r.[del_time] >= @from AND r.[del_time] < @to
       ${where}
@@ -688,7 +697,7 @@ async function qOther(range, f) {
       r.[del_time]    AS del_time,
       r.[on_ac]       AS note
     FROM [NQT].[dbo].[real_us1] r
-    ${signApply('r.[mutator]', 'sm')}
+    ${signJoin('r.[action_per]', 'sm')}
     WHERE r.[on_ac] IS NOT NULL AND LTRIM(RTRIM(r.[on_ac])) <> ''
       -- Ke ca ban ghi chua co del_time (del_time null/sentinel van la note "other")
       AND (r.[del_time] IS NULL OR r.[del_time] < '1902-01-01'

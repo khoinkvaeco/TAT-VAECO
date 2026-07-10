@@ -195,16 +195,18 @@ function removedBeforeInstalled(range, f) {
   const rows = [];
   for (let i = 0; i < 25; i++) {
     const d = baseDevice(i);
-    // Logic "thao truoc lap sau": ngay XUAT KHO SAU ngay LAP
-    const install = rndDate(range.from, range.to);
+    // Logic "thao truoc lap sau": THAO -> LAP -> XUAT KHO (phieu lam sau)
+    const removal = rndDate(range.from, range.to);
+    const install = new Date(removal.getTime() + rndInt(0, 2) * 86400000 + 3600000);
     const issue = new Date(install.getTime() + rndInt(1, 10) * 86400000);
-    const removal = new Date(install.getTime() + rndInt(10, 200) * 86400000);
     const ret = new Date(removal.getTime() + rndInt(1, 3) * 86400000);
     rows.push({
+      labelno: d.labelno,
       partno: d.partno,
       serialno: d.serialno,
-      labelno: d.labelno,
       description: d.description,
+      partno_removed: 'PN-' + pad(rndInt(100, 999)),
+      serialno_removed: 'SN' + rndInt(10000, 99999),
       ac_registr: d.ac_registr,
       department: rnd(DEPARTMENTS),
       station: d.station,
@@ -212,7 +214,7 @@ function removedBeforeInstalled(range, f) {
       installed_time_vn: install.toISOString(),
       removed_time_vn: removal.toISOString(),
       return_unservice_time: ret.toISOString(),
-      tat_issue_install_days: +((install - issue) / 86400000).toFixed(1),
+      tat_issue_install_days: +((issue - install) / 86400000).toFixed(1),
       tat_removal_return_days: +((ret - removal) / 86400000).toFixed(1),
     });
   }
