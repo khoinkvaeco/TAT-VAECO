@@ -335,6 +335,7 @@ async function qTatDepartments(range, f) {
       k.[store]       AS store,
       k.[voucherno]   AS voucher_issue,
       k.[picking_li]  AS picking_li,
+      r.[action_per]  AS staff,
       ${dept} AS department,
       ${amosToVN('k')}                       AS issue_time_vn,
       r.[del_time]                           AS return_unservice_time,
@@ -376,6 +377,7 @@ async function qTatCuvt(range, f) {
       r.[descriptio] AS description,
       r.[station]    AS station,
       r.[store]      AS store,
+      r.[action_per] AS staff,
       ${dept} AS department,
       r.[del_time]   AS return_unservice_time,
       r.[reci_time]  AS receive_unservice_time,
@@ -414,6 +416,7 @@ async function qTatReturnStore(range, f) {
       tc.[store]      AS store,
       t.[voucherno]   AS voucher_issue,
       t.[picking_li]  AS picking_li,
+      t.[created_b2]  AS staff,
       ${dept} AS department,
       ${amosToVN('t')}  AS issue_time_vn,
       ${amosToVN('tc')} AS return_store_time_vn,
@@ -459,6 +462,7 @@ async function qIssuedNotInstalled(range, f) {
       k.[store]      AS store,
       k.[voucherno]  AS voucher_issue,
       k.[ac_registr] AS ac_registr,
+      k.[created_b2] AS staff,
       ${dept} AS department,
       ${amosToVN('k')} AS issue_time_vn,
       -- TAT ton dong = tu luc xuat kho den HIEN TAI (ngay)
@@ -512,6 +516,7 @@ async function qRemovedNotReturned(range, f) {
       o.[station]    AS station,
       o.[store]      AS store,
       o.[ac_registr] AS ac_registr,
+      o.[created_by] AS staff,
       ${amosToVN('o')} AS removed_time_vn
     FROM [NQT].[dbo].[on_off] o
     LEFT JOIN [NQT].[dbo].[real_us1] r
@@ -549,6 +554,7 @@ async function qNotReconciled(range, f) {
       k.[store]      AS store,
       k.[voucherno]  AS voucher_issue,
       k.[picking_li] AS picking_li,
+      k.[created_b2] AS staff,
       ${dept} AS department,
       ${amosToVN('k')} AS issue_time_vn
     FROM [NQT].[dbo].[kho_ser1] k
@@ -602,6 +608,7 @@ async function qRemovedBeforeInstalled(range, f) {
       ya.partno      AS partno_removed,  -- thiet bi THAO (thao truoc)
       ya.serialno    AS serialno_removed,
       k.[ac_registr] AS ac_registr,
+      k.[created_b2] AS staff,
       k.[station]    AS station,
       ${dept} AS department,
       ya.removal_time       AS removed_time_vn,     -- ngay thao
@@ -663,6 +670,7 @@ async function qReturnedUnservice(range, f) {
       r.[descriptio] AS description,
       r.[historyno_] AS historyno,
       r.[ac_registr] AS ac_registr,
+      r.[action_per] AS staff,
       r.[station]    AS station,
       ${dept} AS department,
       r.[del_staff]  AS del_staff,
@@ -695,6 +703,7 @@ async function qOther(range, f) {
       r.[serialno_o]  AS serialno_off,
       r.[batchno_of]  AS batchno_off,
       r.[qty_off]     AS qty_off,
+      r.[action_per]  AS staff,
       r.[station]     AS station,
       ${dept} AS department,
       r.[del_staff]   AS del_staff,

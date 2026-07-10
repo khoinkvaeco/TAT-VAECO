@@ -39,6 +39,7 @@ function baseDevice(i) {
     station: rnd(STATIONS),
     store: rnd(STORES),
     ac_registr: rnd(AC),
+    staff: 'VAE' + rndInt(10000, 99999),
   };
 }
 
@@ -144,6 +145,7 @@ function removedNotReturned(range, f) {
       serialno: d.serialno,
       labelno: d.labelno,
       historyno: 'H' + rndInt(100000, 999999),
+      staff: d.staff,
       station: d.station,
       store: d.store,
       ac_registr: d.ac_registr,
@@ -164,6 +166,7 @@ function returnedUnservice(range, f) {
       labelno: d.labelno,
       description: d.description,
       historyno: 'H' + rndInt(100000, 999999),
+      staff: d.staff,
       ac_registr: d.ac_registr,
       station: d.station,
       store: d.store,
@@ -205,6 +208,7 @@ function removedBeforeInstalled(range, f) {
       partno: d.partno,
       serialno: d.serialno,
       description: d.description,
+      staff: d.staff,
       partno_removed: 'PN-' + pad(rndInt(100, 999)),
       serialno_removed: 'SN' + rndInt(10000, 99999),
       ac_registr: d.ac_registr,
@@ -230,6 +234,7 @@ function other(range, f) {
       serialno_off: d.serialno,
       batchno_off: 'B' + rndInt(1000, 9999),
       qty_off: rndInt(1, 5),
+      staff: d.staff,
       station: d.station,
       department: rnd(DEPARTMENTS),
       del_staff: 'NV' + rndInt(100, 999),
