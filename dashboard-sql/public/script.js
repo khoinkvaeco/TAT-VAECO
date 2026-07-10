@@ -57,6 +57,24 @@ let mainTable = null;   // Tabulator bang chinh
 let reportTable = null; // Tabulator bang bao cao
 const charts = {};      // luu instance Chart.js
 
+// Cache du lieu bao cao PHIA TRINH DUYET theo (ten bao cao + filter):
+// doi qua lai giua cac tab khong goi lai API/DB. Xoa khi bam "Ap dung".
+const reportCache = new Map();
+
+// --- Luu / khoi phuc cau hinh filter (localStorage) de lan sau mo lai dung ngay ---
+const FILTER_STORE_KEY = 'tat-filters-v1';
+function saveFilters() {
+  const { periodType, month, week, station, store, department } = state;
+  localStorage.setItem(FILTER_STORE_KEY, JSON.stringify({ periodType, month, week, station, store, department }));
+}
+function loadSavedFilters() {
+  try {
+    return JSON.parse(localStorage.getItem(FILTER_STORE_KEY) || 'null');
+  } catch {
+    return null;
+  }
+}
+
 // --------------------------------------------------------------------------
 // 2. Goi API
 // --------------------------------------------------------------------------
@@ -175,19 +193,19 @@ function renderCharts(c) {
     options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'right', labels: { color: cssVar('--text-secondary') } } } },
   });
 
-  // 4.3 Bieu do duong - TAT TB theo ngay
+  // 4.3 Bieu do cot nhom - So luong xuat kho & tra unservice theo Trung tam
+  //     (2 series -> co legend; mau theo thu tu co dinh series-1/series-2)
   destroyChart('line');
   charts.line = new Chart($('#chartLineDay'), {
-    type: 'line',
+    type: 'bar',
     data: {
-      labels: c.lineDay.labels,
-      datasets: [{
-        label: 'TAT (ngày)', data: c.lineDay.values,
-        borderColor: cssVar('--series-1'), backgroundColor: 'transparent',
-        borderWidth: 2, tension: 0.25, pointRadius: 3, pointBackgroundColor: cssVar('--series-1'),
-      }],
+      labels: c.deptVolume.labels,
+      datasets: [
+        { label: 'Xuất kho', data: c.deptVolume.issued, backgroundColor: cssVar('--series-1'), borderRadius: 4 },
+        { label: 'Trả unservice', data: c.deptVolume.returned, backgroundColor: cssVar('--series-2'), borderRadius: 4 },
+      ],
     },
-    options: { ...d.common, plugins: { ...d.common.plugins, legend: { display: false } } },
+    options: d.common,
   });
 
   // 4.4 Top 10 don vi theo so luong (1 series -> series-2)
@@ -440,7 +458,13 @@ async function loadReport(name) {
   showError('');
   showLoading(true);
   try {
-    const data = await api(`/api/reports/${name}`);
+    // Dung cache theo (bao cao + filter) de doi tab khong load lai du lieu
+    const cacheKey = `${name}?${buildQuery()}`;
+    let data = reportCache.get(cacheKey);
+    if (!data) {
+      data = await api(`/api/reports/${name}`);
+      reportCache.set(cacheKey, data);
+    }
     $('#reportCount').textContent = `${data.count} dòng`;
     if (!reportTable) {
       reportTable = new Tabulator('#reportTable', {
@@ -540,12 +564,23 @@ function switchTab(tab) {
 // --------------------------------------------------------------------------
 // 12. Gan su kien & khoi tao
 // --------------------------------------------------------------------------
-function init() {
+async function init() {
   // Mac dinh: thang hien tai
   const now = new Date();
   state.month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+
+  // Khoi phuc cau hinh filter da luu (neu co)
+  const saved = loadSavedFilters();
+  if (saved) {
+    if (saved.periodType) state.periodType = saved.periodType;
+    if (saved.month) state.month = saved.month;
+    if (saved.week) state.week = saved.week;
+    state.station = saved.station || '';
+    state.store = saved.store || '';
+    state.department = saved.department || '';
+  }
   $('#monthInput').value = state.month;
-  $('#weekInput').value = now.toISOString().slice(0, 10);
+  $('#weekInput').value = state.week || now.toISOString().slice(0, 10);
 
   // Period buttons
   $$('.periodBtn').forEach((btn) =>
@@ -556,7 +591,9 @@ function init() {
       $('#weekWrap').classList.toggle('hidden', state.periodType !== 'week');
     })
   );
-  document.querySelector('.periodBtn[data-period="month"]').classList.add('active');
+  document.querySelector(`.periodBtn[data-period="${state.periodType}"]`).classList.add('active');
+  $('#monthWrap').classList.toggle('hidden', state.periodType !== 'month');
+  $('#weekWrap').classList.toggle('hidden', state.periodType !== 'week');
 
   // Inputs
   $('#monthInput').addEventListener('change', (e) => (state.month = e.target.value));
@@ -565,8 +602,10 @@ function init() {
   $('#storeSelect').addEventListener('change', (e) => (state.store = e.target.value));
   $('#deptSelect').addEventListener('change', (e) => (state.department = e.target.value));
 
-  // Ap dung filter -> tai lai ca 2 tab
+  // Ap dung filter -> luu cau hinh + xoa cache bao cao + tai lai ca 2 tab
   $('#applyBtn').addEventListener('click', () => {
+    saveFilters();
+    reportCache.clear();
     loadDashboard();
     if (!$('#tab-reports').classList.contains('hidden') || reportTable) loadReport(state.currentReport);
   });
@@ -601,7 +640,10 @@ function init() {
   // Khoi tao
   initTheme();
   checkHealth();
-  loadFilters();
+  await loadFilters(); // doi nap xong option roi moi khoi phuc gia tri da luu
+  $('#stationSelect').value = state.station;
+  $('#storeSelect').value = state.store;
+  $('#deptSelect').value = state.department;
   loadDashboard();
 }
 

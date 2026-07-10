@@ -347,9 +347,9 @@ async function qTatDepartments(range, f) {
     ${signJoin('r.[action_per]', 'sm')}
     WHERE k.[vm] = 'T'
       AND k.[voucherno] LIKE 'P-%'
-      -- Bo qua ban ghi receiver rong; chi tinh khi costcenter rong
+      -- Bo qua ban ghi receiver rong; bo qua costcenter 'VN-SPL'
       AND LTRIM(RTRIM(ISNULL(k.[receiver], ''))) <> ''
-      AND LTRIM(RTRIM(ISNULL(k.[costcenter], ''))) = ''
+      AND LTRIM(RTRIM(ISNULL(k.[costcenter], ''))) <> 'VN-SPL'
       AND r.[del_time] >= @from AND r.[del_time] < @to
       ${where}
     ORDER BY tat_days DESC`;
@@ -398,7 +398,7 @@ async function qTatCuvt(range, f) {
  */
 async function qTatReturnStore(range, f) {
   const params = { from: range.from, to: range.to, tzOffset: CONFIG.tzOffset, top: CONFIG.maxRows, ...amosDayParams(range) };
-  const dept = deptFromStaff('tc.[created_b2]', 'sm');
+  const dept = deptFromStaff('t.[created_b2]', 'sm');
   let where = buildFilterClause(
     f,
     { station: 'tc.[station]', store: 'tc.[store]', department: dept },
@@ -425,9 +425,10 @@ async function qTatReturnStore(range, f) {
      AND t.[labelno] = tc.[labelno]
      AND t.[vm] = 'T'
      AND t.[voucherno] LIKE 'P-%'
-    ${signJoin('tc.[created_b2]', 'sm')}
+    ${signJoin('t.[created_b2]', 'sm')}
     WHERE tc.[vm] = 'TC'
       AND tc.[voucherno] LIKE 'P-CA-%'
+      AND LTRIM(RTRIM(ISNULL(t.[costcenter], ''))) <> 'VN-SPL'  -- bo qua costcenter VN-SPL
       AND tc.[mutation] BETWEEN @fromDay AND @toDay  -- loc tho theo index (sargable)
       AND ${amosToVN('tc')} >= @from AND ${amosToVN('tc')} < @to
       ${where}
@@ -471,6 +472,7 @@ async function qIssuedNotInstalled(range, f) {
     ${signJoin('k.[created_b2]', 'sm')}
     WHERE k.[vm] = 'T'
       AND k.[voucherno] LIKE 'P-%'
+      AND LTRIM(RTRIM(ISNULL(k.[costcenter], ''))) <> 'VN-SPL'  -- bo qua costcenter VN-SPL
       AND o.[partno] IS NULL
       -- Bo qua thiet bi da duoc RETURN (tra unservice real_us1 hoac hoan kho P-CA-...)
       AND NOT EXISTS (
@@ -557,6 +559,7 @@ async function qNotReconciled(range, f) {
     ${signJoin('k.[created_b2]', 'sm')}
     WHERE k.[vm] = 'T'
       AND k.[voucherno] LIKE 'P-%'
+      AND LTRIM(RTRIM(ISNULL(k.[costcenter], ''))) <> 'VN-SPL'  -- bo qua costcenter VN-SPL
       AND r.[partno] IS NULL
       -- Bo qua neu thiet bi da duoc hoan kho (P-CA-...)
       AND NOT EXISTS (
@@ -628,6 +631,7 @@ async function qRemovedBeforeInstalled(range, f) {
     ${signJoin('k.[created_b2]', 'sm')}
     WHERE k.[vm] = 'T'
       AND k.[voucherno] LIKE 'P-%'
+      AND LTRIM(RTRIM(ISNULL(k.[costcenter], ''))) <> 'VN-SPL'  -- bo qua costcenter VN-SPL
       AND ye.install_time IS NOT NULL
       -- "Thao truoc lap sau" dung logic: NGAY XUAT KHO > NGAY LAP
       AND ${amosToVN('k')} > ye.install_time
@@ -719,7 +723,7 @@ function avg(arr, sel) {
 }
 
 /** Tong hop KPI + du lieu bieu do tu cac ket qua truy van. */
-function buildDashboard(range, dept, cuvt, retStore, issuedNI, notRec) {
+function buildDashboard(range, dept, cuvt, retStore, issuedNI, notRec, returned) {
   // --- KPI cards ---
   const kpis = {
     tatDeptAvg: round1(avg(dept, (d) => d.tat_days)),
@@ -763,17 +767,31 @@ function buildDashboard(range, dept, cuvt, retStore, issuedNI, notRec) {
     values: pieOrder.map((s) => stMap.get(s) || 0),
   };
 
-  // --- Bieu do duong: TAT trung binh theo ngay (theo return time) ---
-  const byDay = groupAvgByDay(dept, 'return_unservice_time', 'tat_days');
-  const lineDay = {
-    labels: byDay.map((x) => x.key),
-    values: byDay.map((x) => round1(x.avg)),
+  // --- Bieu do cot nhom: SO LUONG XUAT KHO va TRA UNSERVICE theo Trung tam ---
+  //     Xuat kho = dept (da doi ung) + notRec (chua doi ung); tra US = returned.
+  const issuedCnt = new Map();
+  for (const r of [...dept, ...notRec]) {
+    const k = r.department || 'PA';
+    issuedCnt.set(k, (issuedCnt.get(k) || 0) + 1);
+  }
+  const returnedCnt = new Map();
+  for (const r of returned || []) {
+    const k = r.department || 'PA';
+    returnedCnt.set(k, (returnedCnt.get(k) || 0) + 1);
+  }
+  const volLabels = [...new Set([...issuedCnt.keys(), ...returnedCnt.keys()])].sort(
+    (a, b) => (issuedCnt.get(b) || 0) - (issuedCnt.get(a) || 0)
+  );
+  const deptVolume = {
+    labels: volLabels,
+    issued: volLabels.map((k) => issuedCnt.get(k) || 0),
+    returned: volLabels.map((k) => returnedCnt.get(k) || 0),
   };
 
   return {
     range: { from: range.from, to: range.to, label: range.label },
     kpis,
-    charts: { barDept, pieStation, lineDay, top10 },
+    charts: { barDept, pieStation, deptVolume, top10 },
   };
 }
 
@@ -1038,14 +1056,15 @@ app.get(
     }
 
     // Chay song song cac truy van can thiet
-    const [dept, cuvt, retStore, issuedNI, notRec] = await Promise.all([
+    const [dept, cuvt, retStore, issuedNI, notRec, returned] = await Promise.all([
       qTatDepartments(range, f),
       qTatCuvt(range, f),
       qTatReturnStore(range, f),
       qIssuedNotInstalled(range, f),
       qNotReconciled(range, f),
+      qReturnedUnservice(range, f),
     ]);
-    const out = buildDashboard(range, dept, cuvt, retStore, issuedNI, notRec);
+    const out = buildDashboard(range, dept, cuvt, retStore, issuedNI, notRec, returned);
     out.rows = dept; // dung lai ket qua, khong query lai
     res.json(out);
   })

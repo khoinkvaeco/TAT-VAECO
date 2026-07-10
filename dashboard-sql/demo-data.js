@@ -251,6 +251,7 @@ function dashboard(range, f) {
   const ret = returnStoreTat(range, f);
   const ni = issuedNotInstalled(range, f);
   const nr = notReconciled(range, f);
+  const retUS = returnedUnservice(range, f);
 
   const avg = (a, s) => {
     const v = a.map(s).filter((x) => isFinite(x));
@@ -276,14 +277,14 @@ function dashboard(range, f) {
     stMap.set(k, (stMap.get(k) || 0) + 1);
   });
   const pieOrder = [...MAIN, 'OTHER'];
-  const byDayMap = new Map();
-  dept.forEach((r) => {
-    const day = r.return_unservice_time.slice(0, 10);
-    if (!byDayMap.has(day)) byDayMap.set(day, { s: 0, c: 0 });
-    byDayMap.get(day).s += r.tat_days;
-    byDayMap.get(day).c += 1;
-  });
-  const days = [...byDayMap.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  // So luong xuat kho & tra unservice theo trung tam
+  const issuedCnt = new Map();
+  [...dept, ...nr].forEach((r) => issuedCnt.set(r.department, (issuedCnt.get(r.department) || 0) + 1));
+  const returnedCnt = new Map();
+  retUS.forEach((r) => returnedCnt.set(r.department, (returnedCnt.get(r.department) || 0) + 1));
+  const volLabels = [...new Set([...issuedCnt.keys(), ...returnedCnt.keys()])].sort(
+    (a, b) => (issuedCnt.get(b) || 0) - (issuedCnt.get(a) || 0)
+  );
   const top = [...byDept].sort((a, b) => b.count - a.count).slice(0, 10);
 
   return {
@@ -300,7 +301,11 @@ function dashboard(range, f) {
     charts: {
       barDept: { labels: byDept.map((x) => x.key), values: byDept.map((x) => r1(x.avg)), counts: byDept.map((x) => x.count) },
       pieStation: { labels: pieOrder.map((s) => (s === 'OTHER' ? 'Khác' : s)), values: pieOrder.map((s) => stMap.get(s) || 0) },
-      lineDay: { labels: days.map((d) => d[0]), values: days.map((d) => r1(d[1].s / d[1].c)) },
+      deptVolume: {
+        labels: volLabels,
+        issued: volLabels.map((k) => issuedCnt.get(k) || 0),
+        returned: volLabels.map((k) => returnedCnt.get(k) || 0),
+      },
       top10: { labels: top.map((x) => x.key), values: top.map((x) => x.count), tat: top.map((x) => r1(x.avg)) },
     },
   };
