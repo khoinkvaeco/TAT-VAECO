@@ -622,21 +622,23 @@ async function qRemovedBeforeInstalled(range, f) {
       CAST(DATEDIFF(MINUTE, ye.install_time, ${amosToVN('k')}) AS float) / 1440.0 AS tat_issue_install_days,
       CAST(DATEDIFF(MINUTE, ya.removal_time, r.[del_time]) AS float) / 1440.0    AS tat_removal_return_days
     FROM [NQT].[dbo].[kho_ser1] k
-    -- Su kien LAP (YE) cung labelno (khong yeu cau cung part/serial:
-    --  thiet bi lap co the la thiet bi khac voi phieu xuat)
+    -- Su kien LAP (YE): lan lap GAN NHAT TRUOC ngay xuat kho (cung labelno;
+    --  khong yeu cau cung part/serial - thiet bi lap co the khac phieu xuat)
     OUTER APPLY (
       SELECT TOP 1 ${amosToVN('o')} AS install_time
       FROM [NQT].[dbo].[on_off] o
       WHERE o.[labelno] = k.[labelno] AND o.[vm] = 'YE'
-      ORDER BY o.[mutation] ASC, o.[mutation_t] ASC
+        AND ${amosToVN('o')} < ${amosToVN('k')}     -- lap TRUOC xuat (dung logic)
+      ORDER BY o.[mutation] DESC, o.[mutation_t] DESC
     ) ye
-    -- Su kien THAO (YA) cung labelno
+    -- Su kien THAO (YA): lan thao gan nhat TRUOC/luc lap (trinh tu thao -> lap)
     OUTER APPLY (
       SELECT TOP 1 ${amosToVN('o')} AS removal_time, o.[historyno_] AS historyno,
              o.[partno] AS partno, o.[serialno] AS serialno
       FROM [NQT].[dbo].[on_off] o
       WHERE o.[labelno] = k.[labelno] AND o.[vm] = 'YA'
-      ORDER BY o.[mutation] ASC, o.[mutation_t] ASC
+        AND ${amosToVN('o')} <= ye.install_time
+      ORDER BY o.[mutation] DESC, o.[mutation_t] DESC
     ) ya
     LEFT JOIN [NQT].[dbo].[real_us1] r ON r.[historyno_] = ya.historyno
     ${signJoin('k.[created_b2]', 'sm')}
