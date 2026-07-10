@@ -351,6 +351,7 @@ async function qTatDepartments(range, f) {
       -- Bo qua ban ghi receiver rong; bo qua costcenter 'VN-SPL'
       AND LTRIM(RTRIM(ISNULL(k.[receiver], ''))) <> ''
       AND LTRIM(RTRIM(ISNULL(k.[costcenter], ''))) <> 'VN-SPL'
+      AND UPPER(LTRIM(RTRIM(ISNULL(k.[store], '')))) IN ('MAIN','3RD')  -- chi tinh store MAIN/3RD
       AND r.[del_time] >= @from AND r.[del_time] < @to
       ${where}
     ORDER BY tat_days DESC`;
@@ -432,6 +433,7 @@ async function qTatReturnStore(range, f) {
     WHERE tc.[vm] = 'TC'
       AND tc.[voucherno] LIKE 'P-CA-%'
       AND LTRIM(RTRIM(ISNULL(t.[costcenter], ''))) <> 'VN-SPL'  -- bo qua costcenter VN-SPL
+      AND UPPER(LTRIM(RTRIM(ISNULL(t.[store], '')))) IN ('MAIN','3RD')  -- chi tinh store MAIN/3RD
       AND tc.[mutation] BETWEEN @fromDay AND @toDay  -- loc tho theo index (sargable)
       AND ${amosToVN('tc')} >= @from AND ${amosToVN('tc')} < @to
       ${where}
@@ -477,6 +479,7 @@ async function qIssuedNotInstalled(range, f) {
     WHERE k.[vm] = 'T'
       AND k.[voucherno] LIKE 'P-%'
       AND LTRIM(RTRIM(ISNULL(k.[costcenter], ''))) <> 'VN-SPL'  -- bo qua costcenter VN-SPL
+      AND UPPER(LTRIM(RTRIM(ISNULL(k.[store], '')))) IN ('MAIN','3RD')  -- chi tinh store MAIN/3RD
       AND o.[partno] IS NULL
       -- Bo qua thiet bi da duoc RETURN (tra unservice real_us1 hoac hoan kho P-CA-...)
       AND NOT EXISTS (
@@ -566,6 +569,7 @@ async function qNotReconciled(range, f) {
     WHERE k.[vm] = 'T'
       AND k.[voucherno] LIKE 'P-%'
       AND LTRIM(RTRIM(ISNULL(k.[costcenter], ''))) <> 'VN-SPL'  -- bo qua costcenter VN-SPL
+      AND UPPER(LTRIM(RTRIM(ISNULL(k.[store], '')))) IN ('MAIN','3RD')  -- chi tinh store MAIN/3RD
       AND r.[partno] IS NULL
       -- Bo qua neu thiet bi da duoc hoan kho (P-CA-...)
       AND NOT EXISTS (
@@ -639,6 +643,7 @@ async function qRemovedBeforeInstalled(range, f) {
     WHERE k.[vm] = 'T'
       AND k.[voucherno] LIKE 'P-%'
       AND LTRIM(RTRIM(ISNULL(k.[costcenter], ''))) <> 'VN-SPL'  -- bo qua costcenter VN-SPL
+      AND UPPER(LTRIM(RTRIM(ISNULL(k.[store], '')))) IN ('MAIN','3RD')  -- chi tinh store MAIN/3RD
       AND ye.install_time IS NOT NULL
       -- "Thao truoc lap sau" dung logic: NGAY XUAT KHO > NGAY LAP
       AND ${amosToVN('k')} > ye.install_time
@@ -755,12 +760,12 @@ function buildDashboard(range, dept, cuvt, retStore, issuedNI, notRec, returned)
     counts: byDept.map((x) => x.count),
   };
 
-  // --- Top 10 don vi theo so luong thiet bi ---
-  const topDept = [...byDept].sort((a, b) => b.count - a.count).slice(0, 10);
-  const top10 = {
-    labels: topDept.map((x) => x.key),
-    values: topDept.map((x) => x.count),
-    tat: topDept.map((x) => round1(x.avg)),
+  // --- TAT hoan kho trung binh theo Trung tam ---
+  const byRet = groupAvg(retStore, 'department', 'tat_days');
+  const retStoreDept = {
+    labels: byRet.map((x) => x.key),
+    values: byRet.map((x) => round1(x.avg)),
+    counts: byRet.map((x) => x.count),
   };
 
   // --- Bieu do tron: phan bo thiet bi theo station (gom HAN/SGN/DAD + Khac) ---
@@ -800,7 +805,7 @@ function buildDashboard(range, dept, cuvt, retStore, issuedNI, notRec, returned)
   return {
     range: { from: range.from, to: range.to, label: range.label },
     kpis,
-    charts: { barDept, pieStation, deptVolume, top10 },
+    charts: { barDept, pieStation, deptVolume, retStoreDept },
   };
 }
 

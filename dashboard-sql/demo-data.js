@@ -290,7 +290,7 @@ function dashboard(range, f) {
   const volLabels = [...new Set([...issuedCnt.keys(), ...returnedCnt.keys()])].sort(
     (a, b) => (issuedCnt.get(b) || 0) - (issuedCnt.get(a) || 0)
   );
-  const top = [...byDept].sort((a, b) => b.count - a.count).slice(0, 10);
+  const byRet = groupAvg(ret, 'department', 'tat_days').sort((a, b) => b.avg - a.avg);
 
   return {
     range: { from: range.from, to: range.to, label: range.label },
@@ -311,7 +311,7 @@ function dashboard(range, f) {
         issued: volLabels.map((k) => issuedCnt.get(k) || 0),
         returned: volLabels.map((k) => returnedCnt.get(k) || 0),
       },
-      top10: { labels: top.map((x) => x.key), values: top.map((x) => x.count), tat: top.map((x) => r1(x.avg)) },
+      retStoreDept: { labels: byRet.map((x) => x.key), values: byRet.map((x) => r1(x.avg)), counts: byRet.map((x) => x.count) },
     },
   };
 }

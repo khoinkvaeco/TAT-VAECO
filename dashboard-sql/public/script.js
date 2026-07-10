@@ -208,19 +208,15 @@ function renderCharts(c) {
     options: d.common,
   });
 
-  // 4.4 Top 10 don vi theo so luong (1 series -> series-2)
+  // 4.4 TAT hoan kho trung binh theo Trung tam (1 series -> series-5)
   destroyChart('top');
   charts.top = new Chart($('#chartTop10'), {
     type: 'bar',
     data: {
-      labels: c.top10.labels,
-      datasets: [{ label: 'Số lượng', data: c.top10.values, backgroundColor: cssVar('--series-2'), borderRadius: 4 }],
+      labels: c.retStoreDept.labels,
+      datasets: [{ label: 'TAT hoàn kho (ngày)', data: c.retStoreDept.values, backgroundColor: cssVar('--series-5'), borderRadius: 4 }],
     },
-    options: {
-      ...d.common,
-      indexAxis: 'y',
-      plugins: { ...d.common.plugins, legend: { display: false } },
-    },
+    options: { ...d.common, plugins: { ...d.common.plugins, legend: { display: false } } },
   });
 }
 
@@ -486,8 +482,12 @@ async function loadReport(name) {
         height: '540px',
       });
     } else {
+      // Xoa filter tim kiem cu (cua bao cao truoc) de khong loc nham het du lieu
+      reportTable.clearFilter(true);
+      $('#reportSearch').value = '';
       reportTable.setColumns(def.columns);
       reportTable.replaceData(data.rows);
+      reportTable.redraw(true); // dam bao ve lai day du sau khi tab vua duoc hien thi
     }
   } catch (err) {
     showError(err.message);
@@ -566,7 +566,13 @@ function switchTab(tab) {
   $$('.mainTab').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
   $('#tab-dashboard').classList.toggle('hidden', tab !== 'dashboard');
   $('#tab-reports').classList.toggle('hidden', tab !== 'reports');
-  if (tab === 'reports' && !reportTable) loadReport(state.currentReport);
+  if (tab === 'reports') {
+    // LUON tai lai khi mo tab (cache lam viec nay re); tranh cap nhat bang khi
+    // tab dang an (Tabulator ve rong neu container display:none).
+    loadReport(state.currentReport);
+  } else if (mainTable) {
+    mainTable.redraw(true); // ve lai sau khi tab hien thi tro lai
+  }
 }
 
 // --------------------------------------------------------------------------
@@ -610,12 +616,14 @@ async function init() {
   $('#storeSelect').addEventListener('change', (e) => (state.store = e.target.value));
   $('#deptSelect').addEventListener('change', (e) => (state.department = e.target.value));
 
-  // Ap dung filter -> luu cau hinh + xoa cache bao cao + tai lai ca 2 tab
+  // Ap dung filter -> luu cau hinh + xoa cache bao cao + tai lai tab dang mo.
+  // KHONG cap nhat bang bao cao khi tab dang an (Tabulator se ve rong);
+  // khi mo lai tab, switchTab() se tu load voi filter moi.
   $('#applyBtn').addEventListener('click', () => {
     saveFilters();
     reportCache.clear();
     loadDashboard();
-    if (!$('#tab-reports').classList.contains('hidden') || reportTable) loadReport(state.currentReport);
+    if (!$('#tab-reports').classList.contains('hidden')) loadReport(state.currentReport);
   });
 
   // Tim kiem bang chinh
