@@ -102,6 +102,17 @@ async function query(text, params = {}) {
   return rs.recordset || [];
 }
 
+/** Nhu query() nhung tra ve TAT CA cac result set (batch nhieu SELECT). */
+async function queryMulti(text, params = {}) {
+  const pool = await getPool();
+  const req = pool.request();
+  if (!('tzOffset' in params)) params.tzOffset = CONFIG.tzOffset;
+  if (!('amosEpoch' in params)) params.amosEpoch = CONFIG.amosEpoch;
+  for (const [key, val] of Object.entries(params)) req.input(key, val);
+  const rs = await req.query(text);
+  return rs.recordsets || [];
+}
+
 // ---------------------------------------------------------------------------
 // 3. CAC MANH SQL DUNG CHUNG (nghiep vu)
 // ---------------------------------------------------------------------------
@@ -727,6 +738,210 @@ async function qOther(range, f) {
   return query(text, params);
 }
 
+/**
+ * TONG HOP KPI + BIEU DO BANG SQL AGGREGATE (AVG/COUNT tren TOAN BO du lieu).
+ * Ly do: cac query chi tiet co TOP @maxRows + ORDER BY tat DESC -> neu ky co
+ * hon @maxRows dong thi trung binh tinh tu tap bi cat se THIEN LECH LEN.
+ * Ham nay chay 1 batch nhieu SELECT GROUP BY, khong TOP -> so lieu chinh xac.
+ *
+ * Result sets (theo thu tu):
+ *   [0] TAT don vi theo Trung tam:  department, cnt, avg_tat
+ *   [1] TAT CUVT (scalar):          cnt, avg_tat
+ *   [2] TAT hoan kho theo Trung tam: department, cnt, avg_tat
+ *   [3] Chua doi ung theo Trung tam: department, cnt
+ *   [4] Tra unservice theo Trung tam: department, cnt
+ *   [5] Xuat kho chua lap (scalar):  cnt
+ *   [6] Phan bo station (tap doi ung): station, cnt
+ */
+async function qDashboardAgg(range, f) {
+  const params = { from: range.from, to: range.to, ...amosDayParams(range) };
+  const deptR = deptFromReal('r', 'sm');
+  const deptK = deptFromStaff('k.[created_b2]', 'sm');
+  const deptT = deptFromStaff('t.[created_b2]', 'sm');
+
+  // Dieu kien loc chung cua kho_ser1 (giong cac query chi tiet)
+  const khoBase = `k.[vm] = 'T' AND k.[voucherno] LIKE 'P-%'
+      AND LTRIM(RTRIM(ISNULL(k.[costcenter], ''))) <> 'VN-SPL'
+      AND UPPER(LTRIM(RTRIM(ISNULL(k.[store], '')))) IN ('MAIN','3RD')`;
+
+  const wDept = buildFilterClause(f, { station: 'k.[station]', store: 'k.[store]', department: deptR }, params);
+  const wCuvt = buildFilterClause(f, { station: 'r.[station]', store: 'r.[store]', department: deptR }, params);
+  const wRet = buildFilterClause(f, { station: 'tc.[station]', store: 'tc.[store]', department: deptT }, params);
+  const wNotRec = buildFilterClause(f, { station: 'k.[station]', store: 'k.[store]', department: deptK }, params);
+  const wRetUS = buildFilterClause(f, { station: 'r.[station]', store: 'r.[store]', department: deptR }, params);
+  const wNI = buildFilterClause(f, { station: 'k.[station]', store: 'k.[store]', department: deptK }, params);
+
+  const text = `
+    -- [0] TAT don vi theo Trung tam (toan bo, khong TOP)
+    SELECT ${deptR} AS department, COUNT(*) AS cnt,
+           AVG(CAST(DATEDIFF(MINUTE, ${amosToVN('k')}, r.[del_time]) AS float) / 1440.0) AS avg_tat
+    FROM [NQT].[dbo].[kho_ser1] k
+    INNER JOIN [NQT].[dbo].[real_us1] r
+      ON k.[partno] = r.[partno] AND k.[serialno] = r.[serialno] AND k.[voucherno] = r.[voucher_s]
+    ${signJoin('r.[action_per]', 'sm')}
+    WHERE ${khoBase}
+      AND LTRIM(RTRIM(ISNULL(k.[receiver], ''))) <> ''
+      AND r.[del_time] >= @from AND r.[del_time] < @to
+      ${wDept}
+    GROUP BY ${deptR};
+
+    -- [1] TAT CUVT (scalar)
+    SELECT COUNT(*) AS cnt,
+           AVG(CAST(DATEDIFF(MINUTE, r.[del_time], r.[reci_time]) AS float) / 1440.0) AS avg_tat
+    FROM [NQT].[dbo].[real_us1] r
+    ${signJoin('r.[action_per]', 'sm')}
+    WHERE r.[del_time] IS NOT NULL AND r.[reci_time] IS NOT NULL
+      AND r.[reci_time] >= r.[del_time]
+      AND r.[del_time] >= @from AND r.[del_time] < @to
+      ${wCuvt};
+
+    -- [2] TAT hoan kho theo Trung tam
+    SELECT ${deptT} AS department, COUNT(*) AS cnt,
+           AVG(CAST(DATEDIFF(MINUTE, ${amosToVN('t')}, ${amosToVN('tc')}) AS float) / 1440.0) AS avg_tat
+    FROM [NQT].[dbo].[kho_ser1] tc
+    INNER JOIN [NQT].[dbo].[kho_ser1] t
+      ON RTRIM(t.[voucherno]) = 'P-' + SUBSTRING(RTRIM(tc.[voucherno]), 6, 50)
+     AND t.[labelno] = tc.[labelno] AND t.[vm] = 'T' AND t.[voucherno] LIKE 'P-%'
+    ${signJoin('t.[created_b2]', 'sm')}
+    WHERE tc.[vm] = 'TC' AND tc.[voucherno] LIKE 'P-CA-%'
+      AND LTRIM(RTRIM(ISNULL(t.[costcenter], ''))) <> 'VN-SPL'
+      AND UPPER(LTRIM(RTRIM(ISNULL(t.[store], '')))) IN ('MAIN','3RD')
+      AND tc.[mutation] BETWEEN @fromDay AND @toDay
+      AND ${amosToVN('tc')} >= @from AND ${amosToVN('tc')} < @to
+      ${wRet}
+    GROUP BY ${deptT};
+
+    -- [3] Chua doi ung theo Trung tam
+    SELECT ${deptK} AS department, COUNT(*) AS cnt
+    FROM [NQT].[dbo].[kho_ser1] k
+    LEFT JOIN [NQT].[dbo].[real_us1] r
+      ON k.[partno] = r.[partno] AND k.[serialno] = r.[serialno] AND k.[voucherno] = r.[voucher_s]
+    ${signJoin('k.[created_b2]', 'sm')}
+    WHERE ${khoBase}
+      AND r.[partno] IS NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM [NQT].[dbo].[kho_ser1] tc
+        WHERE tc.[vm] = 'TC' AND tc.[voucherno] LIKE 'P-CA-%'
+          AND tc.[partno] = k.[partno] AND tc.[serialno] = k.[serialno] AND tc.[labelno] = k.[labelno])
+      AND k.[mutation] BETWEEN @fromDay AND @toDay
+      AND ${amosToVN('k')} >= @from AND ${amosToVN('k')} < @to
+      ${wNotRec}
+    GROUP BY ${deptK};
+
+    -- [4] Tra unservice theo Trung tam
+    SELECT ${deptR} AS department, COUNT(*) AS cnt
+    FROM [NQT].[dbo].[real_us1] r
+    ${signJoin('r.[action_per]', 'sm')}
+    WHERE r.[del_time] IS NOT NULL
+      AND r.[del_time] >= @from AND r.[del_time] < @to
+      ${wRetUS}
+    GROUP BY ${deptR};
+
+    -- [5] Xuat kho chua lap (scalar)
+    SELECT COUNT(*) AS cnt
+    FROM [NQT].[dbo].[kho_ser1] k
+    LEFT JOIN [NQT].[dbo].[on_off] o
+      ON k.[partno] = o.[partno] AND k.[serialno] = o.[serialno]
+     AND k.[labelno] = o.[labelno] AND o.[vm] = 'YE'
+    ${signJoin('k.[created_b2]', 'sm')}
+    WHERE ${khoBase}
+      AND o.[partno] IS NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM [NQT].[dbo].[real_us1] r2
+        WHERE r2.[partno] = k.[partno] AND r2.[serialno] = k.[serialno] AND r2.[voucher_s] = k.[voucherno])
+      AND NOT EXISTS (
+        SELECT 1 FROM [NQT].[dbo].[kho_ser1] tc
+        WHERE tc.[vm] = 'TC' AND tc.[voucherno] LIKE 'P-CA-%'
+          AND tc.[partno] = k.[partno] AND tc.[serialno] = k.[serialno] AND tc.[labelno] = k.[labelno])
+      AND k.[mutation] BETWEEN @fromDay AND @toDay
+      AND ${amosToVN('k')} >= @from AND ${amosToVN('k')} < @to
+      ${wNI};
+
+    -- [6] Phan bo station cua tap da doi ung
+    SELECT k.[station] AS station, COUNT(*) AS cnt
+    FROM [NQT].[dbo].[kho_ser1] k
+    INNER JOIN [NQT].[dbo].[real_us1] r
+      ON k.[partno] = r.[partno] AND k.[serialno] = r.[serialno] AND k.[voucherno] = r.[voucher_s]
+    ${signJoin('r.[action_per]', 'sm')}
+    WHERE ${khoBase}
+      AND LTRIM(RTRIM(ISNULL(k.[receiver], ''))) <> ''
+      AND r.[del_time] >= @from AND r.[del_time] < @to
+      ${wDept}
+    GROUP BY k.[station];`;
+
+  const [deptAgg, cuvtAgg, retAgg, notRecAgg, retUSAgg, niAgg, stationAgg] = await queryMulti(text, params);
+  return { deptAgg, cuvtAgg: cuvtAgg[0], retAgg, notRecAgg, retUSAgg, niAgg: niAgg[0], stationAgg };
+}
+
+/** Dung ket qua aggregate SQL de tao KPI + charts (chinh xac tren toan bo du lieu). */
+function buildDashboardFromAgg(range, agg) {
+  const sum = (arr, sel) => arr.reduce((a, b) => a + (Number(sel(b)) || 0), 0);
+  const wavg = (arr) => {
+    const c = sum(arr, (x) => x.cnt);
+    return c ? sum(arr, (x) => (x.avg_tat || 0) * x.cnt) / c : 0;
+  };
+
+  const reconciled = sum(agg.deptAgg, (x) => x.cnt);
+  const notRec = sum(agg.notRecAgg, (x) => x.cnt);
+
+  const kpis = {
+    tatDeptAvg: round1(wavg(agg.deptAgg)),
+    tatCuvtAvg: round1(agg.cuvtAgg?.avg_tat || 0),
+    tatReturnStoreAvg: round1(wavg(agg.retAgg)),
+    countIssued: reconciled + notRec,
+    countNotReconciled: notRec,
+    countIssuedNotInstalled: agg.niAgg?.cnt || 0,
+    reconcileRate: reconciled + notRec ? round1((reconciled / (reconciled + notRec)) * 100) : 0,
+  };
+
+  const byDept = [...agg.deptAgg].sort((a, b) => (b.avg_tat || 0) - (a.avg_tat || 0));
+  const barDept = {
+    labels: byDept.map((x) => x.department),
+    values: byDept.map((x) => round1(x.avg_tat)),
+    counts: byDept.map((x) => x.cnt),
+  };
+
+  const byRet = [...agg.retAgg].sort((a, b) => (b.avg_tat || 0) - (a.avg_tat || 0));
+  const retStoreDept = {
+    labels: byRet.map((x) => x.department),
+    values: byRet.map((x) => round1(x.avg_tat)),
+    counts: byRet.map((x) => x.cnt),
+  };
+
+  // So luong xuat kho (doi ung + chua doi ung) va tra US theo Trung tam
+  const issuedCnt = new Map();
+  for (const x of agg.deptAgg) issuedCnt.set(x.department, (issuedCnt.get(x.department) || 0) + x.cnt);
+  for (const x of agg.notRecAgg) issuedCnt.set(x.department, (issuedCnt.get(x.department) || 0) + x.cnt);
+  const returnedCnt = new Map(agg.retUSAgg.map((x) => [x.department, x.cnt]));
+  const volLabels = [...new Set([...issuedCnt.keys(), ...returnedCnt.keys()])].sort(
+    (a, b) => (issuedCnt.get(b) || 0) - (issuedCnt.get(a) || 0)
+  );
+  const deptVolume = {
+    labels: volLabels,
+    issued: volLabels.map((k) => issuedCnt.get(k) || 0),
+    returned: volLabels.map((k) => returnedCnt.get(k) || 0),
+  };
+
+  // Station: gom HAN/SGN/DAD + Khac
+  const stMap = new Map(MAIN_STATIONS.map((s) => [s, 0]));
+  stMap.set('OTHER', 0);
+  for (const x of agg.stationAgg) {
+    const k = normalizeStation(x.station);
+    stMap.set(k, (stMap.get(k) || 0) + x.cnt);
+  }
+  const pieOrder = [...MAIN_STATIONS, 'OTHER'];
+  const pieStation = {
+    labels: pieOrder.map((s) => (s === 'OTHER' ? 'Khác' : s)),
+    values: pieOrder.map((s) => stMap.get(s) || 0),
+  };
+
+  return {
+    range: { from: range.from, to: range.to, label: range.label },
+    kpis,
+    charts: { barDept, pieStation, deptVolume, retStoreDept },
+  };
+}
+
 // ---------------------------------------------------------------------------
 // 6. TONG HOP KPI + DU LIEU BIEU DO
 // ---------------------------------------------------------------------------
@@ -1071,17 +1286,11 @@ app.get(
       return res.json(d);
     }
 
-    // Chay song song cac truy van can thiet
-    const [dept, cuvt, retStore, issuedNI, notRec, returned] = await Promise.all([
-      qTatDepartments(range, f),
-      qTatCuvt(range, f),
-      qTatReturnStore(range, f),
-      qIssuedNotInstalled(range, f),
-      qNotReconciled(range, f),
-      qReturnedUnservice(range, f),
-    ]);
-    const out = buildDashboard(range, dept, cuvt, retStore, issuedNI, notRec, returned);
-    out.rows = dept; // dung lai ket qua, khong query lai
+    // KPI/bieu do: SQL aggregate tren TOAN BO du lieu (khong bi cat boi TOP);
+    // rows: chi de hien bang chi tiet (co the bi gioi han @maxRows).
+    const [agg, rows] = await Promise.all([qDashboardAgg(range, f), qTatDepartments(range, f)]);
+    const out = buildDashboardFromAgg(range, agg);
+    out.rows = rows;
     res.json(out);
   })
 );
