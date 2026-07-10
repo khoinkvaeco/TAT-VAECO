@@ -168,17 +168,29 @@ function pickDept(sources) {
   return `COALESCE(${sources.map(cleanDept).join(', ')}, 'PA')`;
 }
 
+// 3 station chinh cua VAECO; con lai gom vao 'OTHER' (hien thi 'Khac').
+const MAIN_STATIONS = ['HAN', 'SGN', 'DAD'];
+function normalizeStation(s) {
+  const v = (s || '').trim().toUpperCase();
+  return MAIN_STATIONS.includes(v) ? v : 'OTHER';
+}
+
 /**
  * Build menh de WHERE dong tu cac filter chung (station/store/department).
  * Tra ve { clause, params } - clause bat dau bang ' AND ...' hoac ''.
+ * Rieng station='OTHER' -> loc tat ca station NGOAI HAN/SGN/DAD.
  * @param {Object} f  { station, store, department }
  * @param {Object} cols  ten cot tuong ung { station, store, department }
  */
 function buildFilterClause(f, cols, params) {
   let clause = '';
   if (f.station && cols.station) {
-    clause += ` AND ${cols.station} = @fStation`;
-    params.fStation = f.station;
+    if (f.station.toUpperCase() === 'OTHER') {
+      clause += ` AND UPPER(LTRIM(RTRIM(${cols.station}))) NOT IN ('HAN','SGN','DAD')`;
+    } else {
+      clause += ` AND ${cols.station} = @fStation`;
+      params.fStation = f.station;
+    }
   }
   if (f.store && cols.store) {
     clause += ` AND ${cols.store} = @fStore`;
@@ -511,42 +523,64 @@ async function qNotReconciled(range, f) {
 }
 
 /**
- * BAO CAO 4: Thiet bi THAO TRUOC, LAP SAU.
- * Tim thiet bi THAO XUONG (nhan unservice - real_us1) ma CHUA tim duoc khoi
- * XUAT RA doi ung (kho_ser1 vm='T', P-...) theo [labelno].
+ * BAO CAO 4: Thiet bi THAO TRUOC, LAP SAU -> 2 TAT rieng.
+ * Voi moi thiet bi (partno/serialno/labelno) xuat kho service trong ky:
+ *   - TAT xuat->lap  = tu luc XUAT KHO (kho_ser1 T) den luc LAP LEN tau (on_off YE).
+ *   - TAT thao->traUS = tu luc THAO XUONG (on_off YA) den luc TRA UNSERVICE (real_us1.del_time).
+ * The hien ca NGAY THAO va NGAY LAP de de doi chieu.
+ *
+ * >>> GIA DINH lien ket theo (partno,serialno,labelno) va real_us1 theo
+ *     historyno_ cua su kien thao. Neu don vi lien ket khac, bao de chinh. <<<
  */
 async function qRemovedBeforeInstalled(range, f) {
-  const params = { from: range.from, to: range.to, top: CONFIG.maxRows };
-  const dept = pickDept(['s.[DEPARTMENT]', 'sd.[DEPARTMENT]', 'r.[department]']);
+  const params = { from: range.from, to: range.to, top: CONFIG.maxRows, ...amosDayParams(range) };
+  const dept = pickDept(['s.[DEPARTMENT]']); // kho_ser1 chi co action_per
   let where = buildFilterClause(
     f,
-    { station: 'r.[station]', store: null, department: dept },
+    { station: 'k.[station]', store: 'k.[store]', department: dept },
     params
   );
   const text = `
     SELECT TOP (@top)
-      r.[partno]     AS partno,
-      r.[serialno]   AS serialno,
-      r.[labelno]    AS labelno,
-      r.[descriptio] AS description,
-      r.[ac_registr] AS ac_registr,
-      r.[station]    AS station,
+      k.[partno]     AS partno,
+      k.[serialno]   AS serialno,
+      k.[labelno]    AS labelno,
+      k.[descriptio] AS description,
+      k.[ac_registr] AS ac_registr,
+      k.[station]    AS station,
       ${dept} AS department,
-      r.[del_staff]  AS del_staff,
-      r.[del_time]   AS removed_time_vn
-    FROM [NQT].[dbo].[real_us1] r
-    LEFT JOIN [NQT].[dbo].[kho_ser1] k
-      ON k.[labelno] = r.[labelno]
-     AND k.[vm] = 'T'
-     AND k.[voucherno] LIKE 'P-%'
-    LEFT JOIN [DWH_DB]..[STG_AMOS].[SIGN] s
-      ON r.[action_per] = s.[USER_SIGN]
-    LEFT JOIN [DWH_DB]..[STG_AMOS].[SIGN] sd
-      ON r.[del_staff] = sd.[USER_SIGN]
-    WHERE k.[labelno] IS NULL          -- chua tim thay khoi xuat ra doi ung theo labelno
-      AND r.[del_time] >= @from AND r.[del_time] < @to
+      ${amosToVN('k')}      AS issue_time_vn,
+      ye.install_time       AS installed_time_vn,   -- ngay lap
+      ya.removal_time       AS removed_time_vn,      -- ngay thao
+      r.[del_time]          AS return_unservice_time,
+      CAST(DATEDIFF(MINUTE, ${amosToVN('k')}, ye.install_time) AS float) / 1440.0 AS tat_issue_install_days,
+      CAST(DATEDIFF(MINUTE, ya.removal_time, r.[del_time]) AS float) / 1440.0    AS tat_removal_return_days
+    FROM [NQT].[dbo].[kho_ser1] k
+    -- Lan LAP LEN tau (YE) dau tien cua thiet bi
+    OUTER APPLY (
+      SELECT TOP 1 ${amosToVN('o')} AS install_time
+      FROM [NQT].[dbo].[on_off] o
+      WHERE o.[partno] = k.[partno] AND o.[serialno] = k.[serialno]
+        AND o.[labelno] = k.[labelno] AND o.[vm] = 'YE'
+      ORDER BY o.[mutation] ASC, o.[mutation_t] ASC
+    ) ye
+    -- Lan THAO XUONG (YA) gan nhat cua thiet bi
+    OUTER APPLY (
+      SELECT TOP 1 ${amosToVN('o')} AS removal_time, o.[historyno_] AS historyno
+      FROM [NQT].[dbo].[on_off] o
+      WHERE o.[partno] = k.[partno] AND o.[serialno] = k.[serialno]
+        AND o.[labelno] = k.[labelno] AND o.[vm] = 'YA'
+      ORDER BY o.[mutation] DESC, o.[mutation_t] DESC
+    ) ya
+    LEFT JOIN [NQT].[dbo].[real_us1] r ON r.[historyno_] = ya.historyno
+    LEFT JOIN [DWH_DB]..[STG_AMOS].[SIGN] s ON k.[action_per] = s.[USER_SIGN]
+    WHERE k.[vm] = 'T'
+      AND k.[voucherno] LIKE 'P-%'
+      AND (ye.install_time IS NOT NULL OR ya.removal_time IS NOT NULL)
+      AND k.[mutation] BETWEEN @fromDay AND @toDay
+      AND ${amosToVN('k')} >= @from AND ${amosToVN('k')} < @to
       ${where}
-    ORDER BY r.[del_time] DESC`;
+    ORDER BY k.[mutation] DESC`;
   return query(text, params);
 }
 
@@ -667,11 +701,17 @@ function buildDashboard(range, dept, cuvt, retStore, issuedNI, notRec) {
     tat: topDept.map((x) => round1(x.avg)),
   };
 
-  // --- Bieu do tron: phan bo thiet bi theo station ---
-  const byStation = groupCount(dept, 'station');
+  // --- Bieu do tron: phan bo thiet bi theo station (gom HAN/SGN/DAD + Khac) ---
+  const stMap = new Map(MAIN_STATIONS.map((s) => [s, 0]));
+  stMap.set('OTHER', 0);
+  for (const r of dept) {
+    const k = normalizeStation(r.station);
+    stMap.set(k, (stMap.get(k) || 0) + 1);
+  }
+  const pieOrder = [...MAIN_STATIONS, 'OTHER'];
   const pieStation = {
-    labels: byStation.map((x) => x.key),
-    values: byStation.map((x) => x.count),
+    labels: pieOrder.map((s) => (s === 'OTHER' ? 'Khác' : s)),
+    values: pieOrder.map((s) => stMap.get(s) || 0),
   };
 
   // --- Bieu do duong: TAT trung binh theo ngay (theo return time) ---
@@ -833,10 +873,6 @@ app.get(
   '/api/filters',
   cached(10 * 60 * 1000, async (req, res) => {
     if (CONFIG.demoMode) return res.json(DEMO.filters());
-    const stations = await query(
-      `SELECT DISTINCT LTRIM(RTRIM([station])) AS v FROM [NQT].[dbo].[kho_ser1]
-       WHERE [station] IS NOT NULL AND LTRIM(RTRIM([station])) <> '' ORDER BY v`
-    );
     const stores = await query(
       `SELECT DISTINCT LTRIM(RTRIM([store])) AS v FROM [NQT].[dbo].[kho_ser1]
        WHERE [store] IS NOT NULL AND LTRIM(RTRIM([store])) <> '' ORDER BY v`
@@ -846,7 +882,8 @@ app.get(
        WHERE [DEPARTMENT] IS NOT NULL AND LTRIM(RTRIM([DEPARTMENT])) <> '' ORDER BY v`
     );
     res.json({
-      stations: stations.map((r) => r.v),
+      // Chi 3 station chinh + Khac (OTHER = tat ca station con lai)
+      stations: [...MAIN_STATIONS, 'OTHER'],
       stores: stores.map((r) => r.v),
       departments: departments.map((r) => r.v),
     });

@@ -27,6 +27,8 @@ function fmtDateTime(v) {
   if (!v) return '';
   const d = new Date(v);
   if (isNaN(d)) return v;
+  // Record trong / gia tri sentinel (1900-01-01, hoac nam <= 1901) -> de trong.
+  if (d.getUTCFullYear() <= 1901) return '';
   const p = (n) => String(n).padStart(2, '0');
   return `${p(d.getUTCDate())}/${p(d.getUTCMonth() + 1)}/${d.getUTCFullYear()} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
 }
@@ -48,7 +50,7 @@ const state = {
   station: '',
   store: '',
   department: '',
-  currentReport: 'issued-not-installed',
+  currentReport: 'returned-unservice',
 };
 
 let mainTable = null;   // Tabulator bang chinh
@@ -98,12 +100,12 @@ function showError(msg) {
 // --------------------------------------------------------------------------
 function renderKPIs(kpis) {
   const cards = [
-    { label: 'TAT TB don vi', value: kpis.tatDeptAvg, unit: 'ngay', accent: '--series-1' },
-    { label: 'TAT CUVT', value: kpis.tatCuvtAvg, unit: 'ngay', accent: '--series-2' },
-    { label: 'TAT hoan kho', value: kpis.tatReturnStoreAvg, unit: 'ngay', accent: '--series-5' },
-    { label: 'Thiet bi xuat kho', value: kpis.countIssued, unit: 'thiet bi', accent: '--series-3' },
-    { label: 'Chua doi ung', value: kpis.countNotReconciled, unit: 'thiet bi', accent: '--series-6' },
-    { label: 'Ty le doi ung', value: kpis.reconcileRate, unit: '%', accent: '--series-4' },
+    { label: 'TAT TB Trung tâm', value: kpis.tatDeptAvg, unit: 'ngày', accent: '--series-1' },
+    { label: 'TAT CUVT', value: kpis.tatCuvtAvg, unit: 'ngày', accent: '--series-2' },
+    { label: 'TAT hoàn kho', value: kpis.tatReturnStoreAvg, unit: 'ngày', accent: '--series-5' },
+    { label: 'Thiết bị xuất kho', value: kpis.countIssued, unit: 'thiết bị', accent: '--series-3' },
+    { label: 'Chưa đối ứng', value: kpis.countNotReconciled, unit: 'thiết bị', accent: '--series-6' },
+    { label: 'Tỷ lệ đối ứng', value: kpis.reconcileRate, unit: '%', accent: '--series-4' },
   ];
   $('#kpiGrid').innerHTML = cards
     .map(
@@ -157,7 +159,7 @@ function renderCharts(c) {
     type: 'bar',
     data: {
       labels: c.barDept.labels,
-      datasets: [{ label: 'TAT (ngay)', data: c.barDept.values, backgroundColor: cssVar('--series-1'), borderRadius: 4 }],
+      datasets: [{ label: 'TAT (ngày)', data: c.barDept.values, backgroundColor: cssVar('--series-1'), borderRadius: 4 }],
     },
     options: { ...d.common, plugins: { ...d.common.plugins, legend: { display: false } } },
   });
@@ -180,7 +182,7 @@ function renderCharts(c) {
     data: {
       labels: c.lineDay.labels,
       datasets: [{
-        label: 'TAT (ngay)', data: c.lineDay.values,
+        label: 'TAT (ngày)', data: c.lineDay.values,
         borderColor: cssVar('--series-1'), backgroundColor: 'transparent',
         borderWidth: 2, tension: 0.25, pointRadius: 3, pointBackgroundColor: cssVar('--series-1'),
       }],
@@ -194,7 +196,7 @@ function renderCharts(c) {
     type: 'bar',
     data: {
       labels: c.top10.labels,
-      datasets: [{ label: 'So luong', data: c.top10.values, backgroundColor: cssVar('--series-2'), borderRadius: 4 }],
+      datasets: [{ label: 'Số lượng', data: c.top10.values, backgroundColor: cssVar('--series-2'), borderRadius: 4 }],
     },
     options: {
       ...d.common,
@@ -218,132 +220,138 @@ const fmtTatCell = (cell) => {
   return `<span class="tat-badge" style="background:${color}22;color:${color}">${v.toFixed(1)}</span>`;
 };
 
-/** Cot chung cho bang chi tiet TAT theo don vi. */
+/** Cột chi tiết TAT theo thiết bị (có checkbox "Bỏ qua" để tính lại TAT). */
 const COLS_TAT_DEPT = [
+  { title: 'Bỏ qua', formatter: 'rowSelection', titleFormatter: 'rowSelection', hozAlign: 'center',
+    headerSort: false, width: 70, headerHozAlign: 'center' },
   { title: 'Event Perf', field: 'event_perf', headerFilter: 'input' },
   { title: 'Part No', field: 'partno', headerFilter: 'input' },
   { title: 'Serial No', field: 'serialno', headerFilter: 'input' },
   { title: 'Label', field: 'labelno' },
-  { title: 'Mo ta', field: 'description' },
-  { title: 'Receiver', field: 'receiver', headerFilter: 'input' },
-  { title: 'Don vi', field: 'department', headerFilter: 'input' },
+  { title: 'Mô tả', field: 'description' },
+  { title: 'Người nhận', field: 'receiver', headerFilter: 'input' },
+  { title: 'Trung tâm', field: 'department', headerFilter: 'input' },
   { title: 'Station', field: 'station', headerFilter: 'input' },
   { title: 'Store', field: 'store' },
-  { title: 'Phieu xuat', field: 'voucher_issue' },
-  { title: 'Gio xuat (VN)', field: 'issue_time_vn', formatter: fmtDateCell },
-  { title: 'Gio tra US', field: 'return_unservice_time', formatter: fmtDateCell },
-  { title: 'TAT (ngay)', field: 'tat_days', formatter: fmtTatCell, hozAlign: 'right', sorter: 'number' },
+  { title: 'Phiếu xuất', field: 'voucher_issue' },
+  { title: 'Giờ xuất (VN)', field: 'issue_time_vn', formatter: fmtDateCell },
+  { title: 'Giờ trả US', field: 'return_unservice_time', formatter: fmtDateCell },
+  { title: 'TAT (ngày)', field: 'tat_days', formatter: fmtTatCell, hozAlign: 'right', sorter: 'number' },
 ];
 
-/** Dinh nghia cot cho tung bao cao. */
+/** Định nghĩa cột cho từng báo cáo. */
 const REPORT_DEFS = {
+  'returned-unservice': {
+    title: 'Danh mục trả unservice',
+    desc: 'Thiết bị đã trả unservice (real_us1) trong kỳ, kèm ngày giao và nhân viên giao.',
+    columns: [
+      { title: 'Part No', field: 'partno', headerFilter: 'input' },
+      { title: 'Serial No', field: 'serialno', headerFilter: 'input' },
+      { title: 'Label', field: 'labelno', headerFilter: 'input' },
+      { title: 'Mô tả', field: 'description' },
+      { title: 'History No', field: 'historyno' },
+      { title: 'Số hiệu tàu', field: 'ac_registr' },
+      { title: 'Station', field: 'station', headerFilter: 'input' },
+      { title: 'Store', field: 'store' },
+      { title: 'Trung tâm', field: 'department', headerFilter: 'input' },
+      { title: 'NV giao', field: 'del_staff', headerFilter: 'input' },
+      { title: 'Giờ giao (del_time)', field: 'del_time', formatter: fmtDateCell },
+      { title: 'Giờ nhận (reci_time)', field: 'reci_time', formatter: fmtDateCell },
+    ],
+  },
   'issued-not-installed': {
-    title: 'Thiet bi xuat kho nhung chua lap len tau',
-    desc: 'kho_ser1 vm=T (P-...) khong co ban ghi on_off vm=YE.',
+    title: 'Thiết bị xuất kho nhưng chưa lắp lên tàu',
+    desc: 'kho_ser1 vm=T (P-…) không có bản ghi lắp lên tàu (on_off vm=YE).',
     columns: [
       { title: 'Part No', field: 'partno', headerFilter: 'input' },
       { title: 'Serial No', field: 'serialno', headerFilter: 'input' },
       { title: 'Label', field: 'labelno' },
-      { title: 'Mo ta', field: 'description' },
-      { title: 'Don vi', field: 'department', headerFilter: 'input' },
+      { title: 'Mô tả', field: 'description' },
+      { title: 'Trung tâm', field: 'department', headerFilter: 'input' },
       { title: 'Station', field: 'station', headerFilter: 'input' },
       { title: 'Store', field: 'store' },
-      { title: 'Phieu xuat', field: 'voucher_issue' },
-      { title: 'Gio xuat (VN)', field: 'issue_time_vn', formatter: fmtDateCell },
+      { title: 'Phiếu xuất', field: 'voucher_issue' },
+      { title: 'Giờ xuất (VN)', field: 'issue_time_vn', formatter: fmtDateCell },
     ],
   },
   'removed-not-returned': {
-    title: 'Thiet bi thao xuong tu tau nhung chua tra unservice',
-    desc: 'on_off vm=YA khong co ban ghi real_us1 (link qua historyno_).',
+    title: 'Thiết bị tháo xuống từ tàu nhưng chưa trả unservice',
+    desc: 'on_off vm=YA không có bản ghi real_us1 (liên kết qua historyno_).',
     columns: [
       { title: 'Part No', field: 'partno', headerFilter: 'input' },
       { title: 'Serial No', field: 'serialno', headerFilter: 'input' },
       { title: 'Label', field: 'labelno' },
       { title: 'History No', field: 'historyno' },
-      { title: 'AC', field: 'ac_registr' },
+      { title: 'Số hiệu tàu', field: 'ac_registr' },
       { title: 'Station', field: 'station', headerFilter: 'input' },
       { title: 'Store', field: 'store' },
-      { title: 'Gio thao (VN)', field: 'removed_time_vn', formatter: fmtDateCell },
-    ],
-  },
-  'returned-unservice': {
-    title: 'Danh muc tra unservice',
-    desc: 'Thiet bi da tra unservice (real_us1) trong ky, kem thoi gian & nhan vien giao.',
-    columns: [
-      { title: 'Part No', field: 'partno', headerFilter: 'input' },
-      { title: 'Serial No', field: 'serialno', headerFilter: 'input' },
-      { title: 'Label', field: 'labelno', headerFilter: 'input' },
-      { title: 'Mo ta', field: 'description' },
-      { title: 'History No', field: 'historyno' },
-      { title: 'AC', field: 'ac_registr' },
-      { title: 'Station', field: 'station', headerFilter: 'input' },
-      { title: 'Store', field: 'store' },
-      { title: 'Don vi', field: 'department', headerFilter: 'input' },
-      { title: 'NV giao', field: 'del_staff', headerFilter: 'input' },
-      { title: 'Gio giao (del_time)', field: 'del_time', formatter: fmtDateCell },
-      { title: 'Gio nhan (reci_time)', field: 'reci_time', formatter: fmtDateCell },
+      { title: 'Giờ tháo (VN)', field: 'removed_time_vn', formatter: fmtDateCell },
     ],
   },
   'not-reconciled': {
-    title: 'Thiet bi chua doi ung',
-    desc: 'Co xuat service (kho_ser1 vm=T) nhung khong co tra unservice (real_us1).',
+    title: 'Thiết bị chưa đối ứng',
+    desc: 'Có xuất service (kho_ser1 vm=T) nhưng không có trả unservice, và chưa hoàn kho.',
     columns: [
       { title: 'Part No', field: 'partno', headerFilter: 'input' },
       { title: 'Serial No', field: 'serialno', headerFilter: 'input' },
       { title: 'Label', field: 'labelno' },
-      { title: 'Mo ta', field: 'description' },
-      { title: 'Don vi', field: 'department', headerFilter: 'input' },
+      { title: 'Mô tả', field: 'description' },
+      { title: 'Trung tâm', field: 'department', headerFilter: 'input' },
       { title: 'Station', field: 'station', headerFilter: 'input' },
       { title: 'Store', field: 'store' },
-      { title: 'Phieu xuat', field: 'voucher_issue' },
-      { title: 'Gio xuat (VN)', field: 'issue_time_vn', formatter: fmtDateCell },
+      { title: 'Phiếu xuất', field: 'voucher_issue' },
+      { title: 'Giờ xuất (VN)', field: 'issue_time_vn', formatter: fmtDateCell },
     ],
   },
   'removed-before-installed': {
-    title: 'Thiet bi thao truoc, lap sau',
-    desc: 'Thiet bi thao xuong (nhan unservice) chua tim duoc khoi xuat ra doi ung theo labelno.',
+    title: 'Thiết bị tháo trước, lắp sau (2 TAT riêng)',
+    desc: 'TAT xuất kho → lắp lên tàu, và TAT tháo xuống → trả về kho unservice. Hiển thị ngày tháo và ngày lắp.',
     columns: [
       { title: 'Part No', field: 'partno', headerFilter: 'input' },
       { title: 'Serial No', field: 'serialno', headerFilter: 'input' },
       { title: 'Label', field: 'labelno', headerFilter: 'input' },
-      { title: 'Mo ta', field: 'description' },
-      { title: 'AC', field: 'ac_registr' },
-      { title: 'Don vi', field: 'department', headerFilter: 'input' },
+      { title: 'Mô tả', field: 'description' },
+      { title: 'Số hiệu tàu', field: 'ac_registr' },
+      { title: 'Trung tâm', field: 'department', headerFilter: 'input' },
       { title: 'Station', field: 'station', headerFilter: 'input' },
-      { title: 'NV giao', field: 'del_staff' },
-      { title: 'Gio thao (VN)', field: 'removed_time_vn', formatter: fmtDateCell },
+      { title: 'Giờ xuất kho', field: 'issue_time_vn', formatter: fmtDateCell },
+      { title: 'Ngày lắp', field: 'installed_time_vn', formatter: fmtDateCell },
+      { title: 'TAT xuất→lắp (ngày)', field: 'tat_issue_install_days', formatter: fmtTatCell, hozAlign: 'right', sorter: 'number' },
+      { title: 'Ngày tháo', field: 'removed_time_vn', formatter: fmtDateCell },
+      { title: 'Giờ trả US', field: 'return_unservice_time', formatter: fmtDateCell },
+      { title: 'TAT tháo→trả US (ngày)', field: 'tat_removal_return_days', formatter: fmtTatCell, hozAlign: 'right', sorter: 'number' },
     ],
   },
   other: {
-    title: 'Other - note trong cot on_ac (real_us1)',
-    desc: 'Lay note on_ac cho cac thiet bi thao.',
+    title: 'Other — ghi chú trong cột on_ac (real_us1)',
+    desc: 'Lấy ghi chú on_ac cho các thiết bị tháo.',
     columns: [
       { title: 'Part No (off)', field: 'partno_off', headerFilter: 'input' },
       { title: 'Serial No (off)', field: 'serialno_off', headerFilter: 'input' },
       { title: 'Batch No (off)', field: 'batchno_off' },
       { title: 'SL', field: 'qty_off', hozAlign: 'right' },
       { title: 'Station', field: 'station', headerFilter: 'input' },
-      { title: 'Don vi', field: 'department', headerFilter: 'input' },
+      { title: 'Trung tâm', field: 'department', headerFilter: 'input' },
       { title: 'NV giao', field: 'del_staff' },
-      { title: 'Gio giao (VN)', field: 'del_time', formatter: fmtDateCell },
-      { title: 'Note (on_ac)', field: 'note', widthGrow: 2 },
+      { title: 'Giờ giao (VN)', field: 'del_time', formatter: fmtDateCell },
+      { title: 'Ghi chú (on_ac)', field: 'note', widthGrow: 2 },
     ],
   },
   'return-store-tat': {
-    title: 'TAT hoan kho',
-    desc: 'Thiet bi hoan kho (vm=TC, P-CA-...) doi chieu phieu xuat (vm=T, P-...).',
+    title: 'TAT hoàn kho',
+    desc: 'Thiết bị hoàn kho (vm=TC, P-CA-<PS>) đối chiếu phiếu xuất (vm=T, P-<PS>) cùng số PS và labelno.',
     columns: [
       { title: 'Part No', field: 'partno', headerFilter: 'input' },
       { title: 'Serial No', field: 'serialno', headerFilter: 'input' },
       { title: 'Label', field: 'labelno' },
-      { title: 'Mo ta', field: 'description' },
-      { title: 'Don vi', field: 'department', headerFilter: 'input' },
+      { title: 'Mô tả', field: 'description' },
+      { title: 'Trung tâm', field: 'department', headerFilter: 'input' },
       { title: 'Station', field: 'station', headerFilter: 'input' },
-      { title: 'Phieu xuat', field: 'voucher_issue' },
-      { title: 'Phieu hoan', field: 'voucher_return' },
-      { title: 'Gio xuat (VN)', field: 'issue_time_vn', formatter: fmtDateCell },
-      { title: 'Gio hoan (VN)', field: 'return_store_time_vn', formatter: fmtDateCell },
-      { title: 'TAT (ngay)', field: 'tat_days', formatter: fmtTatCell, hozAlign: 'right', sorter: 'number' },
+      { title: 'Phiếu xuất', field: 'voucher_issue' },
+      { title: 'Phiếu hoàn', field: 'voucher_return' },
+      { title: 'Giờ xuất (VN)', field: 'issue_time_vn', formatter: fmtDateCell },
+      { title: 'Giờ hoàn (VN)', field: 'return_store_time_vn', formatter: fmtDateCell },
+      { title: 'TAT (ngày)', field: 'tat_days', formatter: fmtTatCell, hozAlign: 'right', sorter: 'number' },
     ],
   },
 };
@@ -351,17 +359,20 @@ const REPORT_DEFS = {
 // --------------------------------------------------------------------------
 // 6. Tai & render Dashboard
 // --------------------------------------------------------------------------
+let baseKpiDeptAvg = 0; // TAT TB Trung tam goc (de khoi phuc khi Dat lai)
+
 async function loadDashboard() {
   showError('');
   showLoading(true);
+  $('#recalcNote').classList.add('hidden');
   try {
     const dash = await api('/api/dashboard');
     $('#rangeLabel').textContent = `${dash.range.label}: ${fmtDateTime(dash.range.from)} → ${fmtDateTime(dash.range.to)}`;
+    baseKpiDeptAvg = dash.kpis.tatDeptAvg;
     renderKPIs(dash.kpis);
     renderCharts(dash.charts);
 
-    // Bang chi tiet: dung "rows" tra kem trong /api/dashboard (tranh query 2 lan);
-    // neu server cu chua co rows thi moi goi them endpoint rieng.
+    // Bang chi tiet: dung "rows" tra kem trong /api/dashboard (tranh query 2 lan).
     const rows = dash.rows || (await api('/api/tat/departments')).rows;
     if (!mainTable) {
       mainTable = new Tabulator('#mainTable', {
@@ -371,8 +382,9 @@ async function loadDashboard() {
         pagination: true,
         paginationSize: 15,
         paginationSizeSelector: [10, 15, 25, 50, 100],
-        placeholder: 'Khong co du lieu',
-        height: '520px',
+        selectableRows: true, // cho phep tich chon dong de "bo qua"
+        placeholder: 'Không có dữ liệu',
+        height: '540px',
       });
     } else {
       mainTable.setColumns(COLS_TAT_DEPT);
@@ -383,6 +395,32 @@ async function loadDashboard() {
   } finally {
     showLoading(false);
   }
+}
+
+/** Tính lại TAT TB Trung tâm, bỏ các dòng đã tích chọn (item đặc biệt). */
+function recalcTat() {
+  if (!mainTable) return;
+  const excluded = mainTable.getSelectedData();
+  const exSet = new Set(excluded.map((r) => `${r.partno}|${r.serialno}|${r.labelno}|${r.voucher_issue}`));
+  const all = mainTable.getData();
+  const kept = all.filter((r) => !exSet.has(`${r.partno}|${r.serialno}|${r.labelno}|${r.voucher_issue}`));
+  const vals = kept.map((r) => Number(r.tat_days)).filter((v) => isFinite(v));
+  const newAvg = vals.length ? Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 10) / 10 : 0;
+
+  // Cap nhat card TAT TB Trung tam (card dau tien)
+  const card = $('#kpiGrid .kpi:first-child .kpi-value');
+  if (card) card.innerHTML = `${newAvg} <span class="kpi-unit">ngày</span>`;
+  const note = $('#recalcNote');
+  note.classList.remove('hidden');
+  note.innerHTML = `Đã loại <b>${excluded.length}</b> mục · TAT TB Trung tâm tính lại: <b>${newAvg} ngày</b> (gốc ${baseKpiDeptAvg} ngày, trên ${kept.length}/${all.length} thiết bị).`;
+}
+
+/** Bỏ chọn tất cả và khôi phục TAT gốc. */
+function resetRecalc() {
+  if (mainTable) mainTable.deselectRow();
+  const card = $('#kpiGrid .kpi:first-child .kpi-value');
+  if (card) card.innerHTML = `${baseKpiDeptAvg} <span class="kpi-unit">ngày</span>`;
+  $('#recalcNote').classList.add('hidden');
 }
 
 // --------------------------------------------------------------------------
@@ -399,7 +437,7 @@ async function loadReport(name) {
   showLoading(true);
   try {
     const data = await api(`/api/reports/${name}`);
-    $('#reportCount').textContent = `${data.count} dong`;
+    $('#reportCount').textContent = `${data.count} dòng`;
     if (!reportTable) {
       reportTable = new Tabulator('#reportTable', {
         data: data.rows,
@@ -408,8 +446,8 @@ async function loadReport(name) {
         pagination: true,
         paginationSize: 15,
         paginationSizeSelector: [10, 15, 25, 50, 100],
-        placeholder: 'Khong co du lieu',
-        height: '520px',
+        placeholder: 'Không có dữ liệu',
+        height: '540px',
       });
     } else {
       reportTable.setColumns(def.columns);
@@ -428,16 +466,17 @@ async function loadReport(name) {
 async function loadFilters() {
   try {
     const f = await fetch('/api/filters').then((r) => r.json());
-    const fill = (sel, arr) => {
+    const fill = (sel, arr, labelFn) => {
       const el = $(sel);
       arr.forEach((v) => {
         const o = document.createElement('option');
         o.value = v;
-        o.textContent = v;
+        o.textContent = labelFn ? labelFn(v) : v;
         el.appendChild(o);
       });
     };
-    fill('#stationSelect', f.stations || []);
+    // Station: OTHER hien thi "Khac (station con lai)"
+    fill('#stationSelect', f.stations || [], (v) => (v === 'OTHER' ? 'Khác (station còn lại)' : v));
     fill('#storeSelect', f.stores || []);
     fill('#deptSelect', f.departments || []);
   } catch (e) {
@@ -536,9 +575,13 @@ function init() {
     if (reportTable) reportTable.setFilter(matchAny, { value: e.target.value });
   });
 
+  // Tinh lai TAT (bo item da chon)
+  $('#recalcBtn').addEventListener('click', recalcTat);
+  $('#resetCalcBtn').addEventListener('click', resetRecalc);
+
   // Export Excel
   $('#mainExport').addEventListener('click', () => {
-    if (mainTable) mainTable.download('xlsx', `TAT_don_vi_${Date.now()}.xlsx`, { sheetName: 'TAT' });
+    if (mainTable) mainTable.download('xlsx', `TAT_TrungTam_${Date.now()}.xlsx`, { sheetName: 'TAT' });
   });
   $('#reportExport').addEventListener('click', () => {
     if (reportTable) reportTable.download('xlsx', `${state.currentReport}_${Date.now()}.xlsx`, { sheetName: 'BaoCao' });

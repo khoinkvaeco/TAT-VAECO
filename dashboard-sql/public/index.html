@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Dashboard TAT - VAECO</title>
+  <title>VAECO · Dashboard Báo cáo TAT</title>
 
   <!-- Tailwind CSS (CDN) -->
   <script src="https://cdn.tailwindcss.com"></script>
@@ -12,173 +12,162 @@
   <!-- Tabulator (CDN) -->
   <link href="https://unpkg.com/tabulator-tables@6.2.1/dist/css/tabulator.min.css" rel="stylesheet" />
   <script src="https://unpkg.com/tabulator-tables@6.2.1/dist/js/tabulator.min.js"></script>
-  <!-- SheetJS (xlsx) - phuc vu export Excel cua Tabulator -->
+  <!-- SheetJS (xlsx) - phục vụ export Excel của Tabulator -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 
-  <!-- CSS tuy chinh (bang mau da validate + theme sang/toi) -->
   <link rel="stylesheet" href="style.css" />
 </head>
 
 <body class="bg-plane text-primary min-h-screen">
   <!-- ===================== HEADER ===================== -->
-  <header class="sticky top-0 z-30 border-b border-hair bg-surface/95 backdrop-blur">
-    <div class="max-w-[1600px] mx-auto px-4 py-3 flex items-center gap-3 flex-wrap">
-      <div class="flex items-center gap-2">
-        <div class="w-9 h-9 rounded-lg grid place-items-center" style="background:var(--series-1)">
-          <span class="text-white font-bold">TAT</span>
+  <header class="brand-header sticky top-0 z-30">
+    <div class="max-w-[1600px] mx-auto px-5 py-3 flex items-center gap-3 flex-wrap">
+      <div class="flex items-center gap-3">
+        <div class="brand-logo">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true">
+            <path d="M21 16v-2l-8-5V3.5A1.5 1.5 0 0 0 11.5 2 1.5 1.5 0 0 0 10 3.5V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5L21 16z"/>
+          </svg>
         </div>
         <div>
-          <h1 class="text-lg font-bold leading-tight">Dashboard Bao cao TAT</h1>
-          <p class="text-xs text-muted">Turn-Around-Time · VAECO</p>
+          <h1 class="text-lg font-bold leading-tight tracking-tight">Dashboard Báo cáo TAT</h1>
+          <p class="text-xs brand-sub">VAECO · Turn-Around-Time · Quản lý vật tư khí tài</p>
         </div>
       </div>
 
       <div class="ml-auto flex items-center gap-2">
-        <span id="modeBadge" class="text-xs px-2 py-1 rounded-full border border-hair text-muted">--</span>
-        <button id="themeToggle" title="Doi giao dien sang/toi"
-          class="text-sm px-3 py-1.5 rounded-lg border border-hair hover:bg-hover transition">🌓</button>
+        <span id="modeBadge" class="badge-mode">—</span>
+        <button id="themeToggle" title="Đổi giao diện sáng/tối" class="hbtn">🌓</button>
       </div>
     </div>
 
     <!-- ===================== FILTER BAR ===================== -->
-    <div class="max-w-[1600px] mx-auto px-4 pb-3 flex items-end gap-3 flex-wrap">
-      <!-- Kieu ky: thang / tuan -->
+    <div class="max-w-[1600px] mx-auto px-5 pb-3 flex items-end gap-3 flex-wrap">
       <div>
-        <label class="block text-xs text-muted mb-1">Ky bao cao</label>
-        <div class="inline-flex rounded-lg border border-hair overflow-hidden">
-          <button data-period="month" class="periodBtn px-3 py-1.5 text-sm">Thang</button>
-          <button data-period="week" class="periodBtn px-3 py-1.5 text-sm border-l border-hair">Tuan (T5→T5)</button>
+        <label class="flabel">Kỳ báo cáo</label>
+        <div class="inline-flex rounded-lg overflow-hidden border border-hair">
+          <button data-period="month" class="periodBtn px-3 py-1.5 text-sm">Tháng</button>
+          <button data-period="week" class="periodBtn px-3 py-1.5 text-sm border-l border-hair">Tuần (T5→T5)</button>
         </div>
       </div>
 
-      <!-- Chon thang (khi ky = thang) -->
       <div id="monthWrap">
-        <label class="block text-xs text-muted mb-1">Thang</label>
-        <input type="month" id="monthInput"
-          class="px-3 py-1.5 text-sm rounded-lg border border-hair bg-surface" />
+        <label class="flabel">Tháng</label>
+        <input type="month" id="monthInput" class="finput" />
       </div>
 
-      <!-- Chon tuan (khi ky = tuan) -->
       <div id="weekWrap" class="hidden">
-        <label class="block text-xs text-muted mb-1">Ngay tham chieu (tuan)</label>
-        <input type="date" id="weekInput"
-          class="px-3 py-1.5 text-sm rounded-lg border border-hair bg-surface" />
+        <label class="flabel">Ngày tham chiếu (tuần)</label>
+        <input type="date" id="weekInput" class="finput" />
       </div>
 
-      <!-- Station -->
       <div>
-        <label class="block text-xs text-muted mb-1">Station</label>
-        <select id="stationSelect" class="px-3 py-1.5 text-sm rounded-lg border border-hair bg-surface min-w-[110px]">
-          <option value="">Tat ca</option>
+        <label class="flabel">Station</label>
+        <select id="stationSelect" class="finput min-w-[120px]">
+          <option value="">Tất cả</option>
         </select>
       </div>
 
-      <!-- Store -->
       <div>
-        <label class="block text-xs text-muted mb-1">Store</label>
-        <select id="storeSelect" class="px-3 py-1.5 text-sm rounded-lg border border-hair bg-surface min-w-[110px]">
-          <option value="">Tat ca</option>
+        <label class="flabel">Store</label>
+        <select id="storeSelect" class="finput min-w-[120px]">
+          <option value="">Tất cả</option>
         </select>
       </div>
 
-      <!-- Department -->
       <div>
-        <label class="block text-xs text-muted mb-1">Don vi (Department)</label>
-        <select id="deptSelect" class="px-3 py-1.5 text-sm rounded-lg border border-hair bg-surface min-w-[140px]">
-          <option value="">Tat ca</option>
+        <label class="flabel">Trung tâm</label>
+        <select id="deptSelect" class="finput min-w-[150px]">
+          <option value="">Tất cả</option>
         </select>
       </div>
 
-      <button id="applyBtn"
-        class="px-4 py-1.5 text-sm rounded-lg text-white font-medium" style="background:var(--series-1)">
-        Ap dung
-      </button>
+      <button id="applyBtn" class="apply-btn">Áp dụng</button>
 
-      <!-- Loading indicator -->
       <div id="loading" class="hidden items-center gap-2 text-sm text-muted">
-        <span class="spinner"></span> Dang tai...
+        <span class="spinner"></span> Đang tải…
       </div>
       <span id="rangeLabel" class="text-xs text-muted ml-auto"></span>
     </div>
   </header>
 
-  <!-- Thong bao loi -->
-  <div id="errorBox" class="hidden max-w-[1600px] mx-auto mt-3 px-4">
-    <div class="rounded-lg border border-red-300 bg-red-50 text-red-800 px-4 py-3 text-sm flex items-start gap-2">
-      <span>⚠️</span><span id="errorMsg"></span>
-    </div>
+  <!-- Thông báo lỗi -->
+  <div id="errorBox" class="hidden max-w-[1600px] mx-auto mt-3 px-5">
+    <div class="err-box"><span>⚠️</span><span id="errorMsg"></span></div>
   </div>
 
   <!-- ===================== TAB NAV ===================== -->
-  <nav class="max-w-[1600px] mx-auto px-4 mt-4">
+  <nav class="max-w-[1600px] mx-auto px-5 mt-4">
     <div class="flex gap-1 border-b border-hair">
-      <button data-tab="dashboard" class="mainTab px-4 py-2 text-sm font-medium">📊 Dashboard</button>
-      <button data-tab="reports" class="mainTab px-4 py-2 text-sm font-medium">📋 Bao cao don vi</button>
+      <button data-tab="dashboard" class="mainTab">📊 Tổng quan</button>
+      <button data-tab="reports" class="mainTab">📋 Báo cáo Trung tâm</button>
     </div>
   </nav>
 
-  <main class="max-w-[1600px] mx-auto px-4 py-5">
-    <!-- ============ TAB DASHBOARD ============ -->
+  <main class="max-w-[1600px] mx-auto px-5 py-5">
+    <!-- ============ TAB TỔNG QUAN ============ -->
     <section id="tab-dashboard">
-      <!-- KPI Cards -->
       <div id="kpiGrid" class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3 mb-5"></div>
 
-      <!-- Charts -->
       <div class="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-5">
         <div class="card">
-          <h3 class="card-title">TAT trung binh theo don vi (ngay)</h3>
+          <h3 class="card-title">TAT trung bình theo Trung tâm <span class="unit">(ngày)</span></h3>
           <div class="chart-box"><canvas id="chartBarDept"></canvas></div>
         </div>
         <div class="card">
-          <h3 class="card-title">Phan bo thiet bi theo Station</h3>
+          <h3 class="card-title">Phân bổ thiết bị theo Station</h3>
           <div class="chart-box"><canvas id="chartPieStation"></canvas></div>
         </div>
         <div class="card">
-          <h3 class="card-title">TAT trung binh theo ngay (don vi: ngay)</h3>
+          <h3 class="card-title">TAT trung bình theo ngày <span class="unit">(ngày)</span></h3>
           <div class="chart-box"><canvas id="chartLineDay"></canvas></div>
         </div>
         <div class="card">
-          <h3 class="card-title">Top 10 don vi theo so luong thiet bi</h3>
+          <h3 class="card-title">Top 10 Trung tâm theo số lượng thiết bị</h3>
           <div class="chart-box"><canvas id="chartTop10"></canvas></div>
         </div>
       </div>
 
-      <!-- Bang du lieu chinh -->
+      <!-- Bảng chi tiết TAT -->
       <div class="card">
         <div class="flex items-center justify-between gap-3 flex-wrap mb-3">
-          <h3 class="card-title mb-0">Chi tiet TAT theo thiet bi</h3>
+          <div>
+            <h3 class="card-title mb-0">Chi tiết TAT theo thiết bị</h3>
+            <p class="text-xs text-muted mt-0.5">
+              Tích chọn các mục đặc biệt (cột <b>Bỏ qua</b>) rồi bấm <b>Tính lại TAT</b> để loại khỏi số trung bình.
+            </p>
+          </div>
           <div class="flex items-center gap-2">
-            <input id="mainSearch" type="text" placeholder="Tim kiem..."
-              class="px-3 py-1.5 text-sm rounded-lg border border-hair bg-surface" />
+            <input id="mainSearch" type="text" placeholder="Tìm kiếm…" class="finput" />
+            <button id="recalcBtn" class="btn-accent" title="Tính lại TAT trung bình, bỏ các mục đã tích">↻ Tính lại TAT</button>
+            <button id="resetCalcBtn" class="btn-ghost" title="Bỏ chọn tất cả">Đặt lại</button>
             <button id="mainExport" class="btn-export">⬇ Excel</button>
           </div>
         </div>
+        <div id="recalcNote" class="hidden recalc-note"></div>
         <div id="mainTable"></div>
       </div>
     </section>
 
-    <!-- ============ TAB REPORTS ============ -->
+    <!-- ============ TAB BÁO CÁO ============ -->
     <section id="tab-reports" class="hidden">
-      <!-- Sub-tabs cho tung bao cao -->
       <div class="flex gap-1 flex-wrap mb-4">
-        <button data-report="issued-not-installed" class="reportTab">Xuat kho chua lap</button>
-        <button data-report="removed-not-returned" class="reportTab">Thao chua tra US</button>
-        <button data-report="returned-unservice" class="reportTab">Tra unservice</button>
-        <button data-report="not-reconciled" class="reportTab">Chua doi ung</button>
-        <button data-report="removed-before-installed" class="reportTab">Thao truoc lap sau</button>
+        <button data-report="returned-unservice" class="reportTab">Trả unservice</button>
+        <button data-report="issued-not-installed" class="reportTab">Xuất kho chưa lắp</button>
+        <button data-report="removed-not-returned" class="reportTab">Tháo chưa trả US</button>
+        <button data-report="not-reconciled" class="reportTab">Chưa đối ứng</button>
+        <button data-report="removed-before-installed" class="reportTab">Tháo trước lắp sau</button>
         <button data-report="other" class="reportTab">Other (on_ac)</button>
-        <button data-report="return-store-tat" class="reportTab">TAT hoan kho</button>
+        <button data-report="return-store-tat" class="reportTab">TAT hoàn kho</button>
       </div>
 
       <div class="card">
         <div class="flex items-center justify-between gap-3 flex-wrap mb-3">
           <div>
-            <h3 id="reportTitle" class="card-title mb-0">--</h3>
+            <h3 id="reportTitle" class="card-title mb-0">—</h3>
             <p id="reportDesc" class="text-xs text-muted mt-0.5"></p>
           </div>
           <div class="flex items-center gap-2">
-            <input id="reportSearch" type="text" placeholder="Tim kiem..."
-              class="px-3 py-1.5 text-sm rounded-lg border border-hair bg-surface" />
+            <input id="reportSearch" type="text" placeholder="Tìm kiếm…" class="finput" />
             <span id="reportCount" class="text-xs text-muted"></span>
             <button id="reportExport" class="btn-export">⬇ Excel</button>
           </div>
@@ -188,8 +177,8 @@
     </section>
   </main>
 
-  <footer class="max-w-[1600px] mx-auto px-4 py-6 text-xs text-muted">
-    Dashboard TAT · Du lieu tu SQL Server (NQT / DWH_DB · AMOS). Gio da doi sang mui gio Viet Nam (+7).
+  <footer class="max-w-[1600px] mx-auto px-5 py-6 text-xs text-muted">
+    VAECO · Dashboard TAT — dữ liệu từ SQL Server (AMOS/NQT). Giờ đã quy đổi sang múi giờ Việt Nam (+7). Đơn vị TAT: ngày.
   </footer>
 
   <script src="script.js"></script>

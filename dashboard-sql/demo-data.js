@@ -7,7 +7,7 @@
  */
 'use strict';
 
-const STATIONS = ['SGN', 'HAN', 'DAD'];
+const STATIONS = ['SGN', 'HAN', 'DAD', 'CXR', 'VII']; // CXR/VII = station phu -> gom vao "Khac"
 const STORES = ['S01', 'S02', 'S03'];
 const DEPARTMENTS = ['PA', 'CUVT', 'DIEN', 'AVIONICS', 'CANOPY', 'HYDRAULIC'];
 const AC = ['VN-A321', 'VN-A350', 'VN-B787', 'VN-A320'];
@@ -42,10 +42,15 @@ function baseDevice(i) {
   };
 }
 
-/** Loc theo filter chung. */
+/** Loc theo filter chung. station='OTHER' = ngoai HAN/SGN/DAD. */
 function applyFilter(rows, f) {
+  const MAIN = ['HAN', 'SGN', 'DAD'];
   return rows.filter((r) => {
-    if (f.station && r.station !== f.station) return false;
+    if (f.station) {
+      if (f.station.toUpperCase() === 'OTHER') {
+        if (MAIN.includes((r.station || '').toUpperCase())) return false;
+      } else if (r.station !== f.station) return false;
+    }
     if (f.store && r.store !== f.store) return false;
     if (f.department && r.department !== f.department) return false;
     return true;
@@ -186,6 +191,10 @@ function removedBeforeInstalled(range, f) {
   const rows = [];
   for (let i = 0; i < 25; i++) {
     const d = baseDevice(i);
+    const issue = rndDate(range.from, range.to);
+    const install = new Date(issue.getTime() + rndInt(1, 5) * 86400000);
+    const removal = new Date(install.getTime() + rndInt(10, 200) * 86400000);
+    const ret = new Date(removal.getTime() + rndInt(1, 3) * 86400000);
     rows.push({
       partno: d.partno,
       serialno: d.serialno,
@@ -194,8 +203,12 @@ function removedBeforeInstalled(range, f) {
       ac_registr: d.ac_registr,
       department: rnd(DEPARTMENTS),
       station: d.station,
-      del_staff: 'NV' + rndInt(100, 999),
-      removed_time_vn: rndDate(range.from, range.to).toISOString(),
+      issue_time_vn: issue.toISOString(),
+      installed_time_vn: install.toISOString(),
+      removed_time_vn: removal.toISOString(),
+      return_unservice_time: ret.toISOString(),
+      tat_issue_install_days: +((install - issue) / 86400000).toFixed(1),
+      tat_removal_return_days: +((ret - removal) / 86400000).toFixed(1),
     });
   }
   return applyFilter(rows, f);
@@ -221,7 +234,7 @@ function other(range, f) {
 }
 
 function filters() {
-  return { stations: STATIONS, stores: STORES, departments: DEPARTMENTS };
+  return { stations: ['HAN', 'SGN', 'DAD', 'OTHER'], stores: STORES, departments: DEPARTMENTS };
 }
 
 /** Dashboard mau (dung lai logic tong hop don gian). */
@@ -249,8 +262,13 @@ function dashboard(range, f) {
     return [...m.entries()].map(([key, g]) => ({ key, avg: g.s / g.c, count: g.c }));
   };
   const byDept = groupAvg(dept, 'department', 'tat_days').sort((a, b) => b.avg - a.avg);
-  const byStationMap = new Map();
-  dept.forEach((r) => byStationMap.set(r.station, (byStationMap.get(r.station) || 0) + 1));
+  const MAIN = ['HAN', 'SGN', 'DAD'];
+  const stMap = new Map([...MAIN, 'OTHER'].map((s) => [s, 0]));
+  dept.forEach((r) => {
+    const k = MAIN.includes((r.station || '').toUpperCase()) ? r.station.toUpperCase() : 'OTHER';
+    stMap.set(k, (stMap.get(k) || 0) + 1);
+  });
+  const pieOrder = [...MAIN, 'OTHER'];
   const byDayMap = new Map();
   dept.forEach((r) => {
     const day = r.return_unservice_time.slice(0, 10);
@@ -274,7 +292,7 @@ function dashboard(range, f) {
     },
     charts: {
       barDept: { labels: byDept.map((x) => x.key), values: byDept.map((x) => r1(x.avg)), counts: byDept.map((x) => x.count) },
-      pieStation: { labels: [...byStationMap.keys()], values: [...byStationMap.values()] },
+      pieStation: { labels: pieOrder.map((s) => (s === 'OTHER' ? 'Khác' : s)), values: pieOrder.map((s) => stMap.get(s) || 0) },
       lineDay: { labels: days.map((d) => d[0]), values: days.map((d) => r1(d[1].s / d[1].c)) },
       top10: { labels: top.map((x) => x.key), values: top.map((x) => x.count), tat: top.map((x) => r1(x.avg)) },
     },

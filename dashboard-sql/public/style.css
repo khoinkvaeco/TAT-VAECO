@@ -1,151 +1,213 @@
 /* ==========================================================================
- *  style.css  -  Giao dien Dashboard TAT
- *  Bang mau da qua validate (dataviz) - ho tro theme SANG / TOI.
- *  Bien mau khai bao theo "role" de doi 1 cho la doi toan bo.
+ *  style.css  -  Giao diện Dashboard TAT (VAECO)
+ *  Phong cách hàng không / MRO: xanh teal chủ đạo + nhấn vàng đồng.
+ *  Bảng màu biểu đồ (series-*) đã qua validate; hỗ trợ sáng / tối.
  * ========================================================================== */
 
 :root {
-  /* --- Be mat & chu (light) --- */
-  --surface-1: #fcfcfb;   /* be mat card/chart */
-  --plane:     #f9f9f7;   /* nen trang */
-  --text-primary:   #0b0b0b;
-  --text-secondary: #52514e;
-  --text-muted:     #898781;
-  --hair:      #e1e0d9;   /* duong ke mo */
-  --hover:     #f0efec;
+  /* --- Bề mặt & chữ (light) --- */
+  --surface-1: #ffffff;
+  --plane:     #eef2f4;
+  --text-primary:   #0f1e28;
+  --text-secondary: #45575f;
+  --text-muted:     #7a8891;
+  --hair:      #dbe3e7;
+  --hover:     #f1f5f7;
 
-  /* --- Bang mau categorical (light) - thu tu co dinh, khong xoay vong --- */
-  --series-1: #2a78d6; /* blue   */
+  /* --- Thương hiệu (hàng không) --- */
+  --brand-1:   #0b4f5a;   /* teal đậm */
+  --brand-2:   #0e6b74;   /* teal */
+  --brand-accent: #d4a017; /* vàng đồng */
+
+  /* --- Bảng màu categorical (light) - thứ tự cố định --- */
+  --series-1: #0e6b74; /* teal (đồng bộ thương hiệu) */
   --series-2: #1baf7a; /* aqua   */
   --series-3: #eda100; /* yellow */
-  --series-4: #008300; /* green  */
+  --series-4: #2a78d6; /* blue   */
   --series-5: #4a3aa7; /* violet */
   --series-6: #e34948; /* red    */
   --series-7: #e87ba4; /* magenta*/
   --series-8: #eb6834; /* orange */
 
-  /* --- Trang thai --- */
   --good:     #0ca30c;
-  --warning:  #fab219;
+  --warning:  #e08a00;
   --critical: #d03b3b;
 }
 
-/* --- Che do TOI (chon thu cong, khong lat tu dong) --- */
 :root[data-theme="dark"] {
-  --surface-1: #1a1a19;
-  --plane:     #0d0d0d;
-  --text-primary:   #ffffff;
-  --text-secondary: #c3c2b7;
-  --text-muted:     #898781;
-  --hair:      #2c2c2a;
-  --hover:     #232322;
+  --surface-1: #14212a;
+  --plane:     #0b141a;
+  --text-primary:   #eef4f6;
+  --text-secondary: #b6c4cb;
+  --text-muted:     #7f929c;
+  --hair:      #24333d;
+  --hover:     #1b2b34;
 
-  --series-1: #3987e5;
+  --brand-1:   #093b43;
+  --brand-2:   #0c5760;
+  --brand-accent: #e3b53f;
+
+  --series-1: #2ea6ae;
   --series-2: #199e70;
   --series-3: #c98500;
-  --series-4: #008300;
+  --series-4: #3987e5;
   --series-5: #9085e9;
   --series-6: #e66767;
   --series-7: #d55181;
   --series-8: #d95926;
 }
 
-/* Mac dinh theo he thong neu chua chon thu cong */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --surface-1: #1a1a19;
-    --plane:     #0d0d0d;
-    --text-primary:   #ffffff;
-    --text-secondary: #c3c2b7;
-    --hair:      #2c2c2a;
-    --hover:     #232322;
-    --series-1: #3987e5; --series-2: #199e70; --series-3: #c98500; --series-4: #008300;
+    --surface-1: #14212a; --plane: #0b141a;
+    --text-primary: #eef4f6; --text-secondary: #b6c4cb; --text-muted: #7f929c;
+    --hair: #24333d; --hover: #1b2b34;
+    --brand-1: #093b43; --brand-2: #0c5760; --brand-accent: #e3b53f;
+    --series-1: #2ea6ae; --series-2: #199e70; --series-3: #c98500; --series-4: #3987e5;
     --series-5: #9085e9; --series-6: #e66767; --series-7: #d55181; --series-8: #d95926;
   }
 }
 
-/* --- Anh xa role -> tien ich Tailwind qua class thuong --- */
 .bg-plane   { background: var(--plane); }
 .bg-surface { background: var(--surface-1); }
 .text-primary   { color: var(--text-primary); }
 .text-secondary { color: var(--text-secondary); }
 .text-muted     { color: var(--text-muted); }
 .border-hair    { border-color: var(--hair) !important; }
-.hover\:bg-hover:hover { background: var(--hover); }
 
 body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
 
-/* --- Card --- */
+/* --- Header thương hiệu --- */
+.brand-header {
+  background: linear-gradient(100deg, var(--brand-1), var(--brand-2));
+  color: #eaf5f6;
+  box-shadow: 0 1px 0 rgba(0,0,0,.15), 0 2px 12px rgba(0,0,0,.12);
+  border-bottom: 3px solid var(--brand-accent);
+}
+.brand-header .flabel { color: rgba(234,245,246,.72); }
+.brand-sub { color: rgba(234,245,246,.7); }
+.brand-logo {
+  width: 40px; height: 40px; border-radius: 11px;
+  display: grid; place-items: center; color: var(--brand-1);
+  background: var(--brand-accent);
+  box-shadow: 0 2px 8px rgba(0,0,0,.2);
+}
+.badge-mode {
+  font-size: 11px; font-weight: 700; letter-spacing: .04em;
+  padding: 3px 9px; border-radius: 999px;
+  background: rgba(255,255,255,.14); color: #eaf5f6; border: 1px solid rgba(255,255,255,.2);
+}
+.hbtn {
+  font-size: 14px; padding: 6px 10px; border-radius: 9px;
+  background: rgba(255,255,255,.12); color: #eaf5f6; border: 1px solid rgba(255,255,255,.2);
+}
+.hbtn:hover { background: rgba(255,255,255,.22); }
+
+/* --- Filter controls --- */
+.flabel { display: block; font-size: 11px; margin-bottom: 4px; color: var(--text-muted); font-weight: 500; }
+.brand-header .flabel { color: rgba(234,245,246,.75); }
+.finput {
+  padding: 7px 11px; font-size: 13px; border-radius: 9px;
+  border: 1px solid var(--hair); background: var(--surface-1); color: var(--text-primary);
+}
+.finput:focus { outline: 2px solid var(--brand-accent); outline-offset: -1px; }
+.apply-btn {
+  padding: 7px 18px; font-size: 13px; font-weight: 600; border-radius: 9px;
+  background: var(--brand-accent); color: #3a2c00; border: none;
+}
+.apply-btn:hover { filter: brightness(1.06); }
+
+/* --- Cards --- */
 .card {
   background: var(--surface-1);
   border: 1px solid var(--hair);
   border-radius: 14px;
   padding: 16px;
+  box-shadow: 0 1px 2px rgba(15,30,40,.04);
 }
-.card-title { font-size: 14px; font-weight: 600; color: var(--text-secondary); margin-bottom: 10px; }
+.card-title { font-size: 14px; font-weight: 700; color: var(--text-primary); margin-bottom: 10px; }
+.card-title .unit { font-weight: 500; color: var(--text-muted); font-size: 12px; }
 
-/* --- KPI Card --- */
+/* --- KPI cards --- */
 .kpi {
   background: var(--surface-1);
   border: 1px solid var(--hair);
   border-radius: 14px;
   padding: 14px 16px;
-  position: relative;
-  overflow: hidden;
+  position: relative; overflow: hidden;
+  box-shadow: 0 1px 2px rgba(15,30,40,.04);
 }
 .kpi::before {
   content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px;
   background: var(--accent, var(--series-1));
 }
-.kpi-label { font-size: 12px; color: var(--text-muted); }
-.kpi-value { font-size: 26px; font-weight: 700; line-height: 1.1; margin-top: 4px;
-             font-variant-numeric: tabular-nums; }
-.kpi-unit  { font-size: 12px; color: var(--text-muted); font-weight: 500; }
+.kpi-label { font-size: 12px; color: var(--text-muted); font-weight: 500; }
+.kpi-value { font-size: 27px; font-weight: 800; line-height: 1.05; margin-top: 5px;
+             color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.kpi-unit  { font-size: 12px; color: var(--text-muted); font-weight: 600; }
 
-/* --- Chart box (chieu cao co dinh de responsive) --- */
 .chart-box { position: relative; height: 300px; }
 
 /* --- Tabs --- */
-.mainTab { color: var(--text-muted); border-bottom: 2px solid transparent; }
-.mainTab.active { color: var(--text-primary); border-bottom-color: var(--series-1); }
+.mainTab {
+  padding: 9px 16px; font-size: 14px; font-weight: 600;
+  color: var(--text-muted); border-bottom: 2px solid transparent; background: none;
+}
+.mainTab.active { color: var(--brand-2); border-bottom-color: var(--brand-accent); }
 
-.periodBtn { color: var(--text-muted); background: var(--surface-1); }
-.periodBtn.active { color: #fff; background: var(--series-1); }
+.periodBtn { color: var(--text-secondary); background: var(--surface-1); }
+.brand-header .periodBtn { background: rgba(255,255,255,.1); color: #eaf5f6; border-color: rgba(255,255,255,.2); }
+.periodBtn.active { color: #3a2c00; background: var(--brand-accent); }
 
 .reportTab {
-  font-size: 13px; padding: 6px 12px; border-radius: 999px;
+  font-size: 13px; padding: 7px 14px; border-radius: 999px;
   border: 1px solid var(--hair); color: var(--text-secondary); background: var(--surface-1);
 }
-.reportTab.active { background: var(--series-1); color: #fff; border-color: var(--series-1); }
+.reportTab:hover { background: var(--hover); }
+.reportTab.active { background: var(--brand-2); color: #fff; border-color: var(--brand-2); }
 
-/* --- Nut export --- */
-.btn-export {
-  font-size: 13px; padding: 6px 12px; border-radius: 8px;
-  border: 1px solid var(--hair); color: var(--text-secondary); background: var(--surface-1);
+/* --- Nút --- */
+.btn-export, .btn-ghost, .btn-accent {
+  font-size: 13px; padding: 7px 12px; border-radius: 9px; border: 1px solid var(--hair);
+  color: var(--text-secondary); background: var(--surface-1); cursor: pointer;
 }
-.btn-export:hover { background: var(--hover); }
+.btn-export:hover, .btn-ghost:hover { background: var(--hover); }
+.btn-accent { background: var(--brand-2); color: #fff; border-color: var(--brand-2); font-weight: 600; }
+.btn-accent:hover { filter: brightness(1.08); }
 
-/* --- Spinner loading --- */
+.recalc-note {
+  margin-bottom: 10px; padding: 8px 12px; border-radius: 9px; font-size: 13px;
+  background: color-mix(in srgb, var(--brand-accent) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--brand-accent) 40%, transparent);
+  color: var(--text-primary);
+}
+
+/* --- Lỗi --- */
+.err-box {
+  border-radius: 10px; border: 1px solid #f2b8b8; background: #fdecec; color: #9a2222;
+  padding: 12px 16px; font-size: 13px; display: flex; align-items: flex-start; gap: 8px;
+}
+:root[data-theme="dark"] .err-box { background: #3a1f1f; border-color: #6a3333; color: #f2c2c2; }
+
+/* --- Spinner --- */
 .spinner {
   width: 16px; height: 16px; border-radius: 50%;
-  border: 2px solid var(--hair); border-top-color: var(--series-1);
-  display: inline-block; animation: spin 0.8s linear infinite;
+  border: 2px solid var(--hair); border-top-color: var(--brand-accent);
+  display: inline-block; animation: spin .8s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* --- Tabulator theo theme --- */
-.tabulator {
-  background: transparent; border: none; font-size: 13px;
-}
-.tabulator .tabulator-header,
-.tabulator .tabulator-header .tabulator-col {
-  background: var(--surface-1); border-color: var(--hair); color: var(--text-secondary);
+.tabulator { background: transparent; border: none; font-size: 13px; }
+.tabulator .tabulator-header, .tabulator .tabulator-header .tabulator-col {
+  background: var(--hover); border-color: var(--hair); color: var(--text-secondary); font-weight: 600;
 }
 .tabulator-row { background: var(--surface-1); color: var(--text-primary); border-color: var(--hair); }
 .tabulator-row.tabulator-row-even { background: var(--hover); }
+.tabulator-row.tabulator-selected { background: color-mix(in srgb, var(--brand-accent) 22%, var(--surface-1)) !important; }
 .tabulator .tabulator-footer { background: var(--surface-1); color: var(--text-secondary); border-color: var(--hair); }
 .tabulator .tabulator-footer .tabulator-page { background: var(--surface-1); color: var(--text-secondary); border-color: var(--hair); }
-.tabulator .tabulator-footer .tabulator-page.active { color: #fff; background: var(--series-1); }
+.tabulator .tabulator-footer .tabulator-page.active { color: #fff; background: var(--brand-2); }
+.tabulator .tabulator-col-content .tabulator-col-title { white-space: normal; }
 
-/* Badge TAT tra ve trong cell */
-.tat-badge { padding: 1px 8px; border-radius: 999px; font-variant-numeric: tabular-nums; font-weight: 600; }
+.tat-badge { padding: 1px 8px; border-radius: 999px; font-variant-numeric: tabular-nums; font-weight: 700; }
