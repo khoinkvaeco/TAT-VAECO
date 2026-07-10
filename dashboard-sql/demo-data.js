@@ -71,6 +71,7 @@ function tatDepartments(range, f) {
       event_perf: 'E' + rndInt(100000, 999999),
       receiver: 'RCV' + rndInt(100, 999),
       voucher_issue: 'P-' + rndInt(10000, 99999),
+      picking_li: 'PL-' + rndInt(10000, 99999),
       department: rnd(DEPARTMENTS),
       issue_time_vn: issue.toISOString(),
       return_unservice_time: ret.toISOString(),
@@ -108,7 +109,7 @@ function returnStoreTat(range, f) {
     rows.push({
       ...d,
       voucher_issue: 'P-' + rndInt(10000, 99999),
-      voucher_return: 'P-CA-' + rndInt(10000, 99999),
+      picking_li: 'PL-' + rndInt(10000, 99999),
       department: rnd(DEPARTMENTS),
       issue_time_vn: issue.toISOString(),
       return_store_time_vn: ret.toISOString(),
@@ -122,11 +123,13 @@ function issuedNotInstalled(range, f) {
   const rows = [];
   for (let i = 0; i < 45; i++) {
     const d = baseDevice(i);
+    const issue = rndDate(range.from, range.to);
     rows.push({
       ...d,
       voucher_issue: 'P-' + rndInt(10000, 99999),
       department: rnd(DEPARTMENTS),
-      issue_time_vn: rndDate(range.from, range.to).toISOString(),
+      issue_time_vn: issue.toISOString(),
+      tat_days: +((Date.now() - issue.getTime()) / 86400000).toFixed(1),
     });
   }
   return applyFilter(rows, f);
@@ -180,6 +183,7 @@ function notReconciled(range, f) {
     rows.push({
       ...d,
       voucher_issue: 'P-' + rndInt(10000, 99999),
+      picking_li: 'PL-' + rndInt(10000, 99999),
       department: rnd(DEPARTMENTS),
       issue_time_vn: rndDate(range.from, range.to).toISOString(),
     });
@@ -191,8 +195,9 @@ function removedBeforeInstalled(range, f) {
   const rows = [];
   for (let i = 0; i < 25; i++) {
     const d = baseDevice(i);
-    const issue = rndDate(range.from, range.to);
-    const install = new Date(issue.getTime() + rndInt(1, 5) * 86400000);
+    // Logic "thao truoc lap sau": ngay XUAT KHO SAU ngay LAP
+    const install = rndDate(range.from, range.to);
+    const issue = new Date(install.getTime() + rndInt(1, 10) * 86400000);
     const removal = new Date(install.getTime() + rndInt(10, 200) * 86400000);
     const ret = new Date(removal.getTime() + rndInt(1, 3) * 86400000);
     rows.push({

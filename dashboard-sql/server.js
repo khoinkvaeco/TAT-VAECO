@@ -168,6 +168,41 @@ function pickDept(sources) {
   return `COALESCE(${sources.map(cleanDept).join(', ')}, 'PA')`;
 }
 
+// SIGN lookup an toan (khong nhan ban dong): OUTER APPLY TOP 1 theo cot mutator.
+// >>> Dung join thuong voi SIGN co the lam TANG so dong neu USER_SIGN trung. <<<
+function signApply(mutatorCol, alias) {
+  return `OUTER APPLY (
+      SELECT TOP 1 [DEPARTMENT] FROM [DWH_DB]..[STG_AMOS].[SIGN]
+      WHERE [USER_SIGN] = ${mutatorCol}
+    ) ${alias}`;
+}
+
+/**
+ * Trung tam (department) cho bang CO real_us1:
+ *   1) real_us1.department (bo '' / 'UNKNOWN')
+ *   2) neu mutator bat dau bang 'PA' -> 'PA'
+ *   3) tra SIGN theo mutator
+ *   4) mac dinh 'PA'
+ */
+function deptFromReal(rAlias, smAlias) {
+  return `COALESCE(
+      ${cleanDept(`${rAlias}.[department]`)},
+      CASE WHEN LEFT(LTRIM(RTRIM(${rAlias}.[mutator])), 2) = 'PA' THEN 'PA' END,
+      ${cleanDept(`${smAlias}.[DEPARTMENT]`)},
+      'PA')`;
+}
+
+/**
+ * Trung tam cho bang KHONG co cot department (kho_ser1 / on_off): dung mutator.
+ *   1) mutator bat dau 'PA' -> 'PA'  2) SIGN theo mutator  3) 'PA'
+ */
+function deptFromMutator(mutatorCol, smAlias) {
+  return `COALESCE(
+      CASE WHEN LEFT(LTRIM(RTRIM(${mutatorCol})), 2) = 'PA' THEN 'PA' END,
+      ${cleanDept(`${smAlias}.[DEPARTMENT]`)},
+      'PA')`;
+}
+
 // 3 station chinh cua VAECO; con lai gom vao 'OTHER' (hien thi 'Khac').
 const MAIN_STATIONS = ['HAN', 'SGN', 'DAD'];
 function normalizeStation(s) {
@@ -273,9 +308,8 @@ function resolveRange(q) {
  */
 async function qTatDepartments(range, f) {
   const params = { from: range.from, to: range.to, tzOffset: CONFIG.tzOffset, top: CONFIG.maxRows };
-  // Department: SIGN theo action_per; neu UNKNOWN/rong -> SIGN theo del_staff;
-  //   -> department luu trong real_us1; cuoi cung 'PA'.
-  const dept = pickDept(['s.[DEPARTMENT]', 'sd.[DEPARTMENT]', 'r.[department]']);
+  // Trung tam: real_us1.department -> mutator('PA'/SIGN) -> 'PA'.
+  const dept = deptFromReal('r', 'sm');
   let where = buildFilterClause(
     f,
     { station: 'k.[station]', store: 'k.[store]', department: dept },
@@ -292,6 +326,7 @@ async function qTatDepartments(range, f) {
       k.[station]     AS station,
       k.[store]       AS store,
       k.[voucherno]   AS voucher_issue,
+      k.[picking_li]  AS picking_li,
       ${dept} AS department,
       ${amosToVN('k')}                       AS issue_time_vn,
       r.[del_time]                           AS return_unservice_time,
@@ -301,10 +336,7 @@ async function qTatDepartments(range, f) {
       ON k.[partno] = r.[partno]
      AND k.[serialno] = r.[serialno]
      AND k.[voucherno] = r.[voucher_s]
-    LEFT JOIN [DWH_DB]..[STG_AMOS].[SIGN] s
-      ON r.[action_per] = s.[USER_SIGN]
-    LEFT JOIN [DWH_DB]..[STG_AMOS].[SIGN] sd
-      ON r.[del_staff] = sd.[USER_SIGN]
+    ${signApply('r.[mutator]', 'sm')}
     WHERE k.[vm] = 'T'
       AND k.[voucherno] LIKE 'P-%'
       -- Bo qua ban ghi receiver rong; chi tinh khi costcenter rong
@@ -322,7 +354,7 @@ async function qTatDepartments(range, f) {
  */
 async function qTatCuvt(range, f) {
   const params = { from: range.from, to: range.to, top: CONFIG.maxRows };
-  const dept = pickDept(['s.[DEPARTMENT]', 'sd.[DEPARTMENT]', 'r.[department]']);
+  const dept = deptFromReal('r', 'sm');
   let where = buildFilterClause(
     f,
     { station: 'r.[station]', store: 'r.[store]', department: dept },
@@ -341,10 +373,7 @@ async function qTatCuvt(range, f) {
       r.[reci_time]  AS receive_unservice_time,
       CAST(DATEDIFF(MINUTE, r.[del_time], r.[reci_time]) AS float) / 1440.0 AS tat_days
     FROM [NQT].[dbo].[real_us1] r
-    LEFT JOIN [DWH_DB]..[STG_AMOS].[SIGN] s
-      ON r.[action_per] = s.[USER_SIGN]
-    LEFT JOIN [DWH_DB]..[STG_AMOS].[SIGN] sd
-      ON r.[del_staff] = sd.[USER_SIGN]
+    ${signApply('r.[mutator]', 'sm')}
     WHERE r.[del_time] IS NOT NULL
       AND r.[reci_time] IS NOT NULL
       AND r.[reci_time] >= r.[del_time]      -- loai ban ghi chua nhan (reci_time sentinel < del_time) -> tranh TAT am
@@ -361,9 +390,10 @@ async function qTatCuvt(range, f) {
  */
 async function qTatReturnStore(range, f) {
   const params = { from: range.from, to: range.to, tzOffset: CONFIG.tzOffset, top: CONFIG.maxRows, ...amosDayParams(range) };
+  const dept = deptFromMutator('tc.[mutator]', 'sm');
   let where = buildFilterClause(
     f,
-    { station: 'tc.[station]', store: 'tc.[store]', department: "COALESCE(NULLIF(NULLIF(LTRIM(RTRIM(s.[DEPARTMENT])), ''), 'UNKNOWN'), 'PA')" },
+    { station: 'tc.[station]', store: 'tc.[store]', department: dept },
     params
   );
   const text = `
@@ -375,8 +405,8 @@ async function qTatReturnStore(range, f) {
       tc.[station]    AS station,
       tc.[store]      AS store,
       t.[voucherno]   AS voucher_issue,
-      tc.[voucherno]  AS voucher_return,
-      COALESCE(NULLIF(NULLIF(LTRIM(RTRIM(s.[DEPARTMENT])), ''), 'UNKNOWN'), 'PA') AS department,
+      t.[picking_li]  AS picking_li,
+      ${dept} AS department,
       ${amosToVN('t')}  AS issue_time_vn,
       ${amosToVN('tc')} AS return_store_time_vn,
       CAST(DATEDIFF(MINUTE, ${amosToVN('t')}, ${amosToVN('tc')}) AS float) / 1440.0 AS tat_days
@@ -387,8 +417,7 @@ async function qTatReturnStore(range, f) {
      AND t.[labelno] = tc.[labelno]
      AND t.[vm] = 'T'
      AND t.[voucherno] LIKE 'P-%'
-    LEFT JOIN [DWH_DB]..[STG_AMOS].[SIGN] s
-      ON tc.[action_per] = s.[USER_SIGN]
+    ${signApply('tc.[mutator]', 'sm')}
     WHERE tc.[vm] = 'TC'
       AND tc.[voucherno] LIKE 'P-CA-%'
       AND tc.[mutation] BETWEEN @fromDay AND @toDay  -- loc tho theo index (sargable)
@@ -405,9 +434,10 @@ async function qTatReturnStore(range, f) {
  */
 async function qIssuedNotInstalled(range, f) {
   const params = { from: range.from, to: range.to, tzOffset: CONFIG.tzOffset, top: CONFIG.maxRows, ...amosDayParams(range) };
+  const dept = deptFromMutator('k.[mutator]', 'sm');
   let where = buildFilterClause(
     f,
-    { station: 'k.[station]', store: 'k.[store]', department: "COALESCE(NULLIF(NULLIF(LTRIM(RTRIM(s.[DEPARTMENT])), ''), 'UNKNOWN'), 'PA')" },
+    { station: 'k.[station]', store: 'k.[store]', department: dept },
     params
   );
   const text = `
@@ -420,19 +450,31 @@ async function qIssuedNotInstalled(range, f) {
       k.[store]      AS store,
       k.[voucherno]  AS voucher_issue,
       k.[ac_registr] AS ac_registr,
-      COALESCE(NULLIF(NULLIF(LTRIM(RTRIM(s.[DEPARTMENT])), ''), 'UNKNOWN'), 'PA') AS department,
-      ${amosToVN('k')} AS issue_time_vn
+      ${dept} AS department,
+      ${amosToVN('k')} AS issue_time_vn,
+      -- TAT ton dong = tu luc xuat kho den HIEN TAI (ngay)
+      CAST(DATEDIFF(MINUTE, ${amosToVN('k')}, GETDATE()) AS float) / 1440.0 AS tat_days
     FROM [NQT].[dbo].[kho_ser1] k
     LEFT JOIN [NQT].[dbo].[on_off] o
       ON k.[partno] = o.[partno]
      AND k.[serialno] = o.[serialno]
      AND k.[labelno] = o.[labelno]
      AND o.[vm] = 'YE'
-    LEFT JOIN [DWH_DB]..[STG_AMOS].[SIGN] s
-      ON k.[action_per] = s.[USER_SIGN]
+    ${signApply('k.[mutator]', 'sm')}
     WHERE k.[vm] = 'T'
       AND k.[voucherno] LIKE 'P-%'
       AND o.[partno] IS NULL
+      -- Bo qua thiet bi da duoc RETURN (tra unservice real_us1 hoac hoan kho P-CA-...)
+      AND NOT EXISTS (
+        SELECT 1 FROM [NQT].[dbo].[real_us1] r2
+        WHERE r2.[partno] = k.[partno] AND r2.[serialno] = k.[serialno]
+          AND r2.[voucher_s] = k.[voucherno]
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM [NQT].[dbo].[kho_ser1] tc
+        WHERE tc.[vm] = 'TC' AND tc.[voucherno] LIKE 'P-CA-%'
+          AND tc.[partno] = k.[partno] AND tc.[serialno] = k.[serialno] AND tc.[labelno] = k.[labelno]
+      )
       AND k.[mutation] BETWEEN @fromDay AND @toDay  -- loc tho theo index (sargable)
       AND ${amosToVN('k')} >= @from AND ${amosToVN('k')} < @to
       ${where}
@@ -463,7 +505,7 @@ async function qRemovedNotReturned(range, f) {
       ${amosToVN('o')} AS removed_time_vn
     FROM [NQT].[dbo].[on_off] o
     LEFT JOIN [NQT].[dbo].[real_us1] r
-      ON o.[historyno_] = r.[historyno_]
+      ON RTRIM(o.[historyno_]) = RTRIM(r.[historyno_])   -- RTRIM: tranh lech do dem khoang trang
     WHERE o.[vm] = 'YA'
       AND r.[historyno_] IS NULL
       AND o.[mutation] BETWEEN @fromDay AND @toDay  -- loc tho theo index (sargable)
@@ -481,9 +523,10 @@ async function qRemovedNotReturned(range, f) {
  */
 async function qNotReconciled(range, f) {
   const params = { from: range.from, to: range.to, tzOffset: CONFIG.tzOffset, top: CONFIG.maxRows, ...amosDayParams(range) };
+  const dept = deptFromMutator('k.[mutator]', 'sm');
   let where = buildFilterClause(
     f,
-    { station: 'k.[station]', store: 'k.[store]', department: "COALESCE(NULLIF(NULLIF(LTRIM(RTRIM(s.[DEPARTMENT])), ''), 'UNKNOWN'), 'PA')" },
+    { station: 'k.[station]', store: 'k.[store]', department: dept },
     params
   );
   const text = `
@@ -495,15 +538,15 @@ async function qNotReconciled(range, f) {
       k.[station]    AS station,
       k.[store]      AS store,
       k.[voucherno]  AS voucher_issue,
-      COALESCE(NULLIF(NULLIF(LTRIM(RTRIM(s.[DEPARTMENT])), ''), 'UNKNOWN'), 'PA') AS department,
+      k.[picking_li] AS picking_li,
+      ${dept} AS department,
       ${amosToVN('k')} AS issue_time_vn
     FROM [NQT].[dbo].[kho_ser1] k
     LEFT JOIN [NQT].[dbo].[real_us1] r
       ON k.[partno] = r.[partno]
      AND k.[serialno] = r.[serialno]
      AND k.[voucherno] = r.[voucher_s]
-    LEFT JOIN [DWH_DB]..[STG_AMOS].[SIGN] s
-      ON k.[action_per] = s.[USER_SIGN]
+    ${signApply('k.[mutator]', 'sm')}
     WHERE k.[vm] = 'T'
       AND k.[voucherno] LIKE 'P-%'
       AND r.[partno] IS NULL
@@ -534,7 +577,7 @@ async function qNotReconciled(range, f) {
  */
 async function qRemovedBeforeInstalled(range, f) {
   const params = { from: range.from, to: range.to, top: CONFIG.maxRows, ...amosDayParams(range) };
-  const dept = pickDept(['s.[DEPARTMENT]']); // kho_ser1 chi co action_per
+  const dept = deptFromMutator('k.[mutator]', 'sm');
   let where = buildFilterClause(
     f,
     { station: 'k.[station]', store: 'k.[store]', department: dept },
@@ -572,11 +615,13 @@ async function qRemovedBeforeInstalled(range, f) {
         AND o.[labelno] = k.[labelno] AND o.[vm] = 'YA'
       ORDER BY o.[mutation] DESC, o.[mutation_t] DESC
     ) ya
-    LEFT JOIN [NQT].[dbo].[real_us1] r ON r.[historyno_] = ya.historyno
-    LEFT JOIN [DWH_DB]..[STG_AMOS].[SIGN] s ON k.[action_per] = s.[USER_SIGN]
+    LEFT JOIN [NQT].[dbo].[real_us1] r ON RTRIM(r.[historyno_]) = RTRIM(ya.historyno)
+    ${signApply('k.[mutator]', 'sm')}
     WHERE k.[vm] = 'T'
       AND k.[voucherno] LIKE 'P-%'
-      AND (ye.install_time IS NOT NULL OR ya.removal_time IS NOT NULL)
+      AND ye.install_time IS NOT NULL
+      -- Logic "thao truoc lap sau": ngay XUAT KHO SAU ngay LAP
+      AND ${amosToVN('k')} > ye.install_time
       AND k.[mutation] BETWEEN @fromDay AND @toDay
       AND ${amosToVN('k')} >= @from AND ${amosToVN('k')} < @to
       ${where}
@@ -591,7 +636,7 @@ async function qRemovedBeforeInstalled(range, f) {
  */
 async function qReturnedUnservice(range, f) {
   const params = { from: range.from, to: range.to, top: CONFIG.maxRows };
-  const dept = pickDept(['s.[DEPARTMENT]', 'sd.[DEPARTMENT]', 'r.[department]']);
+  const dept = deptFromReal('r', 'sm');
   let where = buildFilterClause(
     f,
     { station: 'r.[station]', store: 'r.[store]', department: dept },
@@ -606,16 +651,12 @@ async function qReturnedUnservice(range, f) {
       r.[historyno_] AS historyno,
       r.[ac_registr] AS ac_registr,
       r.[station]    AS station,
-      r.[store]      AS store,
       ${dept} AS department,
       r.[del_staff]  AS del_staff,
       r.[del_time]   AS del_time,
       r.[reci_time]  AS reci_time
     FROM [NQT].[dbo].[real_us1] r
-    LEFT JOIN [DWH_DB]..[STG_AMOS].[SIGN] s
-      ON r.[action_per] = s.[USER_SIGN]
-    LEFT JOIN [DWH_DB]..[STG_AMOS].[SIGN] sd
-      ON r.[del_staff] = sd.[USER_SIGN]
+    ${signApply('r.[mutator]', 'sm')}
     WHERE r.[del_time] IS NOT NULL
       AND r.[del_time] >= @from AND r.[del_time] < @to
       ${where}
@@ -629,7 +670,7 @@ async function qReturnedUnservice(range, f) {
  */
 async function qOther(range, f) {
   const params = { from: range.from, to: range.to, top: CONFIG.maxRows };
-  const dept = pickDept(['s.[DEPARTMENT]', 'sd.[DEPARTMENT]', 'r.[department]']);
+  const dept = deptFromReal('r', 'sm');
   let where = buildFilterClause(
     f,
     { station: 'r.[station]', store: null, department: dept },
@@ -647,12 +688,11 @@ async function qOther(range, f) {
       r.[del_time]    AS del_time,
       r.[on_ac]       AS note
     FROM [NQT].[dbo].[real_us1] r
-    LEFT JOIN [DWH_DB]..[STG_AMOS].[SIGN] s
-      ON r.[action_per] = s.[USER_SIGN]
-    LEFT JOIN [DWH_DB]..[STG_AMOS].[SIGN] sd
-      ON r.[del_staff] = sd.[USER_SIGN]
+    ${signApply('r.[mutator]', 'sm')}
     WHERE r.[on_ac] IS NOT NULL AND LTRIM(RTRIM(r.[on_ac])) <> ''
-      AND r.[del_time] >= @from AND r.[del_time] < @to
+      -- Ke ca ban ghi chua co del_time (del_time null/sentinel van la note "other")
+      AND (r.[del_time] IS NULL OR r.[del_time] < '1902-01-01'
+           OR (r.[del_time] >= @from AND r.[del_time] < @to))
       ${where}
     ORDER BY r.[del_time] DESC`;
   return query(text, params);
