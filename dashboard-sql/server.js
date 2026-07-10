@@ -513,7 +513,7 @@ async function qRemovedNotReturned(range, f) {
       ${amosToVN('o')} AS removed_time_vn
     FROM [NQT].[dbo].[on_off] o
     LEFT JOIN [NQT].[dbo].[real_us1] r
-      ON RTRIM(o.[historyno_]) = RTRIM(r.[historyno_])   -- RTRIM: tranh lech do dem khoang trang
+      ON o.[historyno_] = r.[historyno_]   -- so sanh so truc tiep (cot so; RTRIM lam float->chuoi 6 chu so -> ghep nham)
     WHERE o.[vm] = 'YA'
       AND r.[historyno_] IS NULL
       AND o.[mutation] BETWEEN @fromDay AND @toDay  -- loc tho theo index (sargable)
@@ -613,7 +613,7 @@ async function qRemovedBeforeInstalled(range, f) {
     OUTER APPLY (
       SELECT TOP 1 ${amosToVN('o')} AS install_time
       FROM [NQT].[dbo].[on_off] o
-      WHERE RTRIM(o.[labelno]) = RTRIM(k.[labelno]) AND o.[vm] = 'YE'
+      WHERE o.[labelno] = k.[labelno] AND o.[vm] = 'YE'
       ORDER BY o.[mutation] ASC, o.[mutation_t] ASC
     ) ye
     -- Su kien THAO (YA) cung labelno
@@ -621,10 +621,10 @@ async function qRemovedBeforeInstalled(range, f) {
       SELECT TOP 1 ${amosToVN('o')} AS removal_time, o.[historyno_] AS historyno,
              o.[partno] AS partno, o.[serialno] AS serialno
       FROM [NQT].[dbo].[on_off] o
-      WHERE RTRIM(o.[labelno]) = RTRIM(k.[labelno]) AND o.[vm] = 'YA'
+      WHERE o.[labelno] = k.[labelno] AND o.[vm] = 'YA'
       ORDER BY o.[mutation] ASC, o.[mutation_t] ASC
     ) ya
-    LEFT JOIN [NQT].[dbo].[real_us1] r ON RTRIM(r.[historyno_]) = RTRIM(ya.historyno)
+    LEFT JOIN [NQT].[dbo].[real_us1] r ON r.[historyno_] = ya.historyno
     ${signJoin('k.[created_b2]', 'sm')}
     WHERE k.[vm] = 'T'
       AND k.[voucherno] LIKE 'P-%'
