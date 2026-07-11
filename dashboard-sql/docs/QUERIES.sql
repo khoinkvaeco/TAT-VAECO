@@ -33,7 +33,7 @@ DECLARE @toDay    int      = DATEDIFF(DAY, @epoch, @to)   + 2;
 ------------------------------------------------------------------------------
 SELECT TOP 1000
     k.event_perf, k.partno, k.serialno, k.labelno, k.descriptio AS mo_ta,
-    k.receiver, k.station, k.store,
+    k.receiver, k.station, k.store1,
     k.voucherno   AS pickslip,
     k.picking_li  AS phieu_xuat,
     r.action_per  AS nhan_vien,
@@ -56,7 +56,8 @@ CROSS APPLY (SELECT DATEADD(HOUR, @tz, DATEADD(MILLISECOND,
 WHERE k.vm = 'T' AND k.voucherno LIKE 'P-%'
   AND LTRIM(RTRIM(ISNULL(k.receiver,   ''))) <> ''        -- bo receiver rong
   AND LTRIM(RTRIM(ISNULL(k.costcenter, ''))) <> 'VN-SPL'  -- bo VN-SPL
-  AND UPPER(LTRIM(RTRIM(ISNULL(k.store, '')))) IN ('MAIN','3RD')
+  AND UPPER(LTRIM(RTRIM(ISNULL(k.store, '')))) NOT IN ('MAIN','3RD')
+  AND UPPER(LTRIM(RTRIM(ISNULL(k.condition, '')))) <> 'US'       -- bo qua condition US
   AND r.del_time >= @from AND r.del_time < @to
 ORDER BY tat_ngay DESC;
 
@@ -81,7 +82,8 @@ CROSS APPLY (SELECT DATEADD(HOUR, @tz, DATEADD(MILLISECOND,
 WHERE k.vm = 'T' AND k.voucherno LIKE 'P-%'
   AND LTRIM(RTRIM(ISNULL(k.receiver,   ''))) <> ''
   AND LTRIM(RTRIM(ISNULL(k.costcenter, ''))) <> 'VN-SPL'
-  AND UPPER(LTRIM(RTRIM(ISNULL(k.store, '')))) IN ('MAIN','3RD')
+  AND UPPER(LTRIM(RTRIM(ISNULL(k.store, '')))) NOT IN ('MAIN','3RD')
+  AND UPPER(LTRIM(RTRIM(ISNULL(k.condition, '')))) <> 'US'       -- bo qua condition US
   AND r.del_time >= @from AND r.del_time < @to
 GROUP BY COALESCE(NULLIF(NULLIF(LTRIM(RTRIM(r.department)), ''), 'UNKNOWN'),
                   CASE WHEN LEFT(LTRIM(RTRIM(r.action_per)), 2) = 'PA' THEN 'PA' END,
@@ -139,13 +141,16 @@ CROSS APPLY (SELECT DATEADD(HOUR, @tz, DATEADD(MILLISECOND,
     DATEADD(DAY, TRY_CONVERT(int, TRY_CONVERT(float, k.mutation)), @epoch)))) v(time_vn)
 WHERE k.vm = 'T' AND k.voucherno LIKE 'P-%'
   AND LTRIM(RTRIM(ISNULL(k.costcenter, ''))) <> 'VN-SPL'
-  AND UPPER(LTRIM(RTRIM(ISNULL(k.store, '')))) IN ('MAIN','3RD')
+  AND UPPER(LTRIM(RTRIM(ISNULL(k.store, '')))) NOT IN ('MAIN','3RD')
+  AND UPPER(LTRIM(RTRIM(ISNULL(k.condition, '')))) <> 'US'       -- bo qua condition US
   AND o.partno IS NULL                                   -- chua lap
   AND NOT EXISTS (SELECT 1 FROM NQT.dbo.real_us1 r2      -- chua tra unservice
                   WHERE r2.partno = k.partno AND r2.serialno = k.serialno
                     AND r2.voucher_s = k.voucherno)
   AND NOT EXISTS (SELECT 1 FROM NQT.dbo.kho_ser1 tc      -- chua hoan kho
                   WHERE tc.vm = 'TC' AND tc.voucherno LIKE 'P-CA-%'
+  AND COALESCE(CASE WHEN LEFT(LTRIM(RTRIM(t.created_b2)), 2) = 'PA' THEN 'PA' END,
+               NULLIF(NULLIF(LTRIM(RTRIM(sm.DEPARTMENT)), ''), 'UNKNOWN'), 'PA') <> 'CUVT'  -- khong tinh CUVT
                     AND tc.partno = k.partno AND tc.serialno = k.serialno
                     AND tc.labelno = k.labelno)
   AND k.mutation BETWEEN @fromDay AND @toDay
@@ -182,7 +187,8 @@ SELECT TOP 1000
     k.voucherno  AS pickslip,
     k.picking_li AS phieu_xuat,
     k.created_b2 AS nhan_vien,
-    v.time_vn    AS gio_xuat_vn
+    v.time_vn    AS gio_xuat_vn,
+    CAST(DATEDIFF(MINUTE, v.time_vn, GETDATE()) AS float) / 1440.0 AS tat_ton_ngay
 FROM NQT.dbo.kho_ser1 k
 LEFT JOIN NQT.dbo.real_us1 r
   ON k.partno = r.partno AND k.serialno = r.serialno AND k.voucherno = r.voucher_s
@@ -191,7 +197,8 @@ CROSS APPLY (SELECT DATEADD(HOUR, @tz, DATEADD(MILLISECOND,
     DATEADD(DAY, TRY_CONVERT(int, TRY_CONVERT(float, k.mutation)), @epoch)))) v(time_vn)
 WHERE k.vm = 'T' AND k.voucherno LIKE 'P-%'
   AND LTRIM(RTRIM(ISNULL(k.costcenter, ''))) <> 'VN-SPL'
-  AND UPPER(LTRIM(RTRIM(ISNULL(k.store, '')))) IN ('MAIN','3RD')
+  AND UPPER(LTRIM(RTRIM(ISNULL(k.store, '')))) NOT IN ('MAIN','3RD')
+  AND UPPER(LTRIM(RTRIM(ISNULL(k.condition, '')))) <> 'US'       -- bo qua condition US
   AND r.partno IS NULL                                   -- khong co tra US
   AND NOT EXISTS (SELECT 1 FROM NQT.dbo.kho_ser1 tc      -- bo qua da hoan kho
                   WHERE tc.vm = 'TC' AND tc.voucherno LIKE 'P-CA-%'
@@ -248,7 +255,8 @@ OUTER APPLY (
 LEFT JOIN NQT.dbo.real_us1 r ON r.historyno_ = ya.historyno_
 WHERE k.vm = 'T' AND k.voucherno LIKE 'P-%'
   AND LTRIM(RTRIM(ISNULL(k.costcenter, ''))) <> 'VN-SPL'
-  AND UPPER(LTRIM(RTRIM(ISNULL(k.store, '')))) IN ('MAIN','3RD')
+  AND UPPER(LTRIM(RTRIM(ISNULL(k.store, '')))) NOT IN ('MAIN','3RD')
+  AND UPPER(LTRIM(RTRIM(ISNULL(k.condition, '')))) <> 'US'       -- bo qua condition US
   AND ye.time_vn IS NOT NULL                    -- co lap truoc khi xuat => "xuat sau lap"
   AND k.mutation BETWEEN @fromDay AND @toDay
   AND vk.time_vn >= @from AND vk.time_vn < @to
@@ -309,7 +317,8 @@ CROSS APPLY (SELECT DATEADD(HOUR, @tz, DATEADD(MILLISECOND,
     DATEADD(DAY, TRY_CONVERT(int, TRY_CONVERT(float, tc.mutation)), @epoch)))) vc(time_vn)
 WHERE tc.vm = 'TC' AND tc.voucherno LIKE 'P-CA-%'
   AND LTRIM(RTRIM(ISNULL(t.costcenter, ''))) <> 'VN-SPL'
-  AND UPPER(LTRIM(RTRIM(ISNULL(t.store, '')))) IN ('MAIN','3RD')
+  AND UPPER(LTRIM(RTRIM(ISNULL(t.store, '')))) NOT IN ('MAIN','3RD')
+  AND UPPER(LTRIM(RTRIM(ISNULL(t.condition, '')))) <> 'US'       -- bo qua condition US
   AND tc.mutation BETWEEN @fromDay AND @toDay
   AND vc.time_vn >= @from AND vc.time_vn < @to
 ORDER BY tat_ngay DESC;

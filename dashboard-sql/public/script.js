@@ -234,10 +234,33 @@ const fmtTatCell = (cell) => {
   return `<span class="tat-badge" style="background:${color}22;color:${color}">${v.toFixed(1)}</span>`;
 };
 
-/** Cột chi tiết TAT theo thiết bị (có checkbox "Bỏ qua" để tính lại TAT). */
+// --- Checkbox "Bỏ qua" (tính lại TAT): quản lý THỦ CÔNG bằng Set khóa dòng.
+//     Chỉ click TRỰC TIẾP vào ô checkbox mới chọn/bỏ chọn — click/double-click
+//     chỗ khác trên dòng KHÔNG có tác dụng.
+const excludedKeys = new Set();
+const rowKey = (r) => `${r.partno}|${r.serialno}|${r.labelno}|${r.voucher_issue}`;
+
+const COL_EXCLUDE = {
+  title: 'Bỏ qua',
+  headerSort: false,
+  hozAlign: 'center',
+  headerHozAlign: 'center',
+  width: 72,
+  formatter: (cell) =>
+    `<input type="checkbox" style="cursor:pointer;transform:scale(1.2)" ${
+      excludedKeys.has(rowKey(cell.getRow().getData())) ? 'checked' : ''
+    }>`,
+  cellClick: (e, cell) => {
+    if (e.target && e.target.tagName === 'INPUT') {
+      const k = rowKey(cell.getRow().getData());
+      if (e.target.checked) excludedKeys.add(k);
+      else excludedKeys.delete(k);
+    }
+  },
+};
+
+/** Cột chi tiết TAT theo thiết bị (checkbox "Bỏ qua" đặt ở CỘT CUỐI). */
 const COLS_TAT_DEPT = [
-  { title: 'Bỏ qua', formatter: 'rowSelection', titleFormatter: 'rowSelection', hozAlign: 'center',
-    headerSort: false, width: 70, headerHozAlign: 'center' },
   { title: 'Event Perf', field: 'event_perf', headerFilter: 'input' },
   { title: 'Part No', field: 'partno', headerFilter: 'input' },
   { title: 'Serial No', field: 'serialno', headerFilter: 'input' },
@@ -253,6 +276,7 @@ const COLS_TAT_DEPT = [
   { title: 'Giờ xuất (VN)', field: 'issue_time_vn', formatter: fmtDateCell },
   { title: 'Giờ trả US', field: 'return_unservice_time', formatter: fmtDateCell },
   { title: 'TAT (ngày)', field: 'tat_days', formatter: fmtTatCell, hozAlign: 'right', sorter: 'number' },
+  COL_EXCLUDE, // checkbox "Bỏ qua" — cột cuối
 ];
 
 /** Định nghĩa cột cho từng báo cáo. */
@@ -309,7 +333,7 @@ const REPORT_DEFS = {
   },
   'not-reconciled': {
     title: 'Thiết bị chưa đối ứng',
-    desc: 'Có xuất service (kho_ser1 vm=T) nhưng không có trả unservice, và chưa hoàn kho.',
+    desc: 'Có xuất service (kho_ser1 vm=T) nhưng không có trả unservice, và chưa hoàn kho. TAT tồn = hiện tại − giờ xuất kho.',
     columns: [
       { title: 'Part No', field: 'partno', headerFilter: 'input' },
       { title: 'Serial No', field: 'serialno', headerFilter: 'input' },
@@ -322,6 +346,7 @@ const REPORT_DEFS = {
       { title: 'Pickslip', field: 'voucher_issue' },
       { title: 'Phiếu xuất', field: 'picking_li' },
       { title: 'Giờ xuất (VN)', field: 'issue_time_vn', formatter: fmtDateCell },
+      { title: 'TAT tồn (ngày)', field: 'tat_days', formatter: fmtTatCell, hozAlign: 'right', sorter: 'number' },
     ],
   },
   'removed-before-installed': {
@@ -400,6 +425,7 @@ async function loadDashboard() {
 
     // Bang chi tiet: dung "rows" tra kem trong /api/dashboard (tranh query 2 lan).
     const rows = dash.rows || (await api('/api/tat/departments')).rows;
+    excludedKeys.clear(); // du lieu moi -> xoa cac tich chon cu
     if (!mainTable) {
       mainTable = new Tabulator('#mainTable', {
         data: rows,
@@ -408,7 +434,6 @@ async function loadDashboard() {
         pagination: true,
         paginationSize: 15,
         paginationSizeSelector: [10, 15, 25, 50, 100],
-        selectableRows: true, // cho phep tich chon dong de "bo qua"
         placeholder: 'Không có dữ liệu',
         height: '540px',
       });
@@ -423,13 +448,11 @@ async function loadDashboard() {
   }
 }
 
-/** Tính lại TAT TB Trung tâm, bỏ các dòng đã tích chọn (item đặc biệt). */
+/** Tính lại TAT TB Trung tâm, bỏ các dòng đã tích checkbox "Bỏ qua". */
 function recalcTat() {
   if (!mainTable) return;
-  const excluded = mainTable.getSelectedData();
-  const exSet = new Set(excluded.map((r) => `${r.partno}|${r.serialno}|${r.labelno}|${r.voucher_issue}`));
   const all = mainTable.getData();
-  const kept = all.filter((r) => !exSet.has(`${r.partno}|${r.serialno}|${r.labelno}|${r.voucher_issue}`));
+  const kept = all.filter((r) => !excludedKeys.has(rowKey(r)));
   const vals = kept.map((r) => Number(r.tat_days)).filter((v) => isFinite(v));
   const newAvg = vals.length ? Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 10) / 10 : 0;
 
@@ -438,12 +461,13 @@ function recalcTat() {
   if (card) card.innerHTML = `${newAvg} <span class="kpi-unit">ngày</span>`;
   const note = $('#recalcNote');
   note.classList.remove('hidden');
-  note.innerHTML = `Đã loại <b>${excluded.length}</b> mục · TAT TB Trung tâm tính lại: <b>${newAvg} ngày</b> (gốc ${baseKpiDeptAvg} ngày, trên ${kept.length}/${all.length} thiết bị).`;
+  note.innerHTML = `Đã loại <b>${excludedKeys.size}</b> mục · TAT TB Trung tâm tính lại: <b>${newAvg} ngày</b> (gốc ${baseKpiDeptAvg} ngày, trên ${kept.length}/${all.length} thiết bị).`;
 }
 
-/** Bỏ chọn tất cả và khôi phục TAT gốc. */
+/** Bỏ tích tất cả checkbox và khôi phục TAT gốc. */
 function resetRecalc() {
-  if (mainTable) mainTable.deselectRow();
+  excludedKeys.clear();
+  if (mainTable) mainTable.redraw(true); // ve lai de checkbox ve trang thai trong
   const card = $('#kpiGrid .kpi:first-child .kpi-value');
   if (card) card.innerHTML = `${baseKpiDeptAvg} <span class="kpi-unit">ngày</span>`;
   $('#recalcNote').classList.add('hidden');

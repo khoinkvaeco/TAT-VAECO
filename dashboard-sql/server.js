@@ -51,6 +51,7 @@ const dbConfig = {
   },
   pool: { max: 10, min: 0, idleTimeoutMillis: 30000 },
   requestTimeout: 60000,
+  connectionTimeout: 30000, // cho mang cham/DB ban (mac dinh 15s hay bi "Failed to connect ... in 15000ms")
 };
 // Named instance (vd SQLEXPRESS) neu co
 if (process.env.DB_INSTANCE) {
@@ -73,7 +74,11 @@ function getPool() {
       .connect()
       .then((pool) => {
         console.log('[DB] Ket noi SQL Server thanh cong.');
-        pool.on('error', (err) => console.error('[DB] Pool error:', err.message));
+        pool.on('error', (err) => {
+          // Mat ket noi giua chung (mang/DB restart): bo pool hong de lan sau tao moi
+          console.error('[DB] Pool error:', err.message);
+          poolPromise = null;
+        });
         return pool;
       })
       .catch((err) => {
@@ -84,33 +89,47 @@ function getPool() {
   return poolPromise;
 }
 
+/** Loi thuoc nhom KET NOI (dang thu lai duoc) hay khong. */
+function isConnError(err) {
+  const codes = ['ETIMEOUT', 'ESOCKET', 'ECONNCLOSED', 'ECONNRESET', 'ELOGIN', 'ENOTOPEN'];
+  return codes.includes(err.code) || /Failed to connect|socket hang up|Connection lost/i.test(err.message || '');
+}
+
 /**
  * Chay 1 query co tham so.
  * @param {string} text  Cau SQL (dung @param)
  * @param {Object} params  { tenParam: giaTri }
  */
-async function query(text, params = {}) {
+async function runQuery(text, params, multi) {
   const pool = await getPool();
   const req = pool.request();
   // Tham so mac dinh luon co san cho cac bieu thuc doi gio/ngay AMOS
   if (!('tzOffset' in params)) params.tzOffset = CONFIG.tzOffset;
   if (!('amosEpoch' in params)) params.amosEpoch = CONFIG.amosEpoch;
-  for (const [key, val] of Object.entries(params)) {
-    req.input(key, val);
-  }
+  for (const [key, val] of Object.entries(params)) req.input(key, val);
   const rs = await req.query(text);
-  return rs.recordset || [];
+  return multi ? rs.recordsets || [] : rs.recordset || [];
+}
+
+/** Chay query; neu loi KET NOI thi lam moi pool va thu lai 1 lan. */
+async function withRetry(text, params, multi) {
+  try {
+    return await runQuery(text, params, multi);
+  } catch (err) {
+    if (!isConnError(err)) throw err;
+    console.warn('[DB] Loi ket noi, thu lai 1 lan:', err.message);
+    poolPromise = null; // bo pool hong, tao ket noi moi
+    return runQuery(text, params, multi);
+  }
+}
+
+async function query(text, params = {}) {
+  return withRetry(text, params, false);
 }
 
 /** Nhu query() nhung tra ve TAT CA cac result set (batch nhieu SELECT). */
 async function queryMulti(text, params = {}) {
-  const pool = await getPool();
-  const req = pool.request();
-  if (!('tzOffset' in params)) params.tzOffset = CONFIG.tzOffset;
-  if (!('amosEpoch' in params)) params.amosEpoch = CONFIG.amosEpoch;
-  for (const [key, val] of Object.entries(params)) req.input(key, val);
-  const rs = await req.query(text);
-  return rs.recordsets || [];
+  return withRetry(text, params, true);
 }
 
 // ---------------------------------------------------------------------------
@@ -284,28 +303,27 @@ function monthRange(period) {
 }
 
 /**
- * Tuan theo dinh nghia: tu thu 5 tuan truoc den thu 5 tuan nay.
- * ref = ngay tham chieu (mac dinh hom nay). Tra ve [from(thu5 truoc), to(thu5 nay)).
+ * Tuan bat dau tu THU 2 dau tuan: [T2 cua tuan chua ngay tham chieu, T2 tuan sau).
+ * ref = ngay tham chieu (mac dinh hom nay).
  */
 function weekRange(ref) {
   const base = ref ? new Date(ref) : new Date();
   // Ve mui gio dia phuong, lay 00:00
   const d = new Date(base.getFullYear(), base.getMonth(), base.getDate());
-  const day = d.getDay(); // 0=CN..4=Thu5..6=Thu7
-  // Khoang cach lui ve thu 5 gan nhat (thu 5 nay). Thu5=4
-  const backToThu = (day - 4 + 7) % 7;
-  const thisThu = new Date(d);
-  thisThu.setDate(d.getDate() - backToThu);
-  const lastThu = new Date(thisThu);
-  lastThu.setDate(thisThu.getDate() - 7);
-  return { from: toLocalStr(lastThu), to: toLocalStr(thisThu) };
+  const day = d.getDay(); // 0=CN, 1=T2 .. 6=T7
+  const backToMon = (day - 1 + 7) % 7; // lui ve thu 2 dau tuan
+  const monday = new Date(d);
+  monday.setDate(d.getDate() - backToMon);
+  const nextMonday = new Date(monday);
+  nextMonday.setDate(monday.getDate() + 7);
+  return { from: toLocalStr(monday), to: toLocalStr(nextMonday) };
 }
 
 /** Tra ve { from, to, label } tu query params. */
 function resolveRange(q) {
   if (q.periodType === 'week') {
     const r = weekRange(q.week);
-    return { ...r, label: 'Tuan (T5->T5)' };
+    return { ...r, label: 'Tuan (T2 dau tuan)' };
   }
   const r = monthRange(q.month);
   return { ...r, label: 'Thang' };
@@ -343,7 +361,7 @@ async function qTatDepartments(range, f) {
       k.[descriptio]  AS description,
       k.[receiver]    AS receiver,
       k.[station]     AS station,
-      k.[store]       AS store,
+      k.[store1]      AS store,   -- hien thi store1 (theo yeu cau); filter van theo [store]
       k.[voucherno]   AS voucher_issue,
       k.[picking_li]  AS picking_li,
       r.[action_per]  AS staff,
@@ -362,7 +380,8 @@ async function qTatDepartments(range, f) {
       -- Bo qua ban ghi receiver rong; bo qua costcenter 'VN-SPL'
       AND LTRIM(RTRIM(ISNULL(k.[receiver], ''))) <> ''
       AND LTRIM(RTRIM(ISNULL(k.[costcenter], ''))) <> 'VN-SPL'
-      AND UPPER(LTRIM(RTRIM(ISNULL(k.[store], '')))) IN ('MAIN','3RD')  -- chi tinh store MAIN/3RD
+      AND UPPER(LTRIM(RTRIM(ISNULL(k.[store], '')))) NOT IN ('MAIN','3RD')  -- bo qua store MAIN/3RD
+      AND UPPER(LTRIM(RTRIM(ISNULL(k.[condition], '')))) <> 'US'  -- bo qua condition US
       AND r.[del_time] >= @from AND r.[del_time] < @to
       ${where}
     ORDER BY tat_days DESC`;
@@ -444,7 +463,9 @@ async function qTatReturnStore(range, f) {
     WHERE tc.[vm] = 'TC'
       AND tc.[voucherno] LIKE 'P-CA-%'
       AND LTRIM(RTRIM(ISNULL(t.[costcenter], ''))) <> 'VN-SPL'  -- bo qua costcenter VN-SPL
-      AND UPPER(LTRIM(RTRIM(ISNULL(t.[store], '')))) IN ('MAIN','3RD')  -- chi tinh store MAIN/3RD
+      AND UPPER(LTRIM(RTRIM(ISNULL(t.[store], '')))) NOT IN ('MAIN','3RD')  -- bo qua store MAIN/3RD
+      AND UPPER(LTRIM(RTRIM(ISNULL(t.[condition], '')))) <> 'US'  -- bo qua condition US
+      AND ${dept} <> 'CUVT'   -- khong tinh TAT hoan kho cho CUVT
       AND tc.[mutation] BETWEEN @fromDay AND @toDay  -- loc tho theo index (sargable)
       AND ${amosToVN('tc')} >= @from AND ${amosToVN('tc')} < @to
       ${where}
@@ -490,7 +511,8 @@ async function qIssuedNotInstalled(range, f) {
     WHERE k.[vm] = 'T'
       AND k.[voucherno] LIKE 'P-%'
       AND LTRIM(RTRIM(ISNULL(k.[costcenter], ''))) <> 'VN-SPL'  -- bo qua costcenter VN-SPL
-      AND UPPER(LTRIM(RTRIM(ISNULL(k.[store], '')))) IN ('MAIN','3RD')  -- chi tinh store MAIN/3RD
+      AND UPPER(LTRIM(RTRIM(ISNULL(k.[store], '')))) NOT IN ('MAIN','3RD')  -- bo qua store MAIN/3RD
+      AND UPPER(LTRIM(RTRIM(ISNULL(k.[condition], '')))) <> 'US'  -- bo qua condition US
       AND o.[partno] IS NULL
       -- Bo qua thiet bi da duoc RETURN (tra unservice real_us1 hoac hoan kho P-CA-...)
       AND NOT EXISTS (
@@ -570,7 +592,9 @@ async function qNotReconciled(range, f) {
       k.[picking_li] AS picking_li,
       k.[created_b2] AS staff,
       ${dept} AS department,
-      ${amosToVN('k')} AS issue_time_vn
+      ${amosToVN('k')} AS issue_time_vn,
+      -- TAT ton dong = tu luc xuat kho den HIEN TAI (ngay)
+      CAST(DATEDIFF(MINUTE, ${amosToVN('k')}, GETDATE()) AS float) / 1440.0 AS tat_days
     FROM [NQT].[dbo].[kho_ser1] k
     LEFT JOIN [NQT].[dbo].[real_us1] r
       ON k.[partno] = r.[partno]
@@ -580,7 +604,8 @@ async function qNotReconciled(range, f) {
     WHERE k.[vm] = 'T'
       AND k.[voucherno] LIKE 'P-%'
       AND LTRIM(RTRIM(ISNULL(k.[costcenter], ''))) <> 'VN-SPL'  -- bo qua costcenter VN-SPL
-      AND UPPER(LTRIM(RTRIM(ISNULL(k.[store], '')))) IN ('MAIN','3RD')  -- chi tinh store MAIN/3RD
+      AND UPPER(LTRIM(RTRIM(ISNULL(k.[store], '')))) NOT IN ('MAIN','3RD')  -- bo qua store MAIN/3RD
+      AND UPPER(LTRIM(RTRIM(ISNULL(k.[condition], '')))) <> 'US'  -- bo qua condition US
       AND r.[partno] IS NULL
       -- Bo qua neu thiet bi da duoc hoan kho (P-CA-...)
       AND NOT EXISTS (
@@ -656,7 +681,8 @@ async function qRemovedBeforeInstalled(range, f) {
     WHERE k.[vm] = 'T'
       AND k.[voucherno] LIKE 'P-%'
       AND LTRIM(RTRIM(ISNULL(k.[costcenter], ''))) <> 'VN-SPL'  -- bo qua costcenter VN-SPL
-      AND UPPER(LTRIM(RTRIM(ISNULL(k.[store], '')))) IN ('MAIN','3RD')  -- chi tinh store MAIN/3RD
+      AND UPPER(LTRIM(RTRIM(ISNULL(k.[store], '')))) NOT IN ('MAIN','3RD')  -- bo qua store MAIN/3RD
+      AND UPPER(LTRIM(RTRIM(ISNULL(k.[condition], '')))) <> 'US'  -- bo qua condition US
       AND ye.install_time IS NOT NULL
       -- "Thao truoc lap sau" dung logic: NGAY XUAT KHO > NGAY LAP
       AND ${amosToVN('k')} > ye.install_time
@@ -762,7 +788,8 @@ async function qDashboardAgg(range, f) {
   // Dieu kien loc chung cua kho_ser1 (giong cac query chi tiet)
   const khoBase = `k.[vm] = 'T' AND k.[voucherno] LIKE 'P-%'
       AND LTRIM(RTRIM(ISNULL(k.[costcenter], ''))) <> 'VN-SPL'
-      AND UPPER(LTRIM(RTRIM(ISNULL(k.[store], '')))) IN ('MAIN','3RD')`;
+      AND UPPER(LTRIM(RTRIM(ISNULL(k.[store], '')))) NOT IN ('MAIN','3RD')
+      AND UPPER(LTRIM(RTRIM(ISNULL(k.[condition], '')))) <> 'US'`;
 
   const wDept = buildFilterClause(f, { station: 'k.[station]', store: 'k.[store]', department: deptR }, params);
   const wCuvt = buildFilterClause(f, { station: 'r.[station]', store: 'r.[store]', department: deptR }, params);
@@ -805,7 +832,9 @@ async function qDashboardAgg(range, f) {
     ${signJoin('t.[created_b2]', 'sm')}
     WHERE tc.[vm] = 'TC' AND tc.[voucherno] LIKE 'P-CA-%'
       AND LTRIM(RTRIM(ISNULL(t.[costcenter], ''))) <> 'VN-SPL'
-      AND UPPER(LTRIM(RTRIM(ISNULL(t.[store], '')))) IN ('MAIN','3RD')
+      AND UPPER(LTRIM(RTRIM(ISNULL(t.[store], '')))) NOT IN ('MAIN','3RD')
+      AND UPPER(LTRIM(RTRIM(ISNULL(t.[condition], '')))) <> 'US'
+      AND ${deptT} <> 'CUVT'   -- khong tinh TAT hoan kho cho CUVT
       AND tc.[mutation] BETWEEN @fromDay AND @toDay
       AND ${amosToVN('tc')} >= @from AND ${amosToVN('tc')} < @to
       ${wRet}

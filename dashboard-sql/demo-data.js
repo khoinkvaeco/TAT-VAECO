@@ -189,6 +189,7 @@ function notReconciled(range, f) {
       picking_li: 'PL-' + rndInt(10000, 99999),
       department: rnd(DEPARTMENTS),
       issue_time_vn: rndDate(range.from, range.to).toISOString(),
+      tat_days: +(Math.random() * 20 + 1).toFixed(1),
     });
   }
   return applyFilter(rows, f);
