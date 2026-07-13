@@ -708,8 +708,8 @@ async function qReturnedUnservice(range, f) {
   );
   const text = `
     SELECT TOP (@top)
-      r.[partno]     AS partno,
-      r.[serialno]   AS serialno,
+      r.[partno_of]     AS partno,
+      r.[serialno_o]   AS serialno,
       r.[labelno]    AS labelno,
       r.[descriptio] AS description,
       r.[historyno_] AS historyno,
