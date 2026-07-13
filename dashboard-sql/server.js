@@ -21,6 +21,8 @@ const express = require('express');
 const compression = require('compression');
 const cors = require('cors');
 const path = require('path');
+const fs = require('fs');
+const dns = require('dns');
 const sql = require('mssql');
 
 // ---------------------------------------------------------------------------
@@ -1115,12 +1117,75 @@ function groupAvgByDay(arr, dateField, valField) {
 const DEMO = require('./demo-data');
 
 // ---------------------------------------------------------------------------
+// 7b. GHI LOG TRUY CAP (IP + ten may) - ghi ra file, 1 file/ngay
+// ---------------------------------------------------------------------------
+const LOG_DIR = path.join(__dirname, 'logs');
+if (!fs.existsSync(LOG_DIR)) fs.mkdirSync(LOG_DIR, { recursive: true });
+
+// Cache ket qua reverse-DNS (IP -> ten may) de khong tra cuu lai moi request.
+// TTL 10 phut; loi/khong resolve duoc cung duoc cache (ghi 'N/A') de tranh
+// tra cuu lai lien tuc cho cac IP khong co PTR record.
+const hostnameCache = new Map(); // ip -> { name, t }
+const HOSTNAME_CACHE_TTL = 10 * 60 * 1000;
+
+function resolveHostname(ip) {
+  const hit = hostnameCache.get(ip);
+  if (hit && Date.now() - hit.t < HOSTNAME_CACHE_TTL) return Promise.resolve(hit.name);
+  return new Promise((resolve) => {
+    dns.reverse(ip, (err, hostnames) => {
+      const name = !err && hostnames && hostnames.length ? hostnames[0] : 'N/A';
+      hostnameCache.set(ip, { name, t: Date.now() });
+      resolve(name);
+    });
+  });
+}
+
+/** Chuan hoa IP client (bo tien to IPv4-mapped-IPv6 "::ffff:"). */
+function clientIp(req) {
+  const ip = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
+  return ip.replace(/^::ffff:/, '') || 'unknown';
+}
+
+/**
+ * Middleware ghi log truy cap: thoi gian, IP, ten may (reverse DNS), method,
+ * duong dan, ma tra ve, thoi gian xu ly (ms). Moi ngay 1 file
+ * logs/access-YYYY-MM-DD.log (dinh dang TSV, de mo bang Excel).
+ * Ghi bat dong bo (khong chan response) va KHONG lam sap app neu ghi loi.
+ */
+function accessLogger(req, res, next) {
+  const start = Date.now();
+  const ip = clientIp(req);
+  res.on('finish', () => {
+    resolveHostname(ip)
+      .then((hostname) => {
+        const now = new Date();
+        const day = now.toISOString().slice(0, 10);
+        const line = [
+          now.toISOString(),
+          ip,
+          hostname,
+          req.method,
+          req.originalUrl,
+          res.statusCode,
+          `${Date.now() - start}ms`,
+        ].join('\t') + '\n';
+        fs.appendFile(path.join(LOG_DIR, `access-${day}.log`), line, (err) => {
+          if (err) console.error('[ACCESS-LOG] Loi ghi log:', err.message);
+        });
+      })
+      .catch(() => {}); // khong de loi resolve DNS lam vo middleware
+  });
+  next();
+}
+
+// ---------------------------------------------------------------------------
 // 8. EXPRESS APP + ROUTES
 // ---------------------------------------------------------------------------
 const app = express();
 app.use(compression());
 app.use(cors());
 app.use(express.json());
+app.use(accessLogger); // ghi log IP + ten may cho MOI request (truoc static/API)
 app.use(express.static(path.join(__dirname, 'public')));
 
 /** Boc route async + xu ly loi tap trung. */

@@ -97,6 +97,7 @@ Mở trình duyệt: **http://localhost:3000**
 - **Báo cáo đơn vị:** 6 tab (xuất kho chưa lắp, tháo chưa trả US, chưa đối ứng, tháo trước lắp sau, other, TAT hoàn kho) — mỗi tab **export Excel**.
 - **Bộ lọc:** Station, Store, Department, kỳ **tháng** hoặc **tuần** (Thứ 5 tuần này → Thứ 5 tuần trước).
 - **Khác:** loading indicator, thông báo lỗi kết nối, theme sáng/tối, responsive.
+- **Ghi log truy cập:** mọi request được ghi vào `logs/access-YYYY-MM-DD.log` (1 file/ngày, định dạng TSV — mở trực tiếp bằng Excel) gồm: thời gian, IP, tên máy (reverse DNS, cache 10 phút), method, đường dẫn, mã trạng thái, thời gian xử lý. Thư mục `logs/` không commit lên git (`.gitignore`).
 
 ## 7. Bảo mật & performance
 
