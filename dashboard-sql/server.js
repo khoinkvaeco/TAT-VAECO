@@ -364,6 +364,8 @@ async function qTatDepartments(range, f) {
       k.[store1]      AS store,   -- hien thi store1 (theo yeu cau); filter van theo [store]
       k.[voucherno]   AS voucher_issue,
       k.[picking_li]  AS picking_li,
+      r.[partno_off]  AS partno_off,    -- thiet bi thao (tu real_us1)
+      r.[serialno_o]  AS serialno_off,
       r.[action_per]  AS staff,
       ${dept} AS department,
       ${amosToVN('k')}                       AS issue_time_vn,

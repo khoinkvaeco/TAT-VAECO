@@ -264,6 +264,8 @@ const COLS_TAT_DEPT = [
   { title: 'Event Perf', field: 'event_perf', headerFilter: 'input' },
   { title: 'Part No', field: 'partno', headerFilter: 'input' },
   { title: 'Serial No', field: 'serialno', headerFilter: 'input' },
+  { title: 'Part No (off)', field: 'partno_off', headerFilter: 'input' },
+  { title: 'Serial No (off)', field: 'serialno_off', headerFilter: 'input' },
   { title: 'Label', field: 'labelno' },
   { title: 'Description', field: 'description' },
   { title: 'Receiver', field: 'receiver', headerFilter: 'input' },
@@ -620,35 +622,37 @@ async function init() {
   $('#monthInput').value = state.month;
   $('#weekInput').value = state.week || now.toISOString().slice(0, 10);
 
-  // Period buttons
+  // Period buttons: doi ky bao cao -> tu dong tai lai
   $$('.periodBtn').forEach((btn) =>
     btn.addEventListener('click', () => {
       state.periodType = btn.dataset.period;
       $$('.periodBtn').forEach((b) => b.classList.toggle('active', b === btn));
       $('#monthWrap').classList.toggle('hidden', state.periodType !== 'month');
       $('#weekWrap').classList.toggle('hidden', state.periodType !== 'week');
+      applyFilters(); // khai bao ben duoi; chi chay khi nguoi dung click (sau init)
     })
   );
   document.querySelector(`.periodBtn[data-period="${state.periodType}"]`).classList.add('active');
   $('#monthWrap').classList.toggle('hidden', state.periodType !== 'month');
   $('#weekWrap').classList.toggle('hidden', state.periodType !== 'week');
 
-  // Inputs
-  $('#monthInput').addEventListener('change', (e) => (state.month = e.target.value));
-  $('#weekInput').addEventListener('change', (e) => (state.week = e.target.value));
-  $('#stationSelect').addEventListener('change', (e) => (state.station = e.target.value));
-  $('#storeSelect').addEventListener('change', (e) => (state.store = e.target.value));
-  $('#deptSelect').addEventListener('change', (e) => (state.department = e.target.value));
-
-  // Ap dung filter -> luu cau hinh + xoa cache bao cao + tai lai tab dang mo.
+  // TU DONG tai du lieu moi khi doi filter (khong con nut "Ap dung"):
+  // luu cau hinh + xoa cache bao cao + tai lai tab dang mo.
   // KHONG cap nhat bang bao cao khi tab dang an (Tabulator se ve rong);
   // khi mo lai tab, switchTab() se tu load voi filter moi.
-  $('#applyBtn').addEventListener('click', () => {
+  const applyFilters = () => {
     saveFilters();
     reportCache.clear();
     loadDashboard();
     if (!$('#tab-reports').classList.contains('hidden')) loadReport(state.currentReport);
-  });
+  };
+
+  // Inputs: doi xong la load ngay
+  $('#monthInput').addEventListener('change', (e) => { state.month = e.target.value; applyFilters(); });
+  $('#weekInput').addEventListener('change', (e) => { state.week = e.target.value; applyFilters(); });
+  $('#stationSelect').addEventListener('change', (e) => { state.station = e.target.value; applyFilters(); });
+  $('#storeSelect').addEventListener('change', (e) => { state.store = e.target.value; applyFilters(); });
+  $('#deptSelect').addEventListener('change', (e) => { state.department = e.target.value; applyFilters(); });
 
   // Tim kiem bang chinh
   $('#mainSearch').addEventListener('input', (e) => {

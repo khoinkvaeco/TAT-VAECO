@@ -71,6 +71,8 @@ function tatDepartments(range, f) {
       ...d,
       event_perf: 'E' + rndInt(100000, 999999),
       receiver: 'RCV' + rndInt(100, 999),
+      partno_off: 'PN-' + pad(rndInt(100, 999)),
+      serialno_off: 'SN' + rndInt(10000, 99999),
       voucher_issue: 'P-' + rndInt(10000, 99999),
       picking_li: 'PL-' + rndInt(10000, 99999),
       department: rnd(DEPARTMENTS),
