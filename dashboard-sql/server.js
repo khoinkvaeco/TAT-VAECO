@@ -340,7 +340,7 @@ function resolveRange(q) {
  * TAT theo tung thiet bi cho cac DON VI (department).
  * Dinh nghia: tu luc XUAT KHO (kho_ser1 vm='T', voucher P-...) den luc TRA
  * UNSERVICE (real_us1.del_time). TAT tinh theo GIO.
- *  - Link: kho_ser1(partno,serialno,voucherno) = real_us1(partno,serialno,voucher_s)
+ *  - Link: kho_ser1(labelno,voucherno) = real_us1(labelno,voucher_s)
  *  - Department: UU TIEN bang SIGN (don vi moi nhat theo nhan vien) tra theo
  *    real_us1.action_per; neu SIGN khong co -> dung real_us1.department;
  *    van trong -> 'PA'. (Neu co khac biet don vi thi SIGN la nguon chuan.)
@@ -375,9 +375,8 @@ async function qTatDepartments(range, f) {
       CAST(DATEDIFF(MINUTE, ${amosToVN('k')}, r.[del_time]) AS float) / 1440.0 AS tat_days
     FROM [NQT].[dbo].[kho_ser1] k
     INNER JOIN [NQT].[dbo].[real_us1] r
-      ON k.[partno] = r.[partno]
-     AND k.[serialno] = r.[serialno]
-     AND k.[voucherno] = r.[voucher_s]
+      ON k.[labelno] = r.[labelno]
+      AND k.[voucherno] = r.[voucher_s]
     ${signJoin('r.[action_per]', 'sm')}
     WHERE k.[vm] = 'T'
       AND k.[voucherno] LIKE 'P-%'
@@ -601,9 +600,8 @@ async function qNotReconciled(range, f) {
       CAST(DATEDIFF(MINUTE, ${amosToVN('k')}, GETDATE()) AS float) / 1440.0 AS tat_days
     FROM [NQT].[dbo].[kho_ser1] k
     LEFT JOIN [NQT].[dbo].[real_us1] r
-      ON k.[partno] = r.[partno]
-     AND k.[serialno] = r.[serialno]
-     AND k.[voucherno] = r.[voucher_s]
+      ON k.[labelno] = r.[labelno]
+      AND k.[voucherno] = r.[voucher_s]
     ${signJoin('k.[created_b2]', 'sm')}
     WHERE k.[vm] = 'T'
       AND k.[voucherno] LIKE 'P-%'
