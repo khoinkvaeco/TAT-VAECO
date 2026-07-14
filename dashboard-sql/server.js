@@ -23,6 +23,7 @@ const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
 const dns = require('dns');
+const { execFile } = require('child_process');
 const sql = require('mssql');
 
 // ---------------------------------------------------------------------------
@@ -1136,16 +1137,49 @@ if (!fs.existsSync(LOG_DIR)) fs.mkdirSync(LOG_DIR, { recursive: true });
 const hostnameCache = new Map(); // ip -> { name, t }
 const HOSTNAME_CACHE_TTL = 10 * 60 * 1000;
 
+/** Reverse-DNS (PTR record) - chi hoat dong neu DNS noi bo co khai bao PTR. */
+function dnsReverseLookup(ip) {
+  return new Promise((resolve) => {
+    dns.reverse(ip, (err, hostnames) => {
+      resolve(!err && hostnames && hostnames.length ? hostnames[0] : null);
+    });
+  });
+}
+
+/**
+ * Tra ten may qua NETBIOS (lenh `nbtstat -A <ip>`, chi co tren Windows).
+ * KHONG phu thuoc DNS - hoi truc tiep may client qua UDP 137, thuong hoat
+ * dong ngay ca khi mang LAN chua khai bao PTR record (truong hop pho bien
+ * o mang noi bo Windows). Chi dung khi reverse-DNS that bai.
+ * >>> Chi hieu qua neu server chay tren Windows VA client cung mang/broadcast
+ *     domain co bat NetBIOS over TCP/IP (mac dinh bat tren hau het may Windows). <<<
+ */
+function nbtstatLookup(ip) {
+  return new Promise((resolve) => {
+    if (process.platform !== 'win32') return resolve(null);
+    execFile('nbtstat', ['-A', ip], { timeout: 3000 }, (err, stdout) => {
+      if (err || !stdout) return resolve(null);
+      // Dong "<TEN_MAY>  <20>  UNIQUE" (Workstation Service) la ten may that;
+      // du phong sang <00> UNIQUE (Workstation/Computer Name) neu khong co <20>.
+      const m =
+        stdout.match(/^\s*(\S+)\s*<20>\s*UNIQUE/m) || stdout.match(/^\s*(\S+)\s*<00>\s*UNIQUE/m);
+      resolve(m ? m[1] : null);
+    });
+  });
+}
+
+/** Tra ten may: uu tien reverse-DNS, that bai thi thu NetBIOS (Windows), cuoi cung 'N/A'. */
 function resolveHostname(ip) {
   const hit = hostnameCache.get(ip);
   if (hit && Date.now() - hit.t < HOSTNAME_CACHE_TTL) return Promise.resolve(hit.name);
-  return new Promise((resolve) => {
-    dns.reverse(ip, (err, hostnames) => {
-      const name = !err && hostnames && hostnames.length ? hostnames[0] : 'N/A';
-      hostnameCache.set(ip, { name, t: Date.now() });
-      resolve(name);
+  return dnsReverseLookup(ip)
+    .then((name) => name || nbtstatLookup(ip))
+    .catch(() => null)
+    .then((name) => {
+      const final = name || 'N/A';
+      hostnameCache.set(ip, { name: final, t: Date.now() });
+      return final;
     });
-  });
 }
 
 /** Chuan hoa IP client (bo tien to IPv4-mapped-IPv6 "::ffff:"). */
