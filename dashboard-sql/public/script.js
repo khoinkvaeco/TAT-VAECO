@@ -130,7 +130,7 @@ function renderKPIs(kpis) {
   $('#kpiGrid').innerHTML = cards
     .map(
       (c) => `
-      <div class="kpi" style="--accent:${cssVar(c.accent)}">
+      <div class="kpi" style="--accent:${cssVar(c.accent)}" title="${c.label}: ${c.value ?? 0} ${c.unit}">
         <div class="kpi-label">${c.label}</div>
         <div class="kpi-value">${c.value ?? 0} <span class="kpi-unit">${c.unit}</span></div>
       </div>`
