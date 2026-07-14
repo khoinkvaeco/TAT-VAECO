@@ -917,6 +917,12 @@ function buildDashboardFromAgg(range, agg) {
   const reconciled = sum(agg.deptAgg, (x) => x.cnt);
   const notRec = sum(agg.notRecAgg, (x) => x.cnt);
 
+  // So luong CUVT: reci = so thiet bi da NHAN (real_us1.reci_time hop le, cuvtAgg.cnt);
+  // del = tong so thiet bi da GIAO/tra unservice trong ky (real_us1.del_time,
+  // = tong retUSAgg.cnt - cung dieu kien filter voi cuvtAgg nen so sanh duoc truc tiep).
+  const cntReci = agg.cuvtAgg?.cnt || 0;
+  const cntDel = sum(agg.retUSAgg, (x) => x.cnt);
+
   const kpis = {
     tatDeptAvg: round1(wavg(agg.deptAgg)),
     tatCuvtAvg: round1(agg.cuvtAgg?.avg_tat || 0),
@@ -925,6 +931,8 @@ function buildDashboardFromAgg(range, agg) {
     countNotReconciled: notRec,
     countIssuedNotInstalled: agg.niAgg?.cnt || 0,
     reconcileRate: reconciled + notRec ? round1((reconciled / (reconciled + notRec)) * 100) : 0,
+    cntReci,
+    cntDel,
   };
 
   const byDept = [...agg.deptAgg].sort((a, b) => (b.avg_tat || 0) - (a.avg_tat || 0));

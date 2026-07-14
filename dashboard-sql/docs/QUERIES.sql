@@ -416,3 +416,14 @@ WHERE k.vm = 'T' AND k.voucherno LIKE 'P-%'
   AND UPPER(LTRIM(RTRIM(ISNULL(k.condition, '')))) <> 'US'
   AND r.del_time >= @from AND r.del_time < @to
 GROUP BY k.station;
+
+-- [l1] KPI "SL nhan / SL giao (CUVT)" — tu dong so voi card moi nhat tren Dashboard.
+--    reci = so thiet bi CUVT DA NHAN hop le (del_time+reci_time trong ky, reci>=del)
+--    del  = tong so thiet bi DA GIAO/tra unservice trong ky (= tong tab "Tra unservice")
+SELECT
+  (SELECT COUNT(*) FROM NQT.dbo.real_us1 r
+   WHERE r.del_time IS NOT NULL AND r.reci_time IS NOT NULL AND r.reci_time >= r.del_time
+     AND r.del_time >= @from AND r.del_time < @to)  AS so_luong_reci,
+  (SELECT COUNT(*) FROM NQT.dbo.real_us1 r
+   WHERE r.del_time IS NOT NULL
+     AND r.del_time >= @from AND r.del_time < @to)  AS so_luong_del;

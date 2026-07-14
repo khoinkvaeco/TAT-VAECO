@@ -303,6 +303,8 @@ function dashboard(range, f) {
       tatReturnStoreAvg: r1(avg(ret, (d) => d.tat_days)),
       countIssued: dept.length + nr.length,
       countNotReconciled: nr.length,
+      cntReci: cuvt.length,
+      cntDel: retUS.length,
       countIssuedNotInstalled: ni.length,
       reconcileRate: dept.length + nr.length ? r1((dept.length / (dept.length + nr.length)) * 100) : 0,
     },

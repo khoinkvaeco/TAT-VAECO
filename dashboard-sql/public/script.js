@@ -124,6 +124,8 @@ function renderKPIs(kpis) {
     { label: 'Thiết bị xuất kho', value: kpis.countIssued, unit: 'thiết bị', accent: '--series-3' },
     { label: 'Chưa đối ứng', value: kpis.countNotReconciled, unit: 'thiết bị', accent: '--series-6' },
     { label: 'Tỷ lệ đối ứng', value: kpis.reconcileRate, unit: '%', accent: '--series-4' },
+    // SL da NHAN (reci) / SL da GIAO (del) cua CUVT trong ky
+    { label: 'SL nhận / SL giao (CUVT)', value: `${kpis.cntReci ?? 0}/${kpis.cntDel ?? 0}`, unit: '', accent: '--series-7' },
   ];
   $('#kpiGrid').innerHTML = cards
     .map(
