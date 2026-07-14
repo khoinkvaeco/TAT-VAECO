@@ -2,6 +2,8 @@
    QUERIES.sql — SQL cua tung bao cao trong Dashboard TAT (VAECO)
    Muc dich: doc hieu logic va TEST truc tiep tren SQL Server (SSMS).
    Cach dung: sua khoang thoi gian o khoi DECLARE roi chay tung section (F5).
+   Dong bo 1-1 voi server.js (cap nhat gan nhat: dong bo khoa lien ket
+   kho_ser1<->real_us1 ve labelno+voucherno cho TOAN BO cac truy van).
 
    QUY UOC CHUNG (ap dung moi query):
    - Gio AMOS  : v.time_vn = @epoch + mutation (so NGAY) + mutation_t (so MILLISECOND) + 7h
@@ -10,11 +12,20 @@
                               nguoc lai tra action_per vao SIGN; cuoi cung 'PA'
                  kho_ser1  -> created_b2 (bat dau 'PA' => 'PA', nguoc lai tra SIGN); mac dinh 'PA'
    - SIGN      : join qua bang con GROUP BY USER_SIGN (linked server Oracle — keo 1 lan,
-                 khong nhan ban dong khi USER_SIGN trung)
-   - kho_ser1  : chi tinh vm='T' & voucher 'P-%', bo costcenter='VN-SPL', store MAIN/3RD
+                 khong nhan ban dong khi USER_SIGN trung; tranh loi
+                 "Cannot get the data of the row from OLE DB provider OraOLEDB.Oracle")
+   - kho_ser1  : chi tinh vm='T' & voucher 'P-%', bo costcenter='VN-SPL',
+                 bo store IN ('MAIN','3RD'), bo condition='US'
+   - Lien ket kho_ser1 <-> real_us1: theo (labelno, voucherno = voucher_s)
+                 — KHONG con dung partno/serialno (doi theo yeu cau moi nhat,
+                 vi thiet bi tra ve co the khac vat ly voi thiet bi xuat).
    - Khoa so   : labelno / historyno_ / mutation la FLOAT -> so sanh bang TRUC TIEP
                  (khong boc RTRIM: float->varchar chi giu 6 chu so -> ghep nham!)
    - mutation BETWEEN @fromDay AND @toDay: loc tho theo index truoc khi tinh gio chinh xac
+   - MAX_ROWS  : app gioi han so dong o bang chi tiet (mac dinh 20000, san toi
+                 thieu 1000) — KHONG anh huong KPI/bieu do (luon AVG/COUNT
+                 tren toan bo, xem section B/L). Cac TOP 1000 duoi day chi de
+                 chay thu nhanh trong SSMS, khong phai gioi han cua app.
    ============================================================================ */
 
 ------------------------------------------------------------------------------
@@ -30,10 +41,13 @@ DECLARE @toDay    int      = DATEDIFF(DAY, @epoch, @to)   + 2;
 ------------------------------------------------------------------------------
 -- A. CHI TIET TAT THEO THIET BI  (bang chinh tab Tong quan)
 --    TAT = tra unservice (del_time) − xuat kho (gio AMOS cua kho_ser1), don vi NGAY
+--    Lien ket kho_ser1 <-> real_us1: labelno + voucherno=voucher_s
 ------------------------------------------------------------------------------
 SELECT TOP 1000
-    k.event_perf, k.partno, k.serialno, k.labelno, k.descriptio AS mo_ta,
-    k.receiver, k.station, k.store1,
+    k.event_perf, k.partno, k.serialno,
+    r.partno_off, r.serialno_o AS serialno_off,     -- thiet bi thao doi ung (tu real_us1)
+    k.labelno, k.descriptio AS mo_ta,
+    k.receiver, k.station, k.store1,                -- hien thi store1 (loc van theo store)
     k.voucherno   AS pickslip,
     k.picking_li  AS phieu_xuat,
     r.action_per  AS nhan_vien,
@@ -46,7 +60,7 @@ SELECT TOP 1000
     CAST(DATEDIFF(MINUTE, v.time_vn, r.del_time) AS float) / 1440.0 AS tat_ngay
 FROM NQT.dbo.kho_ser1 k
 JOIN NQT.dbo.real_us1 r
-  ON k.partno = r.partno AND k.serialno = r.serialno AND k.voucherno = r.voucher_s
+  ON k.labelno = r.labelno AND k.voucherno = r.voucher_s
 LEFT JOIN (SELECT USER_SIGN, MAX(DEPARTMENT) AS DEPARTMENT
            FROM DWH_DB..STG_AMOS.SIGN GROUP BY USER_SIGN) sm
   ON sm.USER_SIGN = r.action_per
@@ -57,12 +71,15 @@ WHERE k.vm = 'T' AND k.voucherno LIKE 'P-%'
   AND LTRIM(RTRIM(ISNULL(k.receiver,   ''))) <> ''        -- bo receiver rong
   AND LTRIM(RTRIM(ISNULL(k.costcenter, ''))) <> 'VN-SPL'  -- bo VN-SPL
   AND UPPER(LTRIM(RTRIM(ISNULL(k.store, '')))) NOT IN ('MAIN','3RD')
-  AND UPPER(LTRIM(RTRIM(ISNULL(k.condition, '')))) <> 'US'       -- bo qua condition US
+  AND UPPER(LTRIM(RTRIM(ISNULL(k.condition, '')))) <> 'US'  -- bo qua condition US
   AND r.del_time >= @from AND r.del_time < @to
 ORDER BY tat_ngay DESC;
 
 ------------------------------------------------------------------------------
 -- B. KPI "TAT TB TRUNG TAM" (AVG tren TOAN BO — cach dashboard tinh, khong TOP)
+--    PHAI cho ra SO LUONG va TAT TRUNG BINH khop voi card + bieu do dau tien
+--    tren Dashboard (cung filter/ky). Neu lech -> kiem tra ban dang chay ban
+--    server.js cu (khoa join chua dong bo).
 ------------------------------------------------------------------------------
 SELECT COALESCE(NULLIF(NULLIF(LTRIM(RTRIM(r.department)), ''), 'UNKNOWN'),
                 CASE WHEN LEFT(LTRIM(RTRIM(r.action_per)), 2) = 'PA' THEN 'PA' END,
@@ -72,7 +89,7 @@ SELECT COALESCE(NULLIF(NULLIF(LTRIM(RTRIM(r.department)), ''), 'UNKNOWN'),
        AVG(CAST(DATEDIFF(MINUTE, v.time_vn, r.del_time) AS float) / 1440.0) AS tat_tb_ngay
 FROM NQT.dbo.kho_ser1 k
 JOIN NQT.dbo.real_us1 r
-  ON k.partno = r.partno AND k.serialno = r.serialno AND k.voucherno = r.voucher_s
+  ON k.labelno = r.labelno AND k.voucherno = r.voucher_s
 LEFT JOIN (SELECT USER_SIGN, MAX(DEPARTMENT) AS DEPARTMENT
            FROM DWH_DB..STG_AMOS.SIGN GROUP BY USER_SIGN) sm
   ON sm.USER_SIGN = r.action_per
@@ -83,7 +100,7 @@ WHERE k.vm = 'T' AND k.voucherno LIKE 'P-%'
   AND LTRIM(RTRIM(ISNULL(k.receiver,   ''))) <> ''
   AND LTRIM(RTRIM(ISNULL(k.costcenter, ''))) <> 'VN-SPL'
   AND UPPER(LTRIM(RTRIM(ISNULL(k.store, '')))) NOT IN ('MAIN','3RD')
-  AND UPPER(LTRIM(RTRIM(ISNULL(k.condition, '')))) <> 'US'       -- bo qua condition US
+  AND UPPER(LTRIM(RTRIM(ISNULL(k.condition, '')))) <> 'US'
   AND r.del_time >= @from AND r.del_time < @to
 GROUP BY COALESCE(NULLIF(NULLIF(LTRIM(RTRIM(r.department)), ''), 'UNKNOWN'),
                   CASE WHEN LEFT(LTRIM(RTRIM(r.action_per)), 2) = 'PA' THEN 'PA' END,
@@ -105,9 +122,9 @@ WHERE r.del_time IS NOT NULL AND r.reci_time IS NOT NULL
 -- D. TAB "TRA UNSERVICE"  (real_us1 co del_time trong ky)
 ------------------------------------------------------------------------------
 SELECT TOP 1000
-    r.partno, r.serialno, r.labelno, r.descriptio AS mo_ta, r.historyno_,
-    r.ac_registr, r.station,
-    r.action_per AS nhan_vien,
+    r.partno_off AS partno, r.serialno_o AS serialno, r.labelno,
+    r.descriptio AS mo_ta, r.historyno_,
+    r.ac_registr, r.action_per AS nhan_vien, r.station,
     COALESCE(NULLIF(NULLIF(LTRIM(RTRIM(r.department)), ''), 'UNKNOWN'),
              CASE WHEN LEFT(LTRIM(RTRIM(r.action_per)), 2) = 'PA' THEN 'PA' END,
              NULLIF(NULLIF(LTRIM(RTRIM(sm.DEPARTMENT)), ''), 'UNKNOWN'),
@@ -124,6 +141,7 @@ ORDER BY r.del_time DESC;
 ------------------------------------------------------------------------------
 -- E. TAB "XUAT KHO CHUA LAP"
 --    kho_ser1 T chua co on_off YE (cung part+serial+label), chua duoc return
+--    (chua tra US theo labelno+voucherno, chua hoan kho P-CA cung part/serial/label)
 --    TAT ton = GETDATE() − gio xuat
 ------------------------------------------------------------------------------
 SELECT TOP 1000
@@ -142,15 +160,12 @@ CROSS APPLY (SELECT DATEADD(HOUR, @tz, DATEADD(MILLISECOND,
 WHERE k.vm = 'T' AND k.voucherno LIKE 'P-%'
   AND LTRIM(RTRIM(ISNULL(k.costcenter, ''))) <> 'VN-SPL'
   AND UPPER(LTRIM(RTRIM(ISNULL(k.store, '')))) NOT IN ('MAIN','3RD')
-  AND UPPER(LTRIM(RTRIM(ISNULL(k.condition, '')))) <> 'US'       -- bo qua condition US
+  AND UPPER(LTRIM(RTRIM(ISNULL(k.condition, '')))) <> 'US'
   AND o.partno IS NULL                                   -- chua lap
   AND NOT EXISTS (SELECT 1 FROM NQT.dbo.real_us1 r2      -- chua tra unservice
-                  WHERE r2.partno = k.partno AND r2.serialno = k.serialno
-                    AND r2.voucher_s = k.voucherno)
+                  WHERE r2.labelno = k.labelno AND r2.voucher_s = k.voucherno)
   AND NOT EXISTS (SELECT 1 FROM NQT.dbo.kho_ser1 tc      -- chua hoan kho
                   WHERE tc.vm = 'TC' AND tc.voucherno LIKE 'P-CA-%'
-  AND COALESCE(CASE WHEN LEFT(LTRIM(RTRIM(t.created_b2)), 2) = 'PA' THEN 'PA' END,
-               NULLIF(NULLIF(LTRIM(RTRIM(sm.DEPARTMENT)), ''), 'UNKNOWN'), 'PA') <> 'CUVT'  -- khong tinh CUVT
                     AND tc.partno = k.partno AND tc.serialno = k.serialno
                     AND tc.labelno = k.labelno)
   AND k.mutation BETWEEN @fromDay AND @toDay
@@ -179,7 +194,8 @@ ORDER BY v.time_vn DESC;
 
 ------------------------------------------------------------------------------
 -- G. TAB "CHUA DOI UNG"
---    Xuat service (kho_ser1 T) khong co tra unservice, va CHUA hoan kho
+--    Xuat service (kho_ser1 T) khong co tra unservice (labelno+voucherno),
+--    va CHUA hoan kho. TAT ton = GETDATE() − gio xuat.
 ------------------------------------------------------------------------------
 SELECT TOP 1000
     k.partno, k.serialno, k.labelno, k.descriptio AS mo_ta,
@@ -191,14 +207,14 @@ SELECT TOP 1000
     CAST(DATEDIFF(MINUTE, v.time_vn, GETDATE()) AS float) / 1440.0 AS tat_ton_ngay
 FROM NQT.dbo.kho_ser1 k
 LEFT JOIN NQT.dbo.real_us1 r
-  ON k.partno = r.partno AND k.serialno = r.serialno AND k.voucherno = r.voucher_s
+  ON k.labelno = r.labelno AND k.voucherno = r.voucher_s
 CROSS APPLY (SELECT DATEADD(HOUR, @tz, DATEADD(MILLISECOND,
     TRY_CONVERT(int, TRY_CONVERT(bigint, TRY_CONVERT(float, k.mutation_t)) % 86400000),
     DATEADD(DAY, TRY_CONVERT(int, TRY_CONVERT(float, k.mutation)), @epoch)))) v(time_vn)
 WHERE k.vm = 'T' AND k.voucherno LIKE 'P-%'
   AND LTRIM(RTRIM(ISNULL(k.costcenter, ''))) <> 'VN-SPL'
   AND UPPER(LTRIM(RTRIM(ISNULL(k.store, '')))) NOT IN ('MAIN','3RD')
-  AND UPPER(LTRIM(RTRIM(ISNULL(k.condition, '')))) <> 'US'       -- bo qua condition US
+  AND UPPER(LTRIM(RTRIM(ISNULL(k.condition, '')))) <> 'US'
   AND r.partno IS NULL                                   -- khong co tra US
   AND NOT EXISTS (SELECT 1 FROM NQT.dbo.kho_ser1 tc      -- bo qua da hoan kho
                   WHERE tc.vm = 'TC' AND tc.voucherno LIKE 'P-CA-%'
@@ -256,7 +272,7 @@ LEFT JOIN NQT.dbo.real_us1 r ON r.historyno_ = ya.historyno_
 WHERE k.vm = 'T' AND k.voucherno LIKE 'P-%'
   AND LTRIM(RTRIM(ISNULL(k.costcenter, ''))) <> 'VN-SPL'
   AND UPPER(LTRIM(RTRIM(ISNULL(k.store, '')))) NOT IN ('MAIN','3RD')
-  AND UPPER(LTRIM(RTRIM(ISNULL(k.condition, '')))) <> 'US'       -- bo qua condition US
+  AND UPPER(LTRIM(RTRIM(ISNULL(k.condition, '')))) <> 'US'
   AND ye.time_vn IS NOT NULL                    -- co lap truoc khi xuat => "xuat sau lap"
   AND k.mutation BETWEEN @fromDay AND @toDay
   AND vk.time_vn >= @from AND vk.time_vn < @to
@@ -267,8 +283,7 @@ ORDER BY k.mutation DESC;
 ------------------------------------------------------------------------------
 SELECT TOP 1000
     r.partno_off, r.serialno_o AS serialno_off, r.batchno_of AS batchno_off,
-    r.qty_off, r.station,
-    r.action_per AS nhan_vien,
+    r.qty_off, r.action_per AS nhan_vien, r.station,
     COALESCE(NULLIF(NULLIF(LTRIM(RTRIM(r.department)), ''), 'UNKNOWN'),
              CASE WHEN LEFT(LTRIM(RTRIM(r.action_per)), 2) = 'PA' THEN 'PA' END,
              NULLIF(NULLIF(LTRIM(RTRIM(sm.DEPARTMENT)), ''), 'UNKNOWN'),
@@ -287,7 +302,8 @@ ORDER BY r.del_time DESC;
 ------------------------------------------------------------------------------
 -- K. TAB "TAT HOAN KHO"
 --    tc (vm='TC', 'P-CA-<PS>')  <->  t (vm='T', 'P-<PS>') cung so PS + cung labelno
---    TAT = gio hoan − gio xuat; Trung tam theo created_b2 cua PHIEU XUAT
+--    TAT = gio hoan − gio xuat; Trung tam theo created_b2 cua PHIEU XUAT.
+--    KHONG tinh cho Trung tam CUVT.
 ------------------------------------------------------------------------------
 SELECT TOP 1000
     tc.partno, tc.serialno, tc.labelno, tc.descriptio AS mo_ta,
@@ -318,7 +334,85 @@ CROSS APPLY (SELECT DATEADD(HOUR, @tz, DATEADD(MILLISECOND,
 WHERE tc.vm = 'TC' AND tc.voucherno LIKE 'P-CA-%'
   AND LTRIM(RTRIM(ISNULL(t.costcenter, ''))) <> 'VN-SPL'
   AND UPPER(LTRIM(RTRIM(ISNULL(t.store, '')))) NOT IN ('MAIN','3RD')
-  AND UPPER(LTRIM(RTRIM(ISNULL(t.condition, '')))) <> 'US'       -- bo qua condition US
+  AND UPPER(LTRIM(RTRIM(ISNULL(t.condition, '')))) <> 'US'
+  AND COALESCE(CASE WHEN LEFT(LTRIM(RTRIM(t.created_b2)), 2) = 'PA' THEN 'PA' END,
+               NULLIF(NULLIF(LTRIM(RTRIM(sm.DEPARTMENT)), ''), 'UNKNOWN'), 'PA') <> 'CUVT'
   AND tc.mutation BETWEEN @fromDay AND @toDay
   AND vc.time_vn >= @from AND vc.time_vn < @to
 ORDER BY tat_ngay DESC;
+
+------------------------------------------------------------------------------
+-- L. KPI TONG HOP DASHBOARD (nhu qDashboardAgg trong server.js) — DOI CHIEU NHANH
+--    Chay tung khoi de so sanh voi cac card KPI tren Dashboard (cung ky/filter):
+--      [B]/[l0] -> card "TAT TB Trung tam" + bieu do cot 1
+--      [C]      -> card "TAT CUVT"
+--      [l2]     -> card "TAT hoan kho" + bieu do cot 4
+--      [l3]     -> card "Chua doi ung"
+--      [l4]     -> bieu do "So luong xuat kho & tra US theo Trung tam" (phan tra US)
+--      [l5]     -> card "Thiet bi xuat kho" (thanh phan chua lap)
+--      [l6]     -> bieu do tron "Phan bo theo Station"
+------------------------------------------------------------------------------
+
+-- [l3] Chua doi ung theo Trung tam (KPI "Chua doi ung")
+SELECT COALESCE(CASE WHEN LEFT(LTRIM(RTRIM(k.created_b2)), 2) = 'PA' THEN 'PA' END,
+                NULLIF(NULLIF(LTRIM(RTRIM(sm.DEPARTMENT)), ''), 'UNKNOWN'), 'PA') AS trung_tam,
+       COUNT(*) AS so_luong
+FROM NQT.dbo.kho_ser1 k
+LEFT JOIN NQT.dbo.real_us1 r
+  ON k.labelno = r.labelno AND k.voucherno = r.voucher_s
+LEFT JOIN (SELECT USER_SIGN, MAX(DEPARTMENT) AS DEPARTMENT
+           FROM DWH_DB..STG_AMOS.SIGN GROUP BY USER_SIGN) sm
+  ON sm.USER_SIGN = k.created_b2
+WHERE k.vm = 'T' AND k.voucherno LIKE 'P-%'
+  AND LTRIM(RTRIM(ISNULL(k.costcenter, ''))) <> 'VN-SPL'
+  AND UPPER(LTRIM(RTRIM(ISNULL(k.store, '')))) NOT IN ('MAIN','3RD')
+  AND UPPER(LTRIM(RTRIM(ISNULL(k.condition, '')))) <> 'US'
+  AND r.partno IS NULL
+  AND NOT EXISTS (SELECT 1 FROM NQT.dbo.kho_ser1 tc
+                  WHERE tc.vm = 'TC' AND tc.voucherno LIKE 'P-CA-%'
+                    AND tc.partno = k.partno AND tc.serialno = k.serialno AND tc.labelno = k.labelno)
+  AND k.mutation BETWEEN @fromDay AND @toDay
+  AND DATEADD(HOUR, @tz, DATEADD(MILLISECOND,
+      TRY_CONVERT(int, TRY_CONVERT(bigint, TRY_CONVERT(float, k.mutation_t)) % 86400000),
+      DATEADD(DAY, TRY_CONVERT(int, TRY_CONVERT(float, k.mutation)), @epoch))) >= @from
+  AND DATEADD(HOUR, @tz, DATEADD(MILLISECOND,
+      TRY_CONVERT(int, TRY_CONVERT(bigint, TRY_CONVERT(float, k.mutation_t)) % 86400000),
+      DATEADD(DAY, TRY_CONVERT(int, TRY_CONVERT(float, k.mutation)), @epoch))) < @to
+GROUP BY COALESCE(CASE WHEN LEFT(LTRIM(RTRIM(k.created_b2)), 2) = 'PA' THEN 'PA' END,
+                  NULLIF(NULLIF(LTRIM(RTRIM(sm.DEPARTMENT)), ''), 'UNKNOWN'), 'PA');
+
+-- [l5] Xuat kho chua lap (tong so, KHONG chia Trung tam — dung cho card "Thiet bi xuat kho")
+SELECT COUNT(*) AS so_luong
+FROM NQT.dbo.kho_ser1 k
+LEFT JOIN NQT.dbo.on_off o
+  ON k.partno = o.partno AND k.serialno = o.serialno AND k.labelno = o.labelno AND o.vm = 'YE'
+WHERE k.vm = 'T' AND k.voucherno LIKE 'P-%'
+  AND LTRIM(RTRIM(ISNULL(k.costcenter, ''))) <> 'VN-SPL'
+  AND UPPER(LTRIM(RTRIM(ISNULL(k.store, '')))) NOT IN ('MAIN','3RD')
+  AND UPPER(LTRIM(RTRIM(ISNULL(k.condition, '')))) <> 'US'
+  AND o.partno IS NULL
+  AND NOT EXISTS (SELECT 1 FROM NQT.dbo.real_us1 r2
+                  WHERE r2.labelno = k.labelno AND r2.voucher_s = k.voucherno)
+  AND NOT EXISTS (SELECT 1 FROM NQT.dbo.kho_ser1 tc
+                  WHERE tc.vm = 'TC' AND tc.voucherno LIKE 'P-CA-%'
+                    AND tc.partno = k.partno AND tc.serialno = k.serialno AND tc.labelno = k.labelno)
+  AND k.mutation BETWEEN @fromDay AND @toDay
+  AND DATEADD(HOUR, @tz, DATEADD(MILLISECOND,
+      TRY_CONVERT(int, TRY_CONVERT(bigint, TRY_CONVERT(float, k.mutation_t)) % 86400000),
+      DATEADD(DAY, TRY_CONVERT(int, TRY_CONVERT(float, k.mutation)), @epoch))) >= @from
+  AND DATEADD(HOUR, @tz, DATEADD(MILLISECOND,
+      TRY_CONVERT(int, TRY_CONVERT(bigint, TRY_CONVERT(float, k.mutation_t)) % 86400000),
+      DATEADD(DAY, TRY_CONVERT(int, TRY_CONVERT(float, k.mutation)), @epoch))) < @to;
+
+-- [l6] Phan bo Station cua tap DA DOI UNG (dung cho bieu do tron; app tu gom HAN/SGN/DAD/Khac)
+SELECT k.station, COUNT(*) AS so_luong
+FROM NQT.dbo.kho_ser1 k
+JOIN NQT.dbo.real_us1 r
+  ON k.labelno = r.labelno AND k.voucherno = r.voucher_s
+WHERE k.vm = 'T' AND k.voucherno LIKE 'P-%'
+  AND LTRIM(RTRIM(ISNULL(k.receiver, ''))) <> ''
+  AND LTRIM(RTRIM(ISNULL(k.costcenter, ''))) <> 'VN-SPL'
+  AND UPPER(LTRIM(RTRIM(ISNULL(k.store, '')))) NOT IN ('MAIN','3RD')
+  AND UPPER(LTRIM(RTRIM(ISNULL(k.condition, '')))) <> 'US'
+  AND r.del_time >= @from AND r.del_time < @to
+GROUP BY k.station;

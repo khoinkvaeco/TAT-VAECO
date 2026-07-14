@@ -527,7 +527,7 @@ async function qIssuedNotInstalled(range, f) {
       -- Bo qua thiet bi da duoc RETURN (tra unservice real_us1 hoac hoan kho P-CA-...)
       AND NOT EXISTS (
         SELECT 1 FROM [NQT].[dbo].[real_us1] r2
-        WHERE r2.[partno] = k.[partno] AND r2.[serialno] = k.[serialno]
+        WHERE r2.[labelno] = k.[labelno]
           AND r2.[voucher_s] = k.[voucherno]
       )
       AND NOT EXISTS (
@@ -813,7 +813,7 @@ async function qDashboardAgg(range, f) {
            AVG(CAST(DATEDIFF(MINUTE, ${amosToVN('k')}, r.[del_time]) AS float) / 1440.0) AS avg_tat
     FROM [NQT].[dbo].[kho_ser1] k
     INNER JOIN [NQT].[dbo].[real_us1] r
-      ON k.[partno] = r.[partno] AND k.[serialno] = r.[serialno] AND k.[voucherno] = r.[voucher_s]
+      ON k.[labelno] = r.[labelno] AND k.[voucherno] = r.[voucher_s]
     ${signJoin('r.[action_per]', 'sm')}
     WHERE ${khoBase}
       AND LTRIM(RTRIM(ISNULL(k.[receiver], ''))) <> ''
@@ -853,7 +853,7 @@ async function qDashboardAgg(range, f) {
     SELECT ${deptK} AS department, COUNT(*) AS cnt
     FROM [NQT].[dbo].[kho_ser1] k
     LEFT JOIN [NQT].[dbo].[real_us1] r
-      ON k.[partno] = r.[partno] AND k.[serialno] = r.[serialno] AND k.[voucherno] = r.[voucher_s]
+      ON k.[labelno] = r.[labelno] AND k.[voucherno] = r.[voucher_s]
     ${signJoin('k.[created_b2]', 'sm')}
     WHERE ${khoBase}
       AND r.[partno] IS NULL
@@ -886,7 +886,7 @@ async function qDashboardAgg(range, f) {
       AND o.[partno] IS NULL
       AND NOT EXISTS (
         SELECT 1 FROM [NQT].[dbo].[real_us1] r2
-        WHERE r2.[partno] = k.[partno] AND r2.[serialno] = k.[serialno] AND r2.[voucher_s] = k.[voucherno])
+        WHERE r2.[labelno] = k.[labelno] AND r2.[voucher_s] = k.[voucherno])
       AND NOT EXISTS (
         SELECT 1 FROM [NQT].[dbo].[kho_ser1] tc
         WHERE tc.[vm] = 'TC' AND tc.[voucherno] LIKE 'P-CA-%'
@@ -899,7 +899,7 @@ async function qDashboardAgg(range, f) {
     SELECT k.[station] AS station, COUNT(*) AS cnt
     FROM [NQT].[dbo].[kho_ser1] k
     INNER JOIN [NQT].[dbo].[real_us1] r
-      ON k.[partno] = r.[partno] AND k.[serialno] = r.[serialno] AND k.[voucherno] = r.[voucher_s]
+      ON k.[labelno] = r.[labelno] AND k.[voucherno] = r.[voucher_s]
     ${signJoin('r.[action_per]', 'sm')}
     WHERE ${khoBase}
       AND LTRIM(RTRIM(ISNULL(k.[receiver], ''))) <> ''
