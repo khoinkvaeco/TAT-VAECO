@@ -28,9 +28,16 @@ const sql = require('mssql');
 // ---------------------------------------------------------------------------
 // 1. CAU HINH
 // ---------------------------------------------------------------------------
+// MAX_ROWS: gioi han an toan so dong moi query chi tiet. San toi thieu 1000
+// de tranh cau hinh nham (vd MAX_ROWS=100) lam bang "mat" du lieu.
+const rawMaxRows = parseInt(process.env.MAX_ROWS || '20000', 10) || 20000;
+if (rawMaxRows < 1000) {
+  console.warn(`[CONFIG] MAX_ROWS=${rawMaxRows} qua nho, nang len san toi thieu 1000.`);
+}
+
 const CONFIG = {
   port: parseInt(process.env.PORT || '3000', 10),
-  maxRows: parseInt(process.env.MAX_ROWS || '5000', 10),
+  maxRows: Math.max(rawMaxRows, 1000),
   tzOffset: parseInt(process.env.AMOS_TZ_OFFSET_HOURS || '7', 10), // AMOS(UTC) -> VN
   // Moc (epoch) cua cot ngay AMOS: mutation = SO NGAY ke tu ngay nay.
   // Xac dinh tu moc neo: hom nay 2026-07-08 = AMOS 19913 -> epoch = 1971-12-31.
@@ -1385,6 +1392,7 @@ app.get(
     const [agg, rows] = await Promise.all([qDashboardAgg(range, f), qTatDepartments(range, f)]);
     const out = buildDashboardFromAgg(range, agg);
     out.rows = rows;
+    out.rowsTruncated = rows.length >= CONFIG.maxRows; // du lieu nhieu hon gioi han -> bao UI
     res.json(out);
   })
 );
@@ -1396,7 +1404,7 @@ app.get(
     const range = resolveRange(req.query);
     const f = readFilters(req.query);
     const data = CONFIG.demoMode ? DEMO.tatDepartments(range, f) : await qTatDepartments(range, f);
-    res.json({ rows: data, count: data.length });
+    res.json({ rows: data, count: data.length, truncated: data.length >= CONFIG.maxRows });
   })
 );
 
@@ -1406,7 +1414,7 @@ app.get(
     const range = resolveRange(req.query);
     const f = readFilters(req.query);
     const data = CONFIG.demoMode ? DEMO.tatCuvt(range, f) : await qTatCuvt(range, f);
-    res.json({ rows: data, count: data.length });
+    res.json({ rows: data, count: data.length, truncated: data.length >= CONFIG.maxRows });
   })
 );
 
@@ -1429,7 +1437,7 @@ app.get(
     const range = resolveRange(req.query);
     const f = readFilters(req.query);
     const data = CONFIG.demoMode ? DEMO[def.demo](range, f) : await def.live(range, f);
-    res.json({ rows: data, count: data.length, range });
+    res.json({ rows: data, count: data.length, truncated: data.length >= CONFIG.maxRows, range });
   })
 );
 

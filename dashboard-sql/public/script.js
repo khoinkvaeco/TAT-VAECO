@@ -413,6 +413,7 @@ const REPORT_DEFS = {
 // 6. Tai & render Dashboard
 // --------------------------------------------------------------------------
 let baseKpiDeptAvg = 0; // TAT TB Trung tam goc (de khoi phuc khi Dat lai)
+let mainTotalRows = 0;  // tong so dong bang chi tiet (cho bo dem X/Y)
 
 async function loadDashboard() {
   showError('');
@@ -428,6 +429,13 @@ async function loadDashboard() {
     // Bang chi tiet: dung "rows" tra kem trong /api/dashboard (tranh query 2 lan).
     const rows = dash.rows || (await api('/api/tat/departments')).rows;
     excludedKeys.clear(); // du lieu moi -> xoa cac tich chon cu
+
+    // Bo dem so dong (canh bao neu cham gioi han MAX_ROWS phia server)
+    mainTotalRows = rows.length;
+    $('#mainCount').textContent =
+      `${rows.length.toLocaleString('vi')} dòng` +
+      (dash.rowsTruncated ? ' ⚠ chạm giới hạn MAX_ROWS — tăng MAX_ROWS trong .env' : '');
+
     if (!mainTable) {
       mainTable = new Tabulator('#mainTable', {
         data: rows,
@@ -435,9 +443,17 @@ async function loadDashboard() {
         layout: 'fitDataFill',
         pagination: true,
         paginationSize: 15,
-        paginationSizeSelector: [10, 15, 25, 50, 100],
+        paginationSizeSelector: [10, 15, 25, 50, 100, 250, 500, true], // true = Tat ca
         placeholder: 'Không có dữ liệu',
         height: '540px',
+      });
+      // Khi tim kiem/loc cot: hien "X/Y dong" de biet so luong cu the
+      mainTable.on('dataFiltered', (filters, rowsFiltered) => {
+        const n = rowsFiltered.length;
+        $('#mainCount').textContent =
+          n === mainTotalRows
+            ? `${mainTotalRows.toLocaleString('vi')} dòng`
+            : `${n.toLocaleString('vi')}/${mainTotalRows.toLocaleString('vi')} dòng`;
       });
     } else {
       mainTable.setColumns(COLS_TAT_DEPT);
@@ -495,7 +511,9 @@ async function loadReport(name) {
       data = await api(`/api/reports/${name}`);
       reportCache.set(cacheKey, data);
     }
-    $('#reportCount').textContent = `${data.count} dòng`;
+    $('#reportCount').textContent =
+      `${data.count.toLocaleString('vi')} dòng` +
+      (data.truncated ? ' ⚠ chạm giới hạn MAX_ROWS' : '');
     if (!reportTable) {
       reportTable = new Tabulator('#reportTable', {
         data: data.rows,
@@ -503,7 +521,7 @@ async function loadReport(name) {
         layout: 'fitDataFill',
         pagination: true,
         paginationSize: 15,
-        paginationSizeSelector: [10, 15, 25, 50, 100],
+        paginationSizeSelector: [10, 15, 25, 50, 100, 250, 500, true], // true = Tat ca
         placeholder: 'Không có dữ liệu',
         height: '540px',
       });
