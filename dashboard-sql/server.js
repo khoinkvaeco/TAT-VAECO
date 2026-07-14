@@ -523,6 +523,7 @@ async function qIssuedNotInstalled(range, f) {
       AND LTRIM(RTRIM(ISNULL(k.[costcenter], ''))) <> 'VN-SPL'  -- bo qua costcenter VN-SPL
       AND UPPER(LTRIM(RTRIM(ISNULL(k.[store], '')))) NOT IN ('MAIN','3RD')  -- bo qua store MAIN/3RD
       AND UPPER(LTRIM(RTRIM(ISNULL(k.[condition], '')))) <> 'US'  -- bo qua condition US
+      AND k.ac_registr IS NOT NULL                                   -- bo qua thiet bi khong co so tau bay (khong xac dinh duoc may bay nao)
       AND o.[partno] IS NULL
       -- Bo qua thiet bi da duoc RETURN (tra unservice real_us1 hoac hoan kho P-CA-...)
       AND NOT EXISTS (
