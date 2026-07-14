@@ -28,16 +28,9 @@ const sql = require('mssql');
 // ---------------------------------------------------------------------------
 // 1. CAU HINH
 // ---------------------------------------------------------------------------
-// MAX_ROWS: gioi han an toan so dong moi query chi tiet. San toi thieu 1000
-// de tranh cau hinh nham (vd MAX_ROWS=100) lam bang "mat" du lieu.
-const rawMaxRows = parseInt(process.env.MAX_ROWS || '20000', 10) || 20000;
-if (rawMaxRows < 1000) {
-  console.warn(`[CONFIG] MAX_ROWS=${rawMaxRows} qua nho, nang len san toi thieu 1000.`);
-}
-
 const CONFIG = {
   port: parseInt(process.env.PORT || '3000', 10),
-  maxRows: Math.max(rawMaxRows, 1000),
+  maxRows: parseInt(process.env.MAX_ROWS || '5000', 10),
   tzOffset: parseInt(process.env.AMOS_TZ_OFFSET_HOURS || '7', 10), // AMOS(UTC) -> VN
   // Moc (epoch) cua cot ngay AMOS: mutation = SO NGAY ke tu ngay nay.
   // Xac dinh tu moc neo: hom nay 2026-07-08 = AMOS 19913 -> epoch = 1971-12-31.
@@ -523,12 +516,12 @@ async function qIssuedNotInstalled(range, f) {
       AND LTRIM(RTRIM(ISNULL(k.[costcenter], ''))) <> 'VN-SPL'  -- bo qua costcenter VN-SPL
       AND UPPER(LTRIM(RTRIM(ISNULL(k.[store], '')))) NOT IN ('MAIN','3RD')  -- bo qua store MAIN/3RD
       AND UPPER(LTRIM(RTRIM(ISNULL(k.[condition], '')))) <> 'US'  -- bo qua condition US
-      AND k.ac_registr IS NOT NULL                                   -- bo qua thiet bi khong co so tau bay (khong xac dinh duoc may bay nao)
+      AND k.ac_registr IS NOT NULL                                   -- bo qua thiet bi khong co so truc (khong xac dinh duoc may bay nao)
       AND o.[partno] IS NULL
       -- Bo qua thiet bi da duoc RETURN (tra unservice real_us1 hoac hoan kho P-CA-...)
       AND NOT EXISTS (
         SELECT 1 FROM [NQT].[dbo].[real_us1] r2
-        WHERE r2.[labelno] = k.[labelno]
+        WHERE r2.[partno] = k.[partno] AND r2.[serialno] = k.[serialno]
           AND r2.[voucher_s] = k.[voucherno]
       )
       AND NOT EXISTS (
@@ -602,6 +595,7 @@ async function qNotReconciled(range, f) {
       k.[voucherno]  AS voucher_issue,
       k.[picking_li] AS picking_li,
       k.[created_b2] AS staff,
+      k.[ac_registr] AS ac_registr,
       ${dept} AS department,
       ${amosToVN('k')} AS issue_time_vn,
       -- TAT ton dong = tu luc xuat kho den HIEN TAI (ngay)
@@ -814,7 +808,7 @@ async function qDashboardAgg(range, f) {
            AVG(CAST(DATEDIFF(MINUTE, ${amosToVN('k')}, r.[del_time]) AS float) / 1440.0) AS avg_tat
     FROM [NQT].[dbo].[kho_ser1] k
     INNER JOIN [NQT].[dbo].[real_us1] r
-      ON k.[labelno] = r.[labelno] AND k.[voucherno] = r.[voucher_s]
+      ON k.[partno] = r.[partno] AND k.[serialno] = r.[serialno] AND k.[voucherno] = r.[voucher_s]
     ${signJoin('r.[action_per]', 'sm')}
     WHERE ${khoBase}
       AND LTRIM(RTRIM(ISNULL(k.[receiver], ''))) <> ''
@@ -854,7 +848,7 @@ async function qDashboardAgg(range, f) {
     SELECT ${deptK} AS department, COUNT(*) AS cnt
     FROM [NQT].[dbo].[kho_ser1] k
     LEFT JOIN [NQT].[dbo].[real_us1] r
-      ON k.[labelno] = r.[labelno] AND k.[voucherno] = r.[voucher_s]
+      ON k.[partno] = r.[partno] AND k.[serialno] = r.[serialno] AND k.[voucherno] = r.[voucher_s]
     ${signJoin('k.[created_b2]', 'sm')}
     WHERE ${khoBase}
       AND r.[partno] IS NULL
@@ -887,7 +881,7 @@ async function qDashboardAgg(range, f) {
       AND o.[partno] IS NULL
       AND NOT EXISTS (
         SELECT 1 FROM [NQT].[dbo].[real_us1] r2
-        WHERE r2.[labelno] = k.[labelno] AND r2.[voucher_s] = k.[voucherno])
+        WHERE r2.[partno] = k.[partno] AND r2.[serialno] = k.[serialno] AND r2.[voucher_s] = k.[voucherno])
       AND NOT EXISTS (
         SELECT 1 FROM [NQT].[dbo].[kho_ser1] tc
         WHERE tc.[vm] = 'TC' AND tc.[voucherno] LIKE 'P-CA-%'
@@ -900,7 +894,7 @@ async function qDashboardAgg(range, f) {
     SELECT k.[station] AS station, COUNT(*) AS cnt
     FROM [NQT].[dbo].[kho_ser1] k
     INNER JOIN [NQT].[dbo].[real_us1] r
-      ON k.[labelno] = r.[labelno] AND k.[voucherno] = r.[voucher_s]
+      ON k.[partno] = r.[partno] AND k.[serialno] = r.[serialno] AND k.[voucherno] = r.[voucher_s]
     ${signJoin('r.[action_per]', 'sm')}
     WHERE ${khoBase}
       AND LTRIM(RTRIM(ISNULL(k.[receiver], ''))) <> ''
@@ -1393,7 +1387,6 @@ app.get(
     const [agg, rows] = await Promise.all([qDashboardAgg(range, f), qTatDepartments(range, f)]);
     const out = buildDashboardFromAgg(range, agg);
     out.rows = rows;
-    out.rowsTruncated = rows.length >= CONFIG.maxRows; // du lieu nhieu hon gioi han -> bao UI
     res.json(out);
   })
 );
@@ -1405,7 +1398,7 @@ app.get(
     const range = resolveRange(req.query);
     const f = readFilters(req.query);
     const data = CONFIG.demoMode ? DEMO.tatDepartments(range, f) : await qTatDepartments(range, f);
-    res.json({ rows: data, count: data.length, truncated: data.length >= CONFIG.maxRows });
+    res.json({ rows: data, count: data.length });
   })
 );
 
@@ -1415,7 +1408,7 @@ app.get(
     const range = resolveRange(req.query);
     const f = readFilters(req.query);
     const data = CONFIG.demoMode ? DEMO.tatCuvt(range, f) : await qTatCuvt(range, f);
-    res.json({ rows: data, count: data.length, truncated: data.length >= CONFIG.maxRows });
+    res.json({ rows: data, count: data.length });
   })
 );
 
@@ -1438,7 +1431,7 @@ app.get(
     const range = resolveRange(req.query);
     const f = readFilters(req.query);
     const data = CONFIG.demoMode ? DEMO[def.demo](range, f) : await def.live(range, f);
-    res.json({ rows: data, count: data.length, truncated: data.length >= CONFIG.maxRows, range });
+    res.json({ rows: data, count: data.length, range });
   })
 );
 
