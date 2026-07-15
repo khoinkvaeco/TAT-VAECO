@@ -40,7 +40,10 @@ DECLARE @toDay    int      = DATEDIFF(DAY, @epoch, @to)   + 2;
 
 ------------------------------------------------------------------------------
 -- A. CHI TIET TAT THEO THIET BI  (bang chinh tab Tong quan)
---    TAT = tra unservice (del_time) − xuat kho (gio AMOS cua kho_ser1), don vi NGAY
+--    TAT tach 2 THANH PHAN (don vi NGAY):
+--      TAT_install   = lap len tau (on_off YE dau tien cung labelno, SAU gio xuat) - gio xuat kho
+--      TAT_US_return = tra US (real_us1.del_time) - thao tu tau (on_off YA khop historyno_)
+--    (tat_ngay tong = tra US - xuat kho, giu de tham khao)
 --    Lien ket kho_ser1 <-> real_us1: labelno + voucherno=voucher_s
 ------------------------------------------------------------------------------
 SELECT TOP 1000
@@ -56,7 +59,11 @@ SELECT TOP 1000
              NULLIF(NULLIF(LTRIM(RTRIM(sm.DEPARTMENT)), ''), 'UNKNOWN'),
              'PA')  AS trung_tam,
     v.time_vn      AS gio_xuat_vn,
+    ye.install_time AS ngay_lap,
+    ya.removal_time AS ngay_thao,
     r.del_time     AS gio_tra_us,
+    CAST(DATEDIFF(MINUTE, v.time_vn, ye.install_time) AS float) / 1440.0 AS tat_install,
+    CAST(DATEDIFF(MINUTE, ya.removal_time, r.del_time) AS float) / 1440.0 AS tat_us_return,
     CAST(DATEDIFF(MINUTE, v.time_vn, r.del_time) AS float) / 1440.0 AS tat_ngay
 FROM NQT.dbo.kho_ser1 k
 JOIN NQT.dbo.real_us1 r
@@ -67,6 +74,27 @@ LEFT JOIN (SELECT USER_SIGN, MAX(DEPARTMENT) AS DEPARTMENT
 CROSS APPLY (SELECT DATEADD(HOUR, @tz, DATEADD(MILLISECOND,
     TRY_CONVERT(int, TRY_CONVERT(bigint, TRY_CONVERT(float, k.mutation_t)) % 86400000),
     DATEADD(DAY, TRY_CONVERT(int, TRY_CONVERT(float, k.mutation)), @epoch)))) v(time_vn)
+-- Lan LAP (YE) DAU TIEN cung labelno, SAU gio xuat kho
+OUTER APPLY (
+    SELECT TOP 1 DATEADD(HOUR, @tz, DATEADD(MILLISECOND,
+        TRY_CONVERT(int, TRY_CONVERT(bigint, TRY_CONVERT(float, o.mutation_t)) % 86400000),
+        DATEADD(DAY, TRY_CONVERT(int, TRY_CONVERT(float, o.mutation)), @epoch))) AS install_time
+    FROM NQT.dbo.on_off o
+    WHERE o.labelno = k.labelno AND o.vm = 'YE'
+      AND DATEADD(HOUR, @tz, DATEADD(MILLISECOND,
+          TRY_CONVERT(int, TRY_CONVERT(bigint, TRY_CONVERT(float, o.mutation_t)) % 86400000),
+          DATEADD(DAY, TRY_CONVERT(int, TRY_CONVERT(float, o.mutation)), @epoch))) > v.time_vn
+    ORDER BY o.mutation ASC, o.mutation_t ASC
+) ye
+-- Su kien THAO (YA) khop CHINH XAC historyno_ cua dong tra US
+OUTER APPLY (
+    SELECT TOP 1 DATEADD(HOUR, @tz, DATEADD(MILLISECOND,
+        TRY_CONVERT(int, TRY_CONVERT(bigint, TRY_CONVERT(float, o.mutation_t)) % 86400000),
+        DATEADD(DAY, TRY_CONVERT(int, TRY_CONVERT(float, o.mutation)), @epoch))) AS removal_time
+    FROM NQT.dbo.on_off o
+    WHERE o.historyno_ = r.historyno_ AND o.vm = 'YA'
+    ORDER BY o.mutation ASC, o.mutation_t ASC
+) ya
 WHERE k.vm = 'T' AND k.voucherno LIKE 'P-%'
   AND LTRIM(RTRIM(ISNULL(k.receiver,   ''))) <> ''        -- bo receiver rong
   AND LTRIM(RTRIM(ISNULL(k.costcenter, ''))) <> 'VN-SPL'  -- bo VN-SPL
@@ -76,37 +104,59 @@ WHERE k.vm = 'T' AND k.voucherno LIKE 'P-%'
 ORDER BY tat_ngay DESC;
 
 ------------------------------------------------------------------------------
--- B. KPI "TAT TB TRUNG TAM" (AVG tren TOAN BO — cach dashboard tinh, khong TOP)
---    PHAI cho ra SO LUONG va TAT TRUNG BINH khop voi card + bieu do dau tien
---    tren Dashboard (cung filter/ky). Neu lech -> kiem tra ban dang chay ban
---    server.js cu (khoa join chua dong bo).
+-- B. KPI 2 THANH PHAN theo Trung tam (AVG tren TOAN BO — cach dashboard tinh)
+--    avg_install / avg_us_return khop card "TAT install" / "TAT US return" +
+--    bieu do cot 2 series dau tien tren Dashboard. AVG() tu bo NULL -> dong
+--    thieu su kien lap/thao KHONG tinh vao trung binh.
 ------------------------------------------------------------------------------
-SELECT COALESCE(NULLIF(NULLIF(LTRIM(RTRIM(r.department)), ''), 'UNKNOWN'),
-                CASE WHEN LEFT(LTRIM(RTRIM(r.action_per)), 2) = 'PA' THEN 'PA' END,
-                NULLIF(NULLIF(LTRIM(RTRIM(sm.DEPARTMENT)), ''), 'UNKNOWN'),
-                'PA')  AS trung_tam,
+SELECT x.trung_tam,
        COUNT(*) AS so_thiet_bi,
-       AVG(CAST(DATEDIFF(MINUTE, v.time_vn, r.del_time) AS float) / 1440.0) AS tat_tb_ngay
-FROM NQT.dbo.kho_ser1 k
-JOIN NQT.dbo.real_us1 r
-  ON k.labelno = r.labelno AND k.voucherno = r.voucher_s
-LEFT JOIN (SELECT USER_SIGN, MAX(DEPARTMENT) AS DEPARTMENT
-           FROM DWH_DB..STG_AMOS.SIGN GROUP BY USER_SIGN) sm
-  ON sm.USER_SIGN = r.action_per
-CROSS APPLY (SELECT DATEADD(HOUR, @tz, DATEADD(MILLISECOND,
-    TRY_CONVERT(int, TRY_CONVERT(bigint, TRY_CONVERT(float, k.mutation_t)) % 86400000),
-    DATEADD(DAY, TRY_CONVERT(int, TRY_CONVERT(float, k.mutation)), @epoch)))) v(time_vn)
-WHERE k.vm = 'T' AND k.voucherno LIKE 'P-%'
-  AND LTRIM(RTRIM(ISNULL(k.receiver,   ''))) <> ''
-  AND LTRIM(RTRIM(ISNULL(k.costcenter, ''))) <> 'VN-SPL'
-  AND UPPER(LTRIM(RTRIM(ISNULL(k.store, '')))) NOT IN ('MAIN','3RD')
-  AND UPPER(LTRIM(RTRIM(ISNULL(k.condition, '')))) <> 'US'
-  AND r.del_time >= @from AND r.del_time < @to
-GROUP BY COALESCE(NULLIF(NULLIF(LTRIM(RTRIM(r.department)), ''), 'UNKNOWN'),
-                  CASE WHEN LEFT(LTRIM(RTRIM(r.action_per)), 2) = 'PA' THEN 'PA' END,
-                  NULLIF(NULLIF(LTRIM(RTRIM(sm.DEPARTMENT)), ''), 'UNKNOWN'),
-                  'PA')
-ORDER BY tat_tb_ngay DESC;
+       AVG(x.tat_install)   AS avg_install,   COUNT(x.tat_install)   AS cnt_install,
+       AVG(x.tat_us_return) AS avg_us_return, COUNT(x.tat_us_return) AS cnt_us_return
+FROM (
+    SELECT COALESCE(NULLIF(NULLIF(LTRIM(RTRIM(r.department)), ''), 'UNKNOWN'),
+                    CASE WHEN LEFT(LTRIM(RTRIM(r.action_per)), 2) = 'PA' THEN 'PA' END,
+                    NULLIF(NULLIF(LTRIM(RTRIM(sm.DEPARTMENT)), ''), 'UNKNOWN'),
+                    'PA')  AS trung_tam,
+           CAST(DATEDIFF(MINUTE, v.time_vn, ye.install_time) AS float) / 1440.0 AS tat_install,
+           CAST(DATEDIFF(MINUTE, ya.removal_time, r.del_time) AS float) / 1440.0 AS tat_us_return
+    FROM NQT.dbo.kho_ser1 k
+    JOIN NQT.dbo.real_us1 r
+      ON k.labelno = r.labelno AND k.voucherno = r.voucher_s
+    LEFT JOIN (SELECT USER_SIGN, MAX(DEPARTMENT) AS DEPARTMENT
+               FROM DWH_DB..STG_AMOS.SIGN GROUP BY USER_SIGN) sm
+      ON sm.USER_SIGN = r.action_per
+    CROSS APPLY (SELECT DATEADD(HOUR, @tz, DATEADD(MILLISECOND,
+        TRY_CONVERT(int, TRY_CONVERT(bigint, TRY_CONVERT(float, k.mutation_t)) % 86400000),
+        DATEADD(DAY, TRY_CONVERT(int, TRY_CONVERT(float, k.mutation)), @epoch)))) v(time_vn)
+    OUTER APPLY (
+        SELECT TOP 1 DATEADD(HOUR, @tz, DATEADD(MILLISECOND,
+            TRY_CONVERT(int, TRY_CONVERT(bigint, TRY_CONVERT(float, o.mutation_t)) % 86400000),
+            DATEADD(DAY, TRY_CONVERT(int, TRY_CONVERT(float, o.mutation)), @epoch))) AS install_time
+        FROM NQT.dbo.on_off o
+        WHERE o.labelno = k.labelno AND o.vm = 'YE'
+          AND DATEADD(HOUR, @tz, DATEADD(MILLISECOND,
+              TRY_CONVERT(int, TRY_CONVERT(bigint, TRY_CONVERT(float, o.mutation_t)) % 86400000),
+              DATEADD(DAY, TRY_CONVERT(int, TRY_CONVERT(float, o.mutation)), @epoch))) > v.time_vn
+        ORDER BY o.mutation ASC, o.mutation_t ASC
+    ) ye
+    OUTER APPLY (
+        SELECT TOP 1 DATEADD(HOUR, @tz, DATEADD(MILLISECOND,
+            TRY_CONVERT(int, TRY_CONVERT(bigint, TRY_CONVERT(float, o.mutation_t)) % 86400000),
+            DATEADD(DAY, TRY_CONVERT(int, TRY_CONVERT(float, o.mutation)), @epoch))) AS removal_time
+        FROM NQT.dbo.on_off o
+        WHERE o.historyno_ = r.historyno_ AND o.vm = 'YA'
+        ORDER BY o.mutation ASC, o.mutation_t ASC
+    ) ya
+    WHERE k.vm = 'T' AND k.voucherno LIKE 'P-%'
+      AND LTRIM(RTRIM(ISNULL(k.receiver,   ''))) <> ''
+      AND LTRIM(RTRIM(ISNULL(k.costcenter, ''))) <> 'VN-SPL'
+      AND UPPER(LTRIM(RTRIM(ISNULL(k.store, '')))) NOT IN ('MAIN','3RD')
+      AND UPPER(LTRIM(RTRIM(ISNULL(k.condition, '')))) <> 'US'
+      AND r.del_time >= @from AND r.del_time < @to
+) x
+GROUP BY x.trung_tam
+ORDER BY avg_install DESC;
 
 ------------------------------------------------------------------------------
 -- C. TAT CUVT  =  reci_time − del_time (real_us1), bo ban ghi chua nhan

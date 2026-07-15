@@ -118,7 +118,8 @@ function showError(msg) {
 // --------------------------------------------------------------------------
 function renderKPIs(kpis) {
   const cards = [
-    { label: 'TAT TB', value: kpis.tatDeptAvg, unit: 'ngày', accent: '--series-1' },
+    { label: 'TAT install', value: kpis.tatInstallAvg, unit: 'ngày', accent: '--series-1' },
+    { label: 'TAT US return', value: kpis.tatUsReturnAvg, unit: 'ngày', accent: '--series-8' },
     { label: 'TAT CUVT', value: kpis.tatCuvtAvg, unit: 'ngày', accent: '--series-2' },
     { label: 'TAT hoàn kho', value: kpis.tatReturnStoreAvg, unit: 'ngày', accent: '--series-5' },
     { label: 'Thiết bị xuất kho', value: kpis.countIssued, unit: 'thiết bị', accent: '--series-3' },
@@ -173,15 +174,18 @@ function renderCharts(c) {
   const d = chartDefaults();
   const colors = seriesColors();
 
-  // 4.1 Bieu do cot - TAT TB theo don vi (1 series -> mau series-1, khong can legend)
+  // 4.1 Bieu do cot theo Trung tam - 2 series: TAT install / TAT US return
   destroyChart('bar');
   charts.bar = new Chart($('#chartBarDept'), {
     type: 'bar',
     data: {
       labels: c.barDept.labels,
-      datasets: [{ label: 'TAT (ngày)', data: c.barDept.values, backgroundColor: cssVar('--series-1'), borderRadius: 4 }],
+      datasets: [
+        { label: 'TAT install', data: c.barDept.install, backgroundColor: cssVar('--series-1'), borderRadius: 4 },
+        { label: 'TAT US return', data: c.barDept.usret, backgroundColor: cssVar('--series-8'), borderRadius: 4 },
+      ],
     },
-    options: { ...d.common, plugins: { ...d.common.plugins, legend: { display: false } } },
+    options: d.common,
   });
 
   // 4.2 Bieu do tron - phan bo theo station (categorical theo thu tu)
@@ -278,8 +282,12 @@ const COLS_TAT_DEPT = [
   { title: 'Pickslip', field: 'voucher_issue', headerFilter: 'input' },
   { title: 'Phiếu xuất', field: 'picking_li', headerFilter: 'input' },
   { title: 'Ngày Giờ xuất', field: 'issue_time_vn', formatter: fmtDateCell },
+  { title: 'Ngày lắp', field: 'installed_time_vn', formatter: fmtDateCell },
+  { title: 'TAT install', field: 'tat_install_days', formatter: fmtTatCell, hozAlign: 'right', sorter: 'number' },
+  { title: 'Ngày tháo', field: 'removed_time_vn', formatter: fmtDateCell },
   { title: 'Ngày Giờ trả U/S', field: 'return_unservice_time', formatter: fmtDateCell },
-  { title: 'TAT', field: 'tat_days', formatter: fmtTatCell, hozAlign: 'right', sorter: 'number' },
+  { title: 'TAT US return', field: 'tat_usreturn_days', formatter: fmtTatCell, hozAlign: 'right', sorter: 'number' },
+  { title: 'TAT (tổng)', field: 'tat_days', formatter: fmtTatCell, hozAlign: 'right', sorter: 'number' },
   COL_EXCLUDE, // checkbox "Bỏ qua" — cột cuối
 ];
 
@@ -417,7 +425,8 @@ const REPORT_DEFS = {
 // --------------------------------------------------------------------------
 // 6. Tai & render Dashboard
 // --------------------------------------------------------------------------
-let baseKpiDeptAvg = 0; // TAT TB Trung tam goc (de khoi phuc khi Dat lai)
+let baseKpiInstall = 0; // TAT install goc (khoi phuc khi Dat lai)
+let baseKpiUsret = 0;   // TAT US return goc
 let mainTotalRows = 0;  // tong so dong bang chi tiet (cho bo dem X/Y)
 
 async function loadDashboard() {
@@ -427,7 +436,8 @@ async function loadDashboard() {
   try {
     const dash = await api('/api/dashboard');
     $('#rangeLabel').textContent = `${dash.range.label}: ${fmtDateTime(dash.range.from)} → ${fmtDateTime(dash.range.to)}`;
-    baseKpiDeptAvg = dash.kpis.tatDeptAvg;
+    baseKpiInstall = dash.kpis.tatInstallAvg;
+    baseKpiUsret = dash.kpis.tatUsReturnAvg;
     renderKPIs(dash.kpis);
     renderCharts(dash.charts);
 
@@ -471,28 +481,42 @@ async function loadDashboard() {
   }
 }
 
-/** Tính lại TAT TB Trung tâm, bỏ các dòng đã tích checkbox "Bỏ qua". */
+/** Trung binh 1 truong, bo qua null/khong hop le. */
+function avgField(rows, field) {
+  const v = rows.map((r) => Number(r[field])).filter((x) => isFinite(x));
+  return v.length ? Math.round((v.reduce((a, b) => a + b, 0) / v.length) * 10) / 10 : 0;
+}
+
+/** Cap nhat gia tri 1 card KPI theo thu tu (0-based). */
+function setKpiCard(idx, value) {
+  const card = document.querySelectorAll('#kpiGrid .kpi .kpi-value')[idx];
+  if (card) card.innerHTML = `${value} <span class="kpi-unit">ngày</span>`;
+}
+
+/** Tính lại TAT install & US return, bỏ các dòng đã tích checkbox "Bỏ qua". */
 function recalcTat() {
   if (!mainTable) return;
   const all = mainTable.getData();
   const kept = all.filter((r) => !excludedKeys.has(rowKey(r)));
-  const vals = kept.map((r) => Number(r.tat_days)).filter((v) => isFinite(v));
-  const newAvg = vals.length ? Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 10) / 10 : 0;
+  const newInstall = avgField(kept, 'tat_install_days');
+  const newUsret = avgField(kept, 'tat_usreturn_days');
 
-  // Cap nhat card TAT TB Trung tam (card dau tien)
-  const card = $('#kpiGrid .kpi:first-child .kpi-value');
-  if (card) card.innerHTML = `${newAvg} <span class="kpi-unit">ngày</span>`;
+  setKpiCard(0, newInstall); // card "TAT install"
+  setKpiCard(1, newUsret);   // card "TAT US return"
   const note = $('#recalcNote');
   note.classList.remove('hidden');
-  note.innerHTML = `Đã loại <b>${excludedKeys.size}</b> mục · TAT TB Trung tâm tính lại: <b>${newAvg} ngày</b> (gốc ${baseKpiDeptAvg} ngày, trên ${kept.length}/${all.length} thiết bị).`;
+  note.innerHTML =
+    `Đã loại <b>${excludedKeys.size}</b> mục (trên ${kept.length}/${all.length} thiết bị) · ` +
+    `TAT install: <b>${newInstall}</b> ngày (gốc ${baseKpiInstall}) · ` +
+    `TAT US return: <b>${newUsret}</b> ngày (gốc ${baseKpiUsret}).`;
 }
 
 /** Bỏ tích tất cả checkbox và khôi phục TAT gốc. */
 function resetRecalc() {
   excludedKeys.clear();
   if (mainTable) mainTable.redraw(true); // ve lai de checkbox ve trang thai trong
-  const card = $('#kpiGrid .kpi:first-child .kpi-value');
-  if (card) card.innerHTML = `${baseKpiDeptAvg} <span class="kpi-unit">ngày</span>`;
+  setKpiCard(0, baseKpiInstall);
+  setKpiCard(1, baseKpiUsret);
   $('#recalcNote').classList.add('hidden');
 }
 

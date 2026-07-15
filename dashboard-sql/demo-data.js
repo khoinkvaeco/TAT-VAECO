@@ -65,8 +65,13 @@ function tatDepartments(range, f) {
   for (let i = 0; i < 120; i++) {
     const d = baseDevice(i);
     const issue = rndDate(range.from, range.to);
-    const tat = +(Math.random() * 5 + 0.1).toFixed(1); // ngay
+    const tat = +(Math.random() * 5 + 0.1).toFixed(1); // ngay (tong xuat->tra US)
     const ret = new Date(issue.getTime() + tat * 86400000);
+    // Cac moc trung gian: lap (sau xuat), thao (truoc tra US). ~15% dong thieu su kien.
+    const hasInstall = Math.random() > 0.15;
+    const hasRemoval = Math.random() > 0.15;
+    const install = hasInstall ? new Date(issue.getTime() + Math.random() * tat * 0.4 * 86400000) : null;
+    const removal = hasRemoval ? new Date(ret.getTime() - Math.random() * tat * 0.4 * 86400000) : null;
     rows.push({
       ...d,
       event_perf: 'E' + rndInt(100000, 999999),
@@ -77,8 +82,12 @@ function tatDepartments(range, f) {
       picking_li: 'PL-' + rndInt(10000, 99999),
       department: rnd(DEPARTMENTS),
       issue_time_vn: issue.toISOString(),
+      installed_time_vn: install ? install.toISOString() : null,
+      removed_time_vn: removal ? removal.toISOString() : null,
       return_unservice_time: ret.toISOString(),
       tat_days: tat,
+      tat_install_days: install ? +((install - issue) / 86400000).toFixed(1) : null,
+      tat_usreturn_days: removal ? +((ret - removal) / 86400000).toFixed(1) : null,
     });
   }
   return applyFilter(rows, f);
@@ -277,7 +286,29 @@ function dashboard(range, f) {
     });
     return [...m.entries()].map(([key, g]) => ({ key, avg: g.s / g.c, count: g.c }));
   };
-  const byDept = groupAvg(dept, 'department', 'tat_days').sort((a, b) => b.avg - a.avg);
+  // Trung binh tach 2 thanh phan theo Trung tam, bo qua dong thieu (null)
+  const grp2 = (arr) => {
+    const m = new Map();
+    arr.forEach((r) => {
+      const key = r.department || '(trong)';
+      if (!m.has(key)) m.set(key, { si: 0, ci: 0, su: 0, cu: 0, c: 0 });
+      const g = m.get(key);
+      g.c += 1;
+      if (isFinite(r.tat_install_days) && r.tat_install_days != null) { g.si += r.tat_install_days; g.ci += 1; }
+      if (isFinite(r.tat_usreturn_days) && r.tat_usreturn_days != null) { g.su += r.tat_usreturn_days; g.cu += 1; }
+    });
+    return [...m.entries()].map(([key, g]) => ({
+      key, count: g.c,
+      avgI: g.ci ? g.si / g.ci : 0, cntI: g.ci,
+      avgU: g.cu ? g.su / g.cu : 0, cntU: g.cu,
+    }));
+  };
+  const byDept2 = grp2(dept).sort((a, b) => b.avgI - a.avgI);
+  const wavg = (arr, aF, cF) => {
+    const c = arr.reduce((s, x) => s + x[cF], 0);
+    return c ? arr.reduce((s, x) => s + x[aF] * x[cF], 0) / c : 0;
+  };
+  const byRet = groupAvg(ret, 'department', 'tat_days').sort((a, b) => b.avg - a.avg);
   const MAIN = ['HAN', 'SGN', 'DAD'];
   const stMap = new Map([...MAIN, 'OTHER'].map((s) => [s, 0]));
   dept.forEach((r) => {
@@ -293,12 +324,12 @@ function dashboard(range, f) {
   const volLabels = [...new Set([...issuedCnt.keys(), ...returnedCnt.keys()])].sort(
     (a, b) => (issuedCnt.get(b) || 0) - (issuedCnt.get(a) || 0)
   );
-  const byRet = groupAvg(ret, 'department', 'tat_days').sort((a, b) => b.avg - a.avg);
 
   return {
     range: { from: range.from, to: range.to, label: range.label },
     kpis: {
-      tatDeptAvg: r1(avg(dept, (d) => d.tat_days)),
+      tatInstallAvg: r1(wavg(byDept2, 'avgI', 'cntI')),
+      tatUsReturnAvg: r1(wavg(byDept2, 'avgU', 'cntU')),
       tatCuvtAvg: r1(avg(cuvt, (d) => d.tat_days)),
       tatReturnStoreAvg: r1(avg(ret, (d) => d.tat_days)),
       countIssued: dept.length + nr.length,
@@ -309,7 +340,12 @@ function dashboard(range, f) {
       reconcileRate: dept.length + nr.length ? r1((dept.length / (dept.length + nr.length)) * 100) : 0,
     },
     charts: {
-      barDept: { labels: byDept.map((x) => x.key), values: byDept.map((x) => r1(x.avg)), counts: byDept.map((x) => x.count) },
+      barDept: {
+        labels: byDept2.map((x) => x.key),
+        install: byDept2.map((x) => r1(x.avgI)),
+        usret: byDept2.map((x) => r1(x.avgU)),
+        counts: byDept2.map((x) => x.count),
+      },
       pieStation: { labels: pieOrder.map((s) => (s === 'OTHER' ? 'Khác' : s)), values: pieOrder.map((s) => stMap.get(s) || 0) },
       deptVolume: {
         labels: volLabels,

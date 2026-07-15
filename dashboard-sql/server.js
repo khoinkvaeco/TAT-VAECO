@@ -372,12 +372,34 @@ async function qTatDepartments(range, f) {
       r.[action_per]  AS staff,
       ${dept} AS department,
       ${amosToVN('k')}                       AS issue_time_vn,
+      ye.install_time                        AS installed_time_vn,   -- ngay lap len tau
+      ya.removal_time                        AS removed_time_vn,     -- ngay thao tu tau
       r.[del_time]                           AS return_unservice_time,
-      CAST(DATEDIFF(MINUTE, ${amosToVN('k')}, r.[del_time]) AS float) / 1440.0 AS tat_days
+      -- TAT tong (xuat kho -> tra US) giu nguyen de tham khao
+      CAST(DATEDIFF(MINUTE, ${amosToVN('k')}, r.[del_time]) AS float) / 1440.0 AS tat_days,
+      -- TAT_install = lap len tau - xuat kho (trong neu chua tim thay lan lap)
+      CAST(DATEDIFF(MINUTE, ${amosToVN('k')}, ye.install_time) AS float) / 1440.0 AS tat_install_days,
+      -- TAT_US_return = tra US - thao tu tau (trong neu khong co su kien thao)
+      CAST(DATEDIFF(MINUTE, ya.removal_time, r.[del_time]) AS float) / 1440.0 AS tat_usreturn_days
     FROM [NQT].[dbo].[kho_ser1] k
     INNER JOIN [NQT].[dbo].[real_us1] r
       ON k.[labelno] = r.[labelno]
       AND k.[voucherno] = r.[voucher_s]
+    -- Su kien LAP: lan YE DAU TIEN cung labelno SAU gio xuat kho
+    OUTER APPLY (
+      SELECT TOP 1 ${amosToVN('o')} AS install_time
+      FROM [NQT].[dbo].[on_off] o
+      WHERE o.[labelno] = k.[labelno] AND o.[vm] = 'YE'
+        AND ${amosToVN('o')} > ${amosToVN('k')}
+      ORDER BY o.[mutation] ASC, o.[mutation_t] ASC
+    ) ye
+    -- Su kien THAO: on_off YA khop CHINH XAC historyno_ cua dong tra US
+    OUTER APPLY (
+      SELECT TOP 1 ${amosToVN('o')} AS removal_time
+      FROM [NQT].[dbo].[on_off] o
+      WHERE o.[historyno_] = r.[historyno_] AND o.[vm] = 'YA'
+      ORDER BY o.[mutation] ASC, o.[mutation_t] ASC
+    ) ya
     ${signJoin('r.[action_per]', 'sm')}
     WHERE k.[vm] = 'T'
       AND k.[voucherno] LIKE 'P-%'
@@ -520,7 +542,7 @@ async function qIssuedNotInstalled(range, f) {
       -- Bo qua thiet bi da duoc RETURN (tra unservice real_us1 hoac hoan kho P-CA-...)
       AND NOT EXISTS (
         SELECT 1 FROM [NQT].[dbo].[real_us1] r2
-        WHERE r2.[partno] = k.[partno] AND r2.[serialno] = k.[serialno]
+        WHERE r2.[labelno] = k.[labelno]
           AND r2.[voucher_s] = k.[voucherno]
       )
       AND NOT EXISTS (
@@ -782,7 +804,8 @@ async function qOther(range, f) {
  * Ham nay chay 1 batch nhieu SELECT GROUP BY, khong TOP -> so lieu chinh xac.
  *
  * Result sets (theo thu tu):
- *   [0] TAT don vi theo Trung tam:  department, cnt, avg_tat
+ *   [0] TAT theo Trung tam (2 thanh phan): department, cnt,
+ *       avg_install/cnt_install (lap-xuat), avg_usret/cnt_usret (traUS-thao)
  *   [1] TAT CUVT (scalar):          cnt, avg_tat
  *   [2] TAT hoan kho theo Trung tam: department, cnt, avg_tat
  *   [3] Chua doi ung theo Trung tam: department, cnt
@@ -810,18 +833,40 @@ async function qDashboardAgg(range, f) {
   const wNI = buildFilterClause(f, { station: 'k.[station]', store: 'k.[store]', department: deptK }, params);
 
   const text = `
-    -- [0] TAT don vi theo Trung tam (toan bo, khong TOP)
-    SELECT ${deptR} AS department, COUNT(*) AS cnt,
-           AVG(CAST(DATEDIFF(MINUTE, ${amosToVN('k')}, r.[del_time]) AS float) / 1440.0) AS avg_tat
-    FROM [NQT].[dbo].[kho_ser1] k
-    INNER JOIN [NQT].[dbo].[real_us1] r
-      ON k.[partno] = r.[partno] AND k.[serialno] = r.[serialno] AND k.[voucherno] = r.[voucher_s]
-    ${signJoin('r.[action_per]', 'sm')}
-    WHERE ${khoBase}
-      AND LTRIM(RTRIM(ISNULL(k.[receiver], ''))) <> ''
-      AND r.[del_time] >= @from AND r.[del_time] < @to
-      ${wDept}
-    GROUP BY ${deptR};
+    -- [0] TAT theo Trung tam (toan bo, khong TOP) - TACH 2 THANH PHAN:
+    --     tat_install = lap len tau (YE dau tien cung labelno SAU gio xuat) - gio xuat kho
+    --     tat_usret   = tra US (del_time) - thao tu tau (YA khop historyno_)
+    --     AVG() tu bo qua NULL -> dong thieu su kien lap/thao KHONG tinh vao TB.
+    SELECT x.department, COUNT(*) AS cnt,
+           AVG(x.tat_install) AS avg_install, COUNT(x.tat_install) AS cnt_install,
+           AVG(x.tat_usret)   AS avg_usret,   COUNT(x.tat_usret)   AS cnt_usret
+    FROM (
+      SELECT ${deptR} AS department,
+             CAST(DATEDIFF(MINUTE, ${amosToVN('k')}, ye.install_time) AS float) / 1440.0 AS tat_install,
+             CAST(DATEDIFF(MINUTE, ya.removal_time, r.[del_time]) AS float) / 1440.0    AS tat_usret
+      FROM [NQT].[dbo].[kho_ser1] k
+      INNER JOIN [NQT].[dbo].[real_us1] r
+        ON k.[labelno] = r.[labelno] AND k.[voucherno] = r.[voucher_s]
+      OUTER APPLY (
+        SELECT TOP 1 ${amosToVN('o')} AS install_time
+        FROM [NQT].[dbo].[on_off] o
+        WHERE o.[labelno] = k.[labelno] AND o.[vm] = 'YE'
+          AND ${amosToVN('o')} > ${amosToVN('k')}
+        ORDER BY o.[mutation] ASC, o.[mutation_t] ASC
+      ) ye
+      OUTER APPLY (
+        SELECT TOP 1 ${amosToVN('o')} AS removal_time
+        FROM [NQT].[dbo].[on_off] o
+        WHERE o.[historyno_] = r.[historyno_] AND o.[vm] = 'YA'
+        ORDER BY o.[mutation] ASC, o.[mutation_t] ASC
+      ) ya
+      ${signJoin('r.[action_per]', 'sm')}
+      WHERE ${khoBase}
+        AND LTRIM(RTRIM(ISNULL(k.[receiver], ''))) <> ''
+        AND r.[del_time] >= @from AND r.[del_time] < @to
+        ${wDept}
+    ) x
+    GROUP BY x.department;
 
     -- [1] TAT CUVT (scalar)
     SELECT COUNT(*) AS cnt,
@@ -855,7 +900,7 @@ async function qDashboardAgg(range, f) {
     SELECT ${deptK} AS department, COUNT(*) AS cnt
     FROM [NQT].[dbo].[kho_ser1] k
     LEFT JOIN [NQT].[dbo].[real_us1] r
-      ON k.[partno] = r.[partno] AND k.[serialno] = r.[serialno] AND k.[voucherno] = r.[voucher_s]
+      ON k.[labelno] = r.[labelno] AND k.[voucherno] = r.[voucher_s]
     ${signJoin('k.[created_b2]', 'sm')}
     WHERE ${khoBase}
       AND r.[partno] IS NULL
@@ -888,7 +933,7 @@ async function qDashboardAgg(range, f) {
       AND o.[partno] IS NULL
       AND NOT EXISTS (
         SELECT 1 FROM [NQT].[dbo].[real_us1] r2
-        WHERE r2.[partno] = k.[partno] AND r2.[serialno] = k.[serialno] AND r2.[voucher_s] = k.[voucherno])
+        WHERE r2.[labelno] = k.[labelno] AND r2.[voucher_s] = k.[voucherno])
       AND NOT EXISTS (
         SELECT 1 FROM [NQT].[dbo].[kho_ser1] tc
         WHERE tc.[vm] = 'TC' AND tc.[voucherno] LIKE 'P-CA-%'
@@ -901,7 +946,7 @@ async function qDashboardAgg(range, f) {
     SELECT k.[station] AS station, COUNT(*) AS cnt
     FROM [NQT].[dbo].[kho_ser1] k
     INNER JOIN [NQT].[dbo].[real_us1] r
-      ON k.[partno] = r.[partno] AND k.[serialno] = r.[serialno] AND k.[voucherno] = r.[voucher_s]
+      ON k.[labelno] = r.[labelno] AND k.[voucherno] = r.[voucher_s]
     ${signJoin('r.[action_per]', 'sm')}
     WHERE ${khoBase}
       AND LTRIM(RTRIM(ISNULL(k.[receiver], ''))) <> ''
@@ -921,6 +966,12 @@ function buildDashboardFromAgg(range, agg) {
     return c ? sum(arr, (x) => (x.avg_tat || 0) * x.cnt) / c : 0;
   };
 
+  // Trung binh co trong so theo so dong CO du lieu (AVG da bo NULL trong SQL)
+  const wavgBy = (arr, avgField, cntField) => {
+    const c = sum(arr, (x) => x[cntField]);
+    return c ? sum(arr, (x) => (x[avgField] || 0) * x[cntField]) / c : 0;
+  };
+
   const reconciled = sum(agg.deptAgg, (x) => x.cnt);
   const notRec = sum(agg.notRecAgg, (x) => x.cnt);
 
@@ -931,7 +982,9 @@ function buildDashboardFromAgg(range, agg) {
   const cntDel = sum(agg.retUSAgg, (x) => x.cnt);
 
   const kpis = {
-    tatDeptAvg: round1(wavg(agg.deptAgg)),
+    // TAT tach 2 thanh phan (thay cho TAT TB tong truoc day)
+    tatInstallAvg: round1(wavgBy(agg.deptAgg, 'avg_install', 'cnt_install')),
+    tatUsReturnAvg: round1(wavgBy(agg.deptAgg, 'avg_usret', 'cnt_usret')),
     tatCuvtAvg: round1(agg.cuvtAgg?.avg_tat || 0),
     tatReturnStoreAvg: round1(wavg(agg.retAgg)),
     countIssued: reconciled + notRec,
@@ -942,10 +995,12 @@ function buildDashboardFromAgg(range, agg) {
     cntDel,
   };
 
-  const byDept = [...agg.deptAgg].sort((a, b) => (b.avg_tat || 0) - (a.avg_tat || 0));
+  // Bieu do cot theo Trung tam: 2 series (install / US return)
+  const byDept = [...agg.deptAgg].sort((a, b) => (b.avg_install || 0) - (a.avg_install || 0));
   const barDept = {
     labels: byDept.map((x) => x.department),
-    values: byDept.map((x) => round1(x.avg_tat)),
+    install: byDept.map((x) => round1(x.avg_install)),
+    usret: byDept.map((x) => round1(x.avg_usret)),
     counts: byDept.map((x) => x.cnt),
   };
 
@@ -1374,7 +1429,7 @@ app.get(
            r.[del_time]     AS del_time
          FROM [NQT].[dbo].[kho_ser1] k
          JOIN [NQT].[dbo].[real_us1] r
-           ON k.[partno]=r.[partno] AND k.[serialno]=r.[serialno] AND k.[voucherno]=r.[voucher_s]
+           ON k.[labelno]=r.[labelno] AND k.[voucherno]=r.[voucher_s]
          WHERE k.[vm]='T' AND k.[voucherno] LIKE 'P-%'`
       ),
       // 2. Phan bo vm trong kho_ser1
