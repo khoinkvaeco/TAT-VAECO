@@ -332,6 +332,7 @@ const REPORT_DEFS = {
       { title: 'Aircraft', field: 'ac_registr', headerFilter: 'input' },
       { title: 'Station', field: 'station', headerFilter: 'input' },
       { title: 'Store', field: 'store', headerFilter: 'input'  },
+      { title: 'Center', field: 'trung_tam', headerFilter: 'input'  },
       { title: 'Staff', field: 'staff', headerFilter: 'input' },
       { title: 'Ngày Giờ tháo', field: 'removed_time_vn', formatter: fmtDateCell },
     ],
