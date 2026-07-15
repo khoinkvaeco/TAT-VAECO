@@ -507,9 +507,7 @@ async function qIssuedNotInstalled(range, f) {
       CAST(DATEDIFF(MINUTE, ${amosToVN('k')}, GETDATE()) AS float) / 1440.0 AS tat_days
     FROM [NQT].[dbo].[kho_ser1] k
     LEFT JOIN [NQT].[dbo].[on_off] o
-      ON k.[partno] = o.[partno]
-     AND k.[serialno] = o.[serialno]
-     AND k.[labelno] = o.[labelno]
+      ON k.[labelno] = o.[labelno]
      AND o.[vm] = 'YE'
     ${signJoin('k.[created_b2]', 'sm')}
     WHERE k.[vm] = 'T'
@@ -557,12 +555,20 @@ async function qRemovedNotReturned(range, f) {
       o.[station]    AS station,
       o.[store]      AS store,
       o.[ac_registr] AS ac_registr,
-      o.[created_by] AS staff,
+      o.[created_by] AS staff, 
+      COALESCE(NULLIF(NULLIF(LTRIM(RTRIM(r.department)), ''), 'UNKNOWN'),
+         CASE WHEN LEFT(LTRIM(RTRIM(r.action_per)), 2) = 'PA' THEN 'PA' END,
+         NULLIF(NULLIF(LTRIM(RTRIM(sm.DEPARTMENT)), ''), 'UNKNOWN'),
+         'PA')  AS trung_tam,
       ${amosToVN('o')} AS removed_time_vn
     FROM [NQT].[dbo].[on_off] o
     LEFT JOIN [NQT].[dbo].[real_us1] r
-      ON o.[historyno_] = r.[historyno_]   -- so sanh so truc tiep (cot so; RTRIM lam float->chuoi 6 chu so -> ghep nham)
-    WHERE o.[vm] = 'YA'
+      ON o.[labelno] = r.[labelno]   -- so sanh so truc tiep (cot so; RTRIM lam float->chuoi 6 chu so -> ghep nham)
+    LEFT JOIN [DWH_DB]..[STG_AMOS].ROTABLES RO ON o.PSN = RO.PSN 
+      LEFT JOIN (SELECT USER_SIGN, MAX(DEPARTMENT) AS DEPARTMENT
+           FROM DWH_DB..STG_AMOS.SIGN GROUP BY USER_SIGN) sm
+  ON sm.USER_SIGN = o.created_by
+    WHERE o.[vm] = 'YA' AND RO.MUTATION > @fromDay and RO.condition ='US'
       AND r.[historyno_] IS NULL
       AND o.[mutation] BETWEEN @fromDay AND @toDay  -- loc tho theo index (sargable)
       AND ${amosToVN('o')} >= @from AND ${amosToVN('o')} < @to
