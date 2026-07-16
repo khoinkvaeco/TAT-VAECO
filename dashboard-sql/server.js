@@ -639,6 +639,7 @@ async function qNotReconciled(range, f) {
       AND LTRIM(RTRIM(ISNULL(k.[costcenter], ''))) <> 'VN-SPL'  -- bo qua costcenter VN-SPL
       AND UPPER(LTRIM(RTRIM(ISNULL(k.[store], '')))) NOT IN ('MAIN','3RD')  -- bo qua store MAIN/3RD
       AND UPPER(LTRIM(RTRIM(ISNULL(k.[condition], '')))) <> 'US'  -- bo qua condition US
+      AND ${dept} <> 'CUVT'   -- khong tinh doi ung khi xuat kho cho CUVT
       AND r.[partno] IS NULL
       -- Bo qua neu thiet bi da duoc hoan kho (P-CA-...)
       AND NOT EXISTS (
@@ -902,7 +903,7 @@ async function qDashboardAgg(range, f) {
     LEFT JOIN [NQT].[dbo].[real_us1] r
       ON k.[labelno] = r.[labelno] AND k.[voucherno] = r.[voucher_s]
     ${signJoin('k.[created_b2]', 'sm')}
-    WHERE ${khoBase}
+    WHERE ${khoBase} AND ${deptK} <> 'CUVT'
       AND r.[partno] IS NULL
       AND NOT EXISTS (
         SELECT 1 FROM [NQT].[dbo].[kho_ser1] tc
