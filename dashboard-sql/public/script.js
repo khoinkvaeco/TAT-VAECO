@@ -458,7 +458,7 @@ async function loadDashboard() {
         layout: 'fitDataFill',
         pagination: true,
         paginationSize: 15,
-        paginationSizeSelector: [10, 15, 25, 50, 100, 250, 500, true], // true = Tat ca
+        paginationSizeSelector: [true], // true = Tat ca
         placeholder: 'Không có dữ liệu',
         height: '540px',
       });
@@ -550,7 +550,7 @@ async function loadReport(name) {
         layout: 'fitDataFill',
         pagination: true,
         paginationSize: 15,
-        paginationSizeSelector: [10, 15, 25, 50, 100, 250, 500, true], // true = Tat ca
+        paginationSizeSelector: [true], // true = Tat ca
         placeholder: 'Không có dữ liệu',
         height: '540px',
       });
