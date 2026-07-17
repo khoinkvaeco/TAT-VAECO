@@ -1258,6 +1258,10 @@ function clientIp(req) {
  */
 function accessLogger(req, res, next) {
   const start = Date.now();
+  const vnTime = new Date(start).toLocaleString('vi-VN', { 
+    timeZone: 'Asia/Ho_Chi_Minh',
+    hour12: false
+  });
   const ip = clientIp(req);
   res.on('finish', () => {
     resolveHostname(ip)
@@ -1265,7 +1269,7 @@ function accessLogger(req, res, next) {
         const now = new Date();
         const day = now.toISOString().slice(0, 10);
         const line = [
-          now.toISOString(),
+          vnTime,
           ip,
           hostname,
           req.method,
