@@ -100,6 +100,11 @@ WHERE k.vm = 'T' AND k.voucherno LIKE 'P-%'
   AND LTRIM(RTRIM(ISNULL(k.costcenter, ''))) <> 'VN-SPL'  -- bo VN-SPL
   AND UPPER(LTRIM(RTRIM(ISNULL(k.store, '')))) NOT IN ('MAIN','3RD')
   AND UPPER(LTRIM(RTRIM(ISNULL(k.condition, '')))) <> 'US'  -- bo qua condition US
+  -- (Tuy chon) Checkbox "Bo qua xuat costcenter": bo receiver LA SO
+  -- (dung 2 chu so hoac so thuan gom chu so + dau . ,) - khong phai so tau.
+  -- Bo comment dong duoi de ap dung:
+  -- AND NOT (LTRIM(RTRIM(ISNULL(k.receiver,''))) LIKE '%[0-9]%'
+  --      AND LTRIM(RTRIM(ISNULL(k.receiver,''))) NOT LIKE '%[^0-9.,]%')
   AND r.del_time >= @from AND r.del_time < @to
 ORDER BY tat_ngay DESC;
 
@@ -153,6 +158,9 @@ FROM (
       AND LTRIM(RTRIM(ISNULL(k.costcenter, ''))) <> 'VN-SPL'
       AND UPPER(LTRIM(RTRIM(ISNULL(k.store, '')))) NOT IN ('MAIN','3RD')
       AND UPPER(LTRIM(RTRIM(ISNULL(k.condition, '')))) <> 'US'
+      -- (Tuy chon) "Bo qua xuat costcenter" - giong ghi chu o muc A:
+      -- AND NOT (LTRIM(RTRIM(ISNULL(k.receiver,''))) LIKE '%[0-9]%'
+      --      AND LTRIM(RTRIM(ISNULL(k.receiver,''))) NOT LIKE '%[^0-9.,]%')
       AND r.del_time >= @from AND r.del_time < @to
 ) x
 GROUP BY x.trung_tam

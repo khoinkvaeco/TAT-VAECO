@@ -50,6 +50,7 @@ const state = {
   station: '',
   store: '',
   department: '',
+  excludeCC: false, // checkbox "Bo qua xuat costcenter" (receiver la so, khong phai so tau)
   currentReport: 'returned-unservice',
 };
 
@@ -64,8 +65,8 @@ const reportCache = new Map();
 // --- Luu / khoi phuc cau hinh filter (localStorage) de lan sau mo lai dung ngay ---
 const FILTER_STORE_KEY = 'tat-filters-v1';
 function saveFilters() {
-  const { periodType, month, week, station, store, department } = state;
-  localStorage.setItem(FILTER_STORE_KEY, JSON.stringify({ periodType, month, week, station, store, department }));
+  const { periodType, month, week, station, store, department, excludeCC } = state;
+  localStorage.setItem(FILTER_STORE_KEY, JSON.stringify({ periodType, month, week, station, store, department, excludeCC }));
 }
 function loadSavedFilters() {
   try {
@@ -87,6 +88,7 @@ function buildQuery() {
   if (state.station) p.set('station', state.station);
   if (state.store) p.set('store', state.store);
   if (state.department) p.set('department', state.department);
+  if (state.excludeCC) p.set('excludeCC', '1');
   return p.toString();
 }
 
@@ -665,7 +667,9 @@ async function init() {
     state.station = saved.station || '';
     state.store = saved.store || '';
     state.department = saved.department || '';
+    state.excludeCC = !!saved.excludeCC;
   }
+  $('#ccToggle').checked = state.excludeCC;
   $('#monthInput').value = state.month;
   $('#weekInput').value = state.week || now.toISOString().slice(0, 10);
 
@@ -700,6 +704,8 @@ async function init() {
   $('#stationSelect').addEventListener('change', (e) => { state.station = e.target.value; applyFilters(); });
   $('#storeSelect').addEventListener('change', (e) => { state.store = e.target.value; applyFilters(); });
   $('#deptSelect').addEventListener('change', (e) => { state.department = e.target.value; applyFilters(); });
+  // Checkbox "Bo qua xuat costcenter": loai receiver la so roi tinh lai KPI/bieu do tu server
+  $('#ccToggle').addEventListener('change', (e) => { state.excludeCC = e.target.checked; applyFilters(); });
 
   // Tim kiem bang chinh
   $('#mainSearch').addEventListener('input', (e) => {

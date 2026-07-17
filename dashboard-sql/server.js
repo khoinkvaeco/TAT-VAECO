@@ -279,6 +279,21 @@ function buildFilterClause(f, cols, params) {
   return clause;
 }
 
+/**
+ * Dieu kien "Bo qua xuat costcenter" (checkbox tren dashboard).
+ * Loai cac phieu xuat co receiver LA SO: dung 2 chu so ('15') hoac so thuan
+ * (chi gom chu so va dau . , - vi du '1234', '12.5') - day la xuat cho
+ * costcenter, khong phai xuat cho tau (so tau co chu cai, vi du 'VN-A868').
+ * @param f     filter tu readFilters() (dung f.excludeCC)
+ * @param alias alias bang kho_ser1 chua cot [receiver] (vd 'k' hoac 't')
+ */
+function excludeCostcenterClause(f, alias) {
+  if (!f.excludeCC) return '';
+  const rcv = `LTRIM(RTRIM(ISNULL(${alias}.[receiver], '')))`;
+  // "la so" = co it nhat 1 chu so VA khong chua ky tu nao ngoai 0-9 . ,
+  return ` AND NOT (${rcv} LIKE '%[0-9]%' AND ${rcv} NOT LIKE '%[^0-9.,]%')`;
+}
+
 // ---------------------------------------------------------------------------
 // 4. TAO KHOANG THOI GIAN (thang / tuan)
 // ---------------------------------------------------------------------------
@@ -409,6 +424,7 @@ async function qTatDepartments(range, f) {
       AND UPPER(LTRIM(RTRIM(ISNULL(k.[store], '')))) NOT IN ('MAIN','3RD')  -- bo qua store MAIN/3RD
       AND UPPER(LTRIM(RTRIM(ISNULL(k.[condition], '')))) <> 'US'  -- bo qua condition US
       AND r.[del_time] >= @from AND r.[del_time] < @to
+      ${excludeCostcenterClause(f, 'k')}
       ${where}
     ORDER BY tat_days DESC`;
   return query(text, params);
@@ -820,11 +836,14 @@ async function qDashboardAgg(range, f) {
   const deptK = deptFromStaff('k.[created_b2]', 'sm');
   const deptT = deptFromStaff('t.[created_b2]', 'sm');
 
-  // Dieu kien loc chung cua kho_ser1 (giong cac query chi tiet)
+  // Dieu kien loc chung cua kho_ser1 (giong cac query chi tiet).
+  // Kem dieu kien "Bo qua xuat costcenter" (neu checkbox bat) cho MOI subquery
+  // dua tren phieu xuat kho_ser1 (alias k) -> KPI + bieu do dong nhat.
   const khoBase = `k.[vm] = 'T' AND k.[voucherno] LIKE 'P-%'
       AND LTRIM(RTRIM(ISNULL(k.[costcenter], ''))) <> 'VN-SPL'
       AND UPPER(LTRIM(RTRIM(ISNULL(k.[store], '')))) NOT IN ('MAIN','3RD')
-      AND UPPER(LTRIM(RTRIM(ISNULL(k.[condition], '')))) <> 'US'`;
+      AND UPPER(LTRIM(RTRIM(ISNULL(k.[condition], '')))) <> 'US'
+      ${excludeCostcenterClause(f, 'k')}`;
 
   const wDept = buildFilterClause(f, { station: 'k.[station]', store: 'k.[store]', department: deptR }, params);
   const wCuvt = buildFilterClause(f, { station: 'r.[station]', store: 'r.[store]', department: deptR }, params);
@@ -891,6 +910,7 @@ async function qDashboardAgg(range, f) {
       AND LTRIM(RTRIM(ISNULL(t.[costcenter], ''))) <> 'VN-SPL'
       AND UPPER(LTRIM(RTRIM(ISNULL(t.[store], '')))) NOT IN ('MAIN','3RD')
       AND UPPER(LTRIM(RTRIM(ISNULL(t.[condition], '')))) <> 'US'
+      ${excludeCostcenterClause(f, 't')}
       AND ${deptT} <> 'CUVT'   -- khong tinh TAT hoan kho cho CUVT
       AND tc.[mutation] BETWEEN @fromDay AND @toDay
       AND ${amosToVN('tc')} >= @from AND ${amosToVN('tc')} < @to
@@ -1354,6 +1374,8 @@ function readFilters(q) {
     station: (q.station || '').trim(),
     store: (q.store || '').trim(),
     department: (q.department || '').trim(),
+    // Checkbox "Bo qua xuat costcenter": loai receiver la so (khong phai so tau)
+    excludeCC: ['1', 'true'].includes((q.excludeCC || '').trim().toLowerCase()),
   };
 }
 

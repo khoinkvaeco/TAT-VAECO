@@ -81,6 +81,13 @@
         </select>
       </div>
 
+      <!-- Bo qua phieu xuat cho costcenter: receiver la so (2 chu so / so thuan), khong phai so tau -->
+      <label class="flex items-center gap-1.5 text-sm pb-2 cursor-pointer select-none"
+             title="Loại các phiếu xuất có Receiver là số (đúng 2 chữ số hoặc số thuần, ví dụ 15, 1234, 12.5) — không phải số tàu — và tính lại KPI/biểu đồ">
+        <input type="checkbox" id="ccToggle" class="w-4 h-4" />
+        <span>Bỏ qua xuất costcenter</span>
+      </label>
+
       <!-- Du lieu tu dong tai khi doi ky bao cao / dropdown (khong can nut Ap dung) -->
       <div id="loading" class="hidden items-center gap-2 text-sm text-muted">
         <span class="spinner"></span> Đang tải…

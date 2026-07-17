@@ -43,6 +43,15 @@ function baseDevice(i) {
   };
 }
 
+/** Receiver mau: lan lon so tau (co chu cai) va costcenter (so thuan / 2 chu so). */
+const RECEIVERS = ['VN-A321', 'VN-A868', 'VN-B787', '15', '25', '1234', '12.5'];
+
+/** Receiver la "xuat costcenter"? = co chu so va CHI gom chu so + dau . , */
+function isCostcenterReceiver(rcv) {
+  const s = String(rcv || '').trim();
+  return /[0-9]/.test(s) && /^[0-9.,]+$/.test(s);
+}
+
 /** Loc theo filter chung. station='OTHER' = ngoai HAN/SGN/DAD. */
 function applyFilter(rows, f) {
   const MAIN = ['HAN', 'SGN', 'DAD'];
@@ -54,6 +63,8 @@ function applyFilter(rows, f) {
     }
     if (f.store && r.store !== f.store) return false;
     if (f.department && r.department !== f.department) return false;
+    // Checkbox "Bo qua xuat costcenter" (chi tac dong dong co truong receiver)
+    if (f.excludeCC && 'receiver' in r && isCostcenterReceiver(r.receiver)) return false;
     return true;
   });
 }
@@ -75,7 +86,7 @@ function tatDepartments(range, f) {
     rows.push({
       ...d,
       event_perf: 'E' + rndInt(100000, 999999),
-      receiver: 'RCV' + rndInt(100, 999),
+      receiver: rnd(RECEIVERS),
       partno_off: 'PN-' + pad(rndInt(100, 999)),
       serialno_off: 'SN' + rndInt(10000, 99999),
       voucher_issue: 'P-' + rndInt(10000, 99999),
