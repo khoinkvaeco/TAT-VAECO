@@ -287,9 +287,17 @@ const COLS_TAT_DEPT = [
   { title: 'Ngày lắp', field: 'installed_time_vn', formatter: fmtDateCell },
   { title: 'TAT install', field: 'tat_install_days', formatter: fmtTatCell, hozAlign: 'right', sorter: 'number' },
   { title: 'Ngày tháo', field: 'removed_time_vn', formatter: fmtDateCell },
-  { title: 'Ngày Giờ trả U/S', field: 'return_unservice_time', formatter: fmtDateCell },
+  // Với dòng "Trả service": cột này là GIỜ RECERTIFY (CI) thay cho giờ trả US
+  { title: 'Ngày Giờ trả', field: 'return_unservice_time', formatter: fmtDateCell },
   { title: 'TAT US return', field: 'tat_usreturn_days', formatter: fmtTatCell, hozAlign: 'right', sorter: 'number' },
   { title: 'TAT (tổng)', field: 'tat_days', formatter: fmtTatCell, hozAlign: 'right', sorter: 'number' },
+  // Nguồn đối ứng: US = trả unservice (real_us1); SERVICE = recertify (CI @SHOPLOC)
+  {
+    title: 'Nguồn trả', field: 'return_type', hozAlign: 'center',
+    formatter: (cell) => (cell.getValue() === 'SERVICE' ? 'Trả service' : 'Trả unservice'),
+    headerFilter: 'list',
+    headerFilterParams: { values: { '': 'Tất cả', US: 'Trả unservice', SERVICE: 'Trả service' } },
+  },
   COL_EXCLUDE, // checkbox "Bỏ qua" — cột cuối
 ];
 

@@ -278,6 +278,21 @@ WHERE k.vm = 'T' AND k.voucherno LIKE 'P-%'
                   WHERE tc.vm = 'TC' AND tc.voucherno LIKE 'P-CA-%'
                     AND tc.partno = k.partno AND tc.serialno = k.serialno
                     AND tc.labelno = k.labelno)
+  -- Bo qua neu DA DOI UNG kieu TRA SERVICE (recertify) - xem muc M:
+  -- thao YA -> recertify CI @SHOPLOC (cung psn+orderno), CI SAU gio xuat,
+  -- va thiet bi co su kien lap YE (higher_par NULL)
+  AND NOT (
+        EXISTS (SELECT 1
+                FROM NQT.dbo.on_off t1
+                JOIN NQT.dbo.on_off t2
+                  ON t2.psn = t1.psn AND t2.orderno = t1.orderno
+                 AND t2.vm = 'CI' AND t2.location = 'SHOPLOC'
+                WHERE t1.vm = 'YA' AND t1.labelno = k.labelno
+                  AND t2.mut_t > v.time_vn)
+    AND EXISTS (SELECT 1 FROM NQT.dbo.on_off t3
+                WHERE t3.labelno = k.labelno AND t3.vm = 'YE'
+                  AND t3.higher_par IS NULL)
+  )
   AND k.mutation BETWEEN @fromDay AND @toDay
   AND v.time_vn >= @from AND v.time_vn < @to
 ORDER BY v.time_vn DESC;
@@ -485,3 +500,107 @@ SELECT
   (SELECT COUNT(*) FROM NQT.dbo.real_us1 r
    WHERE r.del_time IS NOT NULL
      AND r.del_time >= @from AND r.del_time < @to)  AS so_luong_del;
+
+------------------------------------------------------------------------------
+-- M. TRA SERVICE (RECERTIFY) — ban TOI UU cua SQL goc
+--    Thiet bi thao khoi tau (YA) duoc recertify tai shop (CI @SHOPLOC, cung
+--    psn + orderno) -> chuyen thanh SERVICEABLE ("tra service").
+--    on_off.[mut_t] la datetime GIO VN co san (khong can quy doi AMOS).
+--
+--    Toi uu so voi SQL goc:
+--    1) Sua loi cu phap (thieu dau phay truoc T2.labelno; alias 'ime_on').
+--    2) Bo DISTINCT: SQL goc join T3 (YE) chi theo labelno va T2 (CI) theo
+--       psn+orderno -> 1 thiet bi co nhieu lan lap/recertify se NHAN DOI dong,
+--       DISTINCT che loi nhung van ton chi phi. Thay bang:
+--         - T2: CROSS APPLY TOP 1 lay lan recertify MOI NHAT cua (psn,orderno)
+--           (= y do cua dong comment "select max(historyno_)" trong SQL goc);
+--         - T3: CROSS APPLY TOP 1 lay lan LAP gan nhat TRUOC khi thao.
+--       => moi dong YA ra dung 1 dong ket qua, khong can DISTINCT.
+--    3) Loc T1.vm='YA' ngay trong WHERE de thu hep tap dau tien.
+------------------------------------------------------------------------------
+SELECT
+    T1.event_perf,
+    T3.partno     AS part_on,      -- thiet bi LAP len tau
+    T3.serialno   AS ser_on,
+    T1.partno     AS part_off,     -- thiet bi THAO xuong (SQL goc dat nham T2)
+    T1.serialno   AS ser_off,
+    T2.serialno   AS serial_rec,   -- sau recertify
+    T2.labelno    AS labelno_rec,
+    T3.labelno    AS labelno_on,
+    T2.qty,
+    T3.mut_t      AS time_on,      -- gio lap
+    T1.mut_t      AS time_off,     -- gio thao
+    T2.mut_t      AS time_rec,     -- gio recertify (tra service)
+    T2.station,
+    T1.ac_registr,
+    T2.historyno_
+FROM NQT.dbo.on_off T1                       -- YA: thao khoi tau
+CROSS APPLY (                                -- CI: lan recertify MOI NHAT cua work order
+    SELECT TOP 1 x.partno, x.serialno, x.labelno, x.qty, x.mut_t, x.station, x.historyno_
+    FROM NQT.dbo.on_off x
+    WHERE x.psn = T1.psn AND x.orderno = T1.orderno
+      AND x.vm = 'CI' AND x.location = 'SHOPLOC'
+    ORDER BY x.historyno_ DESC
+) T2
+CROSS APPLY (                                -- YE: lan LAP gan nhat TRUOC khi thao
+    SELECT TOP 1 x.partno, x.serialno, x.labelno, x.mut_t
+    FROM NQT.dbo.on_off x
+    WHERE x.labelno = T1.labelno
+      AND x.vm = 'YE' AND x.higher_par IS NULL
+      AND x.mut_t <= T1.mut_t
+    ORDER BY x.mut_t DESC
+) T3
+WHERE T1.vm = 'YA'
+ORDER BY T2.historyno_ DESC;
+
+-- [m1] DANH SACH "TRA SERVICE" DA DOI UNG voi phieu xuat trong ky — cach
+--      dashboard dung de (a) loai khoi "Chua doi ung" va (b) tinh TAT:
+--      TAT install   = gio lap YE  - gio xuat kho
+--      TAT US return = gio CI      - gio thao YA   (CI thay cho del_time)
+--      Ky bao cao tinh theo GIO RECERTIFY (rc.recert_time).
+SELECT
+    k.partno, k.serialno, k.labelno, k.descriptio AS mo_ta,
+    k.station, k.store1 AS store, k.voucherno AS pickslip,
+    v.time_vn        AS gio_xuat_vn,
+    ye.install_time  AS gio_lap,
+    rc.removal_time  AS gio_thao,
+    rc.recert_time   AS gio_tra_service,
+    CAST(DATEDIFF(MINUTE, v.time_vn, ye.install_time)          AS float)/1440.0 AS tat_install_ngay,
+    CAST(DATEDIFF(MINUTE, rc.removal_time, rc.recert_time)     AS float)/1440.0 AS tat_us_return_ngay,
+    CAST(DATEDIFF(MINUTE, v.time_vn, rc.recert_time)           AS float)/1440.0 AS tat_tong_ngay
+FROM NQT.dbo.kho_ser1 k
+CROSS APPLY (SELECT DATEADD(HOUR, @tz, DATEADD(MILLISECOND,
+    TRY_CONVERT(int, TRY_CONVERT(bigint, TRY_CONVERT(float, k.mutation_t)) % 86400000),
+    DATEADD(DAY, TRY_CONVERT(int, TRY_CONVERT(float, k.mutation)), @epoch)))) v(time_vn)
+CROSS APPLY (                                -- lan recertify DAU TIEN sau gio xuat
+    SELECT TOP 1 t1.mut_t AS removal_time, t2.mut_t AS recert_time
+    FROM NQT.dbo.on_off t1
+    JOIN NQT.dbo.on_off t2
+      ON t2.psn = t1.psn AND t2.orderno = t1.orderno
+     AND t2.vm = 'CI' AND t2.location = 'SHOPLOC'
+    WHERE t1.vm = 'YA' AND t1.labelno = k.labelno
+      AND t2.mut_t > v.time_vn                     -- CI phai SAU gio xuat kho
+    ORDER BY t2.mut_t ASC, t1.mut_t ASC
+) rc
+OUTER APPLY (                                -- lan LAP dau tien sau gio xuat
+    SELECT TOP 1 DATEADD(HOUR, @tz, DATEADD(MILLISECOND,
+        TRY_CONVERT(int, TRY_CONVERT(bigint, TRY_CONVERT(float, o.mutation_t)) % 86400000),
+        DATEADD(DAY, TRY_CONVERT(int, TRY_CONVERT(float, o.mutation)), @epoch))) AS install_time
+    FROM NQT.dbo.on_off o
+    WHERE o.labelno = k.labelno AND o.vm = 'YE'
+      AND DATEADD(HOUR, @tz, DATEADD(MILLISECOND,
+          TRY_CONVERT(int, TRY_CONVERT(bigint, TRY_CONVERT(float, o.mutation_t)) % 86400000),
+          DATEADD(DAY, TRY_CONVERT(int, TRY_CONVERT(float, o.mutation)), @epoch))) > v.time_vn
+    ORDER BY o.mutation ASC, o.mutation_t ASC
+) ye
+WHERE k.vm = 'T' AND k.voucherno LIKE 'P-%'
+  AND LTRIM(RTRIM(ISNULL(k.receiver,   ''))) <> ''
+  AND LTRIM(RTRIM(ISNULL(k.costcenter, ''))) <> 'VN-SPL'
+  AND UPPER(LTRIM(RTRIM(ISNULL(k.store, '')))) NOT IN ('MAIN','3RD')
+  AND UPPER(LTRIM(RTRIM(ISNULL(k.condition, '')))) <> 'US'
+  AND NOT EXISTS (SELECT 1 FROM NQT.dbo.real_us1 r2          -- chua tra US
+                  WHERE r2.labelno = k.labelno AND r2.voucher_s = k.voucherno)
+  AND EXISTS (SELECT 1 FROM NQT.dbo.on_off t3                -- da tung lap (T3)
+              WHERE t3.labelno = k.labelno AND t3.vm = 'YE' AND t3.higher_par IS NULL)
+  AND rc.recert_time >= @from AND rc.recert_time < @to
+ORDER BY tat_tong_ngay DESC;

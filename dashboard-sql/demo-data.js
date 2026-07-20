@@ -99,6 +99,8 @@ function tatDepartments(range, f) {
       tat_days: tat,
       tat_install_days: install ? +((install - issue) / 86400000).toFixed(1) : null,
       tat_usreturn_days: removal ? +((ret - removal) / 86400000).toFixed(1) : null,
+      // ~20% dong doi ung kieu TRA SERVICE (recertify CI @SHOPLOC thay vi tra US)
+      return_type: Math.random() > 0.8 ? 'SERVICE' : 'US',
     });
   }
   return applyFilter(rows, f);

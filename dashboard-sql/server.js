@@ -295,6 +295,58 @@ function excludeCostcenterClause(f, alias) {
 }
 
 // ---------------------------------------------------------------------------
+// 3b. DOI UNG KIEU "TRA SERVICE" (RECERTIFY) QUA on_off
+//     Chuoi su kien cua 1 phieu xuat (kho_ser1 k):
+//       - Thiet bi (labelno) da LAP len tau: on_off vm='YE', higher_par IS NULL
+//       - Sau do THAO xuong:                 on_off vm='YA' (cung labelno)
+//       - Va duoc RECERTIFY tai shop:        on_off vm='CI', location='SHOPLOC',
+//         lien ket voi YA qua (psn, orderno) -> chuyen thanh SERVICEABLE.
+//     Thiet bi nay KHONG co dong tra unservice (real_us1) nhung van la DA DOI
+//     UNG ("tra service"); thoi diem tra = gio recertify (CI).
+//     LUU Y: on_off.[mut_t] la cot datetime GIO VN co san -> dung truc tiep,
+//     khong can quy doi mutation/mutation_t.
+// ---------------------------------------------------------------------------
+
+/** CROSS APPLY lay lan recertify DAU TIEN sau gio xuat kho cua phieu xuat.
+ *  Tra ve rc.removal_time (gio thao YA) va rc.recert_time (gio CI). */
+function recertApply(kAlias) {
+  return `
+    CROSS APPLY (
+      SELECT TOP 1 t1.[mut_t] AS removal_time, t2.[mut_t] AS recert_time
+      FROM [NQT].[dbo].[on_off] t1
+      INNER JOIN [NQT].[dbo].[on_off] t2
+        ON t2.[psn] = t1.[psn] AND t2.[orderno] = t1.[orderno]
+       AND t2.[vm] = 'CI' AND t2.[location] = 'SHOPLOC'
+      WHERE t1.[vm] = 'YA'
+        AND t1.[labelno] = ${kAlias}.[labelno]
+        AND t2.[mut_t] > ${amosToVN(kAlias)}   -- CI phai SAU gio xuat kho
+      ORDER BY t2.[mut_t] ASC, t1.[mut_t] ASC  -- lan recertify dau tien
+    ) rc`;
+}
+
+/** Dieu kien: phieu xuat da duoc doi ung kieu TRA SERVICE (recertify).
+ *  Tra ve bieu thuc boolean co ngoac -> co the dung voi NOT (...) . */
+function recertExists(kAlias) {
+  return `(
+    EXISTS (
+      SELECT 1
+      FROM [NQT].[dbo].[on_off] t1
+      INNER JOIN [NQT].[dbo].[on_off] t2
+        ON t2.[psn] = t1.[psn] AND t2.[orderno] = t1.[orderno]
+       AND t2.[vm] = 'CI' AND t2.[location] = 'SHOPLOC'
+      WHERE t1.[vm] = 'YA'
+        AND t1.[labelno] = ${kAlias}.[labelno]
+        AND t2.[mut_t] > ${amosToVN(kAlias)}
+    )
+    AND EXISTS (
+      SELECT 1 FROM [NQT].[dbo].[on_off] t3
+      WHERE t3.[labelno] = ${kAlias}.[labelno]
+        AND t3.[vm] = 'YE' AND t3.[higher_par] IS NULL
+    )
+  )`;
+}
+
+// ---------------------------------------------------------------------------
 // 4. TAO KHOANG THOI GIAN (thang / tuan)
 // ---------------------------------------------------------------------------
 
@@ -370,8 +422,18 @@ async function qTatDepartments(range, f) {
     { station: 'k.[station]', store: 'k.[store]', department: dept },
     params
   );
+  // Nhanh "tra service" (recertify): khong co dong real_us1 -> Trung tam tra
+  // theo nguoi lap phieu xuat (created_b2), giong cac bao cao kho_ser1 khac.
+  const deptSvc = deptFromStaff('k.[created_b2]', 'sm');
+  const whereSvc = buildFilterClause(
+    f,
+    { station: 'k.[station]', store: 'k.[store]', department: deptSvc },
+    params
+  );
   const text = `
-    SELECT TOP (@top)
+    SELECT TOP (@top) u.* FROM (
+    -- (1) DOI UNG TRA UNSERVICE: kho_ser1 <-> real_us1 (nhu truoc)
+    SELECT
       k.[event_perf]  AS event_perf,
       k.[partno]      AS partno,
       k.[serialno]    AS serialno,
@@ -395,7 +457,8 @@ async function qTatDepartments(range, f) {
       -- TAT_install = lap len tau - xuat kho (trong neu chua tim thay lan lap)
       CAST(DATEDIFF(MINUTE, ${amosToVN('k')}, ye.install_time) AS float) / 1440.0 AS tat_install_days,
       -- TAT_US_return = tra US - thao tu tau (trong neu khong co su kien thao)
-      CAST(DATEDIFF(MINUTE, ya.removal_time, r.[del_time]) AS float) / 1440.0 AS tat_usreturn_days
+      CAST(DATEDIFF(MINUTE, ya.removal_time, r.[del_time]) AS float) / 1440.0 AS tat_usreturn_days,
+      'US' AS return_type
     FROM [NQT].[dbo].[kho_ser1] k
     INNER JOIN [NQT].[dbo].[real_us1] r
       ON k.[labelno] = r.[labelno]
@@ -426,7 +489,57 @@ async function qTatDepartments(range, f) {
       AND r.[del_time] >= @from AND r.[del_time] < @to
       ${excludeCostcenterClause(f, 'k')}
       ${where}
-    ORDER BY tat_days DESC`;
+
+    UNION ALL
+
+    -- (2) DOI UNG TRA SERVICE (recertify): khong co real_us1; thiet bi thao (YA)
+    --     duoc recertify (CI @SHOPLOC) -> "tra" = gio recertify (rc.recert_time)
+    SELECT
+      k.[event_perf], k.[partno], k.[serialno], k.[labelno], k.[descriptio],
+      k.[receiver], k.[station], k.[store1],
+      k.[voucherno], k.[picking_li],
+      NULL,                              -- partno_off (khong co dong real_us1)
+      NULL,                              -- serialno_off
+      k.[created_b2],                    -- staff = nguoi lap phieu xuat
+      ${deptSvc},
+      ${amosToVN('k')},
+      ye.install_time,
+      rc.removal_time,                   -- ngay thao (YA cua chuoi recertify)
+      rc.recert_time,                    -- "ngay tra" = gio recertify CI
+      CAST(DATEDIFF(MINUTE, ${amosToVN('k')}, rc.recert_time) AS float) / 1440.0,
+      CAST(DATEDIFF(MINUTE, ${amosToVN('k')}, ye.install_time) AS float) / 1440.0,
+      CAST(DATEDIFF(MINUTE, rc.removal_time, rc.recert_time) AS float) / 1440.0,
+      'SERVICE'
+    FROM [NQT].[dbo].[kho_ser1] k
+    ${recertApply('k')}
+    OUTER APPLY (
+      SELECT TOP 1 ${amosToVN('o')} AS install_time
+      FROM [NQT].[dbo].[on_off] o
+      WHERE o.[labelno] = k.[labelno] AND o.[vm] = 'YE'
+        AND ${amosToVN('o')} > ${amosToVN('k')}
+      ORDER BY o.[mutation] ASC, o.[mutation_t] ASC
+    ) ye
+    ${signJoin('k.[created_b2]', 'sm')}
+    WHERE k.[vm] = 'T'
+      AND k.[voucherno] LIKE 'P-%'
+      AND LTRIM(RTRIM(ISNULL(k.[receiver], ''))) <> ''
+      AND LTRIM(RTRIM(ISNULL(k.[costcenter], ''))) <> 'VN-SPL'
+      AND UPPER(LTRIM(RTRIM(ISNULL(k.[store], '')))) NOT IN ('MAIN','3RD')
+      AND UPPER(LTRIM(RTRIM(ISNULL(k.[condition], '')))) <> 'US'
+      -- Chi lay phieu CHUA doi ung kieu tra unservice (tranh trung nhanh 1)
+      AND NOT EXISTS (
+        SELECT 1 FROM [NQT].[dbo].[real_us1] r2
+        WHERE r2.[labelno] = k.[labelno] AND r2.[voucher_s] = k.[voucherno])
+      -- Thiet bi phai co su kien LAP (YE, higher_par NULL) - theo T3 cua SQL goc
+      AND EXISTS (
+        SELECT 1 FROM [NQT].[dbo].[on_off] t3
+        WHERE t3.[labelno] = k.[labelno] AND t3.[vm] = 'YE' AND t3.[higher_par] IS NULL)
+      -- Ky bao cao tinh theo THOI DIEM TRA SERVICE (gio CI), giong del_time nhanh 1
+      AND rc.recert_time >= @from AND rc.recert_time < @to
+      ${excludeCostcenterClause(f, 'k')}
+      ${whereSvc}
+    ) u
+    ORDER BY u.tat_days DESC`;
   return query(text, params);
 }
 
@@ -665,6 +778,8 @@ async function qNotReconciled(range, f) {
           AND tc.[serialno] = k.[serialno]
           AND tc.[labelno] = k.[labelno]
       )
+      -- Bo qua neu da doi ung kieu TRA SERVICE (thao YA -> recertify CI @SHOPLOC)
+      AND NOT ${recertExists('k')}
       AND k.[mutation] BETWEEN @fromDay AND @toDay  -- loc tho theo index (sargable)
       AND ${amosToVN('k')} >= @from AND ${amosToVN('k')} < @to
       ${where}
@@ -851,6 +966,22 @@ async function qDashboardAgg(range, f) {
   const wNotRec = buildFilterClause(f, { station: 'k.[station]', store: 'k.[store]', department: deptK }, params);
   const wRetUS = buildFilterClause(f, { station: 'r.[station]', store: 'r.[store]', department: deptR }, params);
   const wNI = buildFilterClause(f, { station: 'k.[station]', store: 'k.[store]', department: deptK }, params);
+  // Nhanh "tra service": dept theo created_b2 (khong co real_us1)
+  const wSvc = buildFilterClause(f, { station: 'k.[station]', store: 'k.[store]', department: deptK }, params);
+
+  // Dieu kien chung cua nhanh TRA SERVICE (dung trong [0] va [6]):
+  // phieu xuat chua doi ung kieu tra US + co su kien lap YE (higher_par NULL)
+  // + lan recertify dau tien (rc) roi vao ky bao cao.
+  const svcWhere = `
+      AND LTRIM(RTRIM(ISNULL(k.[receiver], ''))) <> ''
+      AND NOT EXISTS (
+        SELECT 1 FROM [NQT].[dbo].[real_us1] r2
+        WHERE r2.[labelno] = k.[labelno] AND r2.[voucher_s] = k.[voucherno])
+      AND EXISTS (
+        SELECT 1 FROM [NQT].[dbo].[on_off] t3
+        WHERE t3.[labelno] = k.[labelno] AND t3.[vm] = 'YE' AND t3.[higher_par] IS NULL)
+      AND rc.recert_time >= @from AND rc.recert_time < @to
+      ${wSvc}`;
 
   const text = `
     -- [0] TAT theo Trung tam (toan bo, khong TOP) - TACH 2 THANH PHAN:
@@ -885,6 +1016,25 @@ async function qDashboardAgg(range, f) {
         AND LTRIM(RTRIM(ISNULL(k.[receiver], ''))) <> ''
         AND r.[del_time] >= @from AND r.[del_time] < @to
         ${wDept}
+
+      UNION ALL
+
+      -- Nhanh TRA SERVICE (recertify): tat_usret = gio CI - gio thao YA
+      SELECT ${deptK} AS department,
+             CAST(DATEDIFF(MINUTE, ${amosToVN('k')}, ye.install_time) AS float) / 1440.0 AS tat_install,
+             CAST(DATEDIFF(MINUTE, rc.removal_time, rc.recert_time) AS float) / 1440.0   AS tat_usret
+      FROM [NQT].[dbo].[kho_ser1] k
+      ${recertApply('k')}
+      OUTER APPLY (
+        SELECT TOP 1 ${amosToVN('o')} AS install_time
+        FROM [NQT].[dbo].[on_off] o
+        WHERE o.[labelno] = k.[labelno] AND o.[vm] = 'YE'
+          AND ${amosToVN('o')} > ${amosToVN('k')}
+        ORDER BY o.[mutation] ASC, o.[mutation_t] ASC
+      ) ye
+      ${signJoin('k.[created_b2]', 'sm')}
+      WHERE ${khoBase}
+        ${svcWhere}
     ) x
     GROUP BY x.department;
 
@@ -929,6 +1079,8 @@ async function qDashboardAgg(range, f) {
         SELECT 1 FROM [NQT].[dbo].[kho_ser1] tc
         WHERE tc.[vm] = 'TC' AND tc.[voucherno] LIKE 'P-CA-%'
           AND tc.[partno] = k.[partno] AND tc.[serialno] = k.[serialno] AND tc.[labelno] = k.[labelno])
+      -- Bo qua neu da doi ung kieu TRA SERVICE (recertify)
+      AND NOT ${recertExists('k')}
       AND k.[mutation] BETWEEN @fromDay AND @toDay
       AND ${amosToVN('k')} >= @from AND ${amosToVN('k')} < @to
       ${wNotRec}
@@ -963,17 +1115,27 @@ async function qDashboardAgg(range, f) {
       AND ${amosToVN('k')} >= @from AND ${amosToVN('k')} < @to
       ${wNI};
 
-    -- [6] Phan bo station cua tap da doi ung
-    SELECT k.[station] AS station, COUNT(*) AS cnt
-    FROM [NQT].[dbo].[kho_ser1] k
-    INNER JOIN [NQT].[dbo].[real_us1] r
-      ON k.[labelno] = r.[labelno] AND k.[voucherno] = r.[voucher_s]
-    ${signJoin('r.[action_per]', 'sm')}
-    WHERE ${khoBase}
-      AND LTRIM(RTRIM(ISNULL(k.[receiver], ''))) <> ''
-      AND r.[del_time] >= @from AND r.[del_time] < @to
-      ${wDept}
-    GROUP BY k.[station];`;
+    -- [6] Phan bo station cua tap da doi ung (tra unservice + tra service)
+    SELECT s.station AS station, COUNT(*) AS cnt
+    FROM (
+      SELECT k.[station] AS station
+      FROM [NQT].[dbo].[kho_ser1] k
+      INNER JOIN [NQT].[dbo].[real_us1] r
+        ON k.[labelno] = r.[labelno] AND k.[voucherno] = r.[voucher_s]
+      ${signJoin('r.[action_per]', 'sm')}
+      WHERE ${khoBase}
+        AND LTRIM(RTRIM(ISNULL(k.[receiver], ''))) <> ''
+        AND r.[del_time] >= @from AND r.[del_time] < @to
+        ${wDept}
+      UNION ALL
+      SELECT k.[station]
+      FROM [NQT].[dbo].[kho_ser1] k
+      ${recertApply('k')}
+      ${signJoin('k.[created_b2]', 'sm')}
+      WHERE ${khoBase}
+        ${svcWhere}
+    ) s
+    GROUP BY s.station;`;
 
   const [deptAgg, cuvtAgg, retAgg, notRecAgg, retUSAgg, niAgg, stationAgg] = await queryMulti(text, params);
   return { deptAgg, cuvtAgg: cuvtAgg[0], retAgg, notRecAgg, retUSAgg, niAgg: niAgg[0], stationAgg };
