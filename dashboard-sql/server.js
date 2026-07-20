@@ -324,6 +324,33 @@ function recertApply(kAlias) {
     ) rc`;
 }
 
+/** Phieu xuat CHUA bi huy/hoan kho: khong co dong TC voucher 'P-CA-<so PS>'
+ *  CUNG SO PHIEU + labelno (TRANSFER CANCELLED trong AMOS). */
+function issueNotCancelled(a) {
+  return `NOT EXISTS (
+        SELECT 1 FROM [NQT].[dbo].[kho_ser1] tc
+        WHERE tc.[vm] = 'TC' AND tc.[voucherno] LIKE 'P-CA-%'
+          AND tc.[labelno] = ${a}.[labelno]
+          AND RTRIM(tc.[voucherno]) = 'P-CA-' + SUBSTRING(RTRIM(${a}.[voucherno]), 3, 50))`;
+}
+
+/** Dieu kien bo sung cho nhanh TRA SERVICE (dat SAU recertApply -> co rc.*):
+ *  (1) phieu xuat chua bi huy (TRANSFER CANCELLED) - phieu huy khong tinh TAT;
+ *  (2) chi ghep lan recertify (CI) voi PHIEU XUAT GAN NHAT truoc gio CI:
+ *      1 thiet bi (labelno) xuat nhieu lan -> chi lan xuat moi nhat duoc tinh,
+ *      tranh ghep CI moi voi phieu xuat cu lam TAT phong dai (215+ ngay). */
+function svcLatestIssueOnly(kAlias) {
+  return `
+      AND ${issueNotCancelled(kAlias)}
+      AND NOT EXISTS (
+        SELECT 1 FROM [NQT].[dbo].[kho_ser1] k2
+        WHERE k2.[vm] = 'T' AND k2.[voucherno] LIKE 'P-%'
+          AND k2.[labelno] = ${kAlias}.[labelno]
+          AND ${amosToVN('k2')} > ${amosToVN(kAlias)}   -- phieu xuat MOI HON
+          AND ${amosToVN('k2')} < rc.recert_time        -- van truoc gio CI
+          AND ${issueNotCancelled('k2')})`;
+}
+
 /** Dieu kien: phieu xuat da duoc doi ung kieu TRA SERVICE (recertify).
  *  Tra ve bieu thuc boolean co ngoac -> co the dung voi NOT (...) . */
 function recertExists(kAlias) {
@@ -536,6 +563,7 @@ async function qTatDepartments(range, f) {
         WHERE t3.[labelno] = k.[labelno] AND t3.[vm] = 'YE' AND t3.[higher_par] IS NULL)
       -- Ky bao cao tinh theo THOI DIEM TRA SERVICE (gio CI), giong del_time nhanh 1
       AND rc.recert_time >= @from AND rc.recert_time < @to
+      ${svcLatestIssueOnly('k')}
       ${excludeCostcenterClause(f, 'k')}
       ${whereSvc}
     ) u
@@ -971,7 +999,8 @@ async function qDashboardAgg(range, f) {
 
   // Dieu kien chung cua nhanh TRA SERVICE (dung trong [0] va [6]):
   // phieu xuat chua doi ung kieu tra US + co su kien lap YE (higher_par NULL)
-  // + lan recertify dau tien (rc) roi vao ky bao cao.
+  // + lan recertify dau tien (rc) roi vao ky bao cao
+  // + phieu chua bi huy & la PHIEU XUAT GAN NHAT truoc gio CI (svcLatestIssueOnly).
   const svcWhere = `
       AND LTRIM(RTRIM(ISNULL(k.[receiver], ''))) <> ''
       AND NOT EXISTS (
@@ -981,6 +1010,7 @@ async function qDashboardAgg(range, f) {
         SELECT 1 FROM [NQT].[dbo].[on_off] t3
         WHERE t3.[labelno] = k.[labelno] AND t3.[vm] = 'YE' AND t3.[higher_par] IS NULL)
       AND rc.recert_time >= @from AND rc.recert_time < @to
+      ${svcLatestIssueOnly('k')}
       ${wSvc}`;
 
   const text = `

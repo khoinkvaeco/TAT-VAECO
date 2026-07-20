@@ -606,4 +606,26 @@ WHERE k.vm = 'T' AND k.voucherno LIKE 'P-%'
   AND EXISTS (SELECT 1 FROM NQT.dbo.on_off t3                -- da tung lap (T3)
               WHERE t3.labelno = k.labelno AND t3.vm = 'YE' AND t3.higher_par IS NULL)
   AND rc.recert_time >= @from AND rc.recert_time < @to
+  -- Phieu xuat DA BI HUY (TRANSFER CANCELLED: TC 'P-CA-<so PS>' cung phieu
+  -- + labelno) khong tinh tra service
+  AND NOT EXISTS (SELECT 1 FROM NQT.dbo.kho_ser1 tc
+                  WHERE tc.vm = 'TC' AND tc.voucherno LIKE 'P-CA-%'
+                    AND tc.labelno = k.labelno
+                    AND RTRIM(tc.voucherno) = 'P-CA-' + SUBSTRING(RTRIM(k.voucherno), 3, 50))
+  -- LAY NGAY XUAT GAN NHAT: chi ghep CI voi phieu xuat (hop le) MOI NHAT
+  -- truoc gio recertify; neu co phieu xuat moi hon cung labelno truoc gio CI
+  -- thi bo dong nay (tranh ghep CI moi voi phieu cu -> TAT phong dai)
+  AND NOT EXISTS (
+      SELECT 1 FROM NQT.dbo.kho_ser1 k2
+      CROSS APPLY (SELECT DATEADD(HOUR, @tz, DATEADD(MILLISECOND,
+          TRY_CONVERT(int, TRY_CONVERT(bigint, TRY_CONVERT(float, k2.mutation_t)) % 86400000),
+          DATEADD(DAY, TRY_CONVERT(int, TRY_CONVERT(float, k2.mutation)), @epoch)))) v2(time_vn)
+      WHERE k2.vm = 'T' AND k2.voucherno LIKE 'P-%'
+        AND k2.labelno = k.labelno
+        AND v2.time_vn > v.time_vn                 -- phieu xuat MOI HON
+        AND v2.time_vn < rc.recert_time            -- van truoc gio CI
+        AND NOT EXISTS (SELECT 1 FROM NQT.dbo.kho_ser1 tc2   -- va chua bi huy
+                        WHERE tc2.vm = 'TC' AND tc2.voucherno LIKE 'P-CA-%'
+                          AND tc2.labelno = k2.labelno
+                          AND RTRIM(tc2.voucherno) = 'P-CA-' + SUBSTRING(RTRIM(k2.voucherno), 3, 50)))
 ORDER BY tat_tong_ngay DESC;
