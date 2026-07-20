@@ -106,6 +106,24 @@ WHERE k.vm = 'T' AND k.voucherno LIKE 'P-%'
   -- AND NOT (LTRIM(RTRIM(ISNULL(k.receiver,''))) LIKE '%[0-9]%'
   --      AND LTRIM(RTRIM(ISNULL(k.receiver,''))) NOT LIKE '%[^0-9.,]%')
   AND r.del_time >= @from AND r.del_time < @to
+  -- ==== CHONG TRUNG LAP cap XUAT <-> TRA US ====
+  -- Phieu xuat phai TRUOC gio tra US
+  AND v.time_vn < r.del_time
+  -- Nhieu dong T cung (labelno, voucherno): chi lay dong XUAT GAN NHAT truoc gio tra
+  AND NOT EXISTS (
+      SELECT 1 FROM NQT.dbo.kho_ser1 k2
+      WHERE k2.vm = 'T' AND k2.labelno = k.labelno AND k2.voucherno = k.voucherno
+        AND DATEADD(HOUR, @tz, DATEADD(MILLISECOND,
+            TRY_CONVERT(int, TRY_CONVERT(bigint, TRY_CONVERT(float, k2.mutation_t)) % 86400000),
+            DATEADD(DAY, TRY_CONVERT(int, TRY_CONVERT(float, k2.mutation)), @epoch))) < r.del_time
+        AND (k2.mutation > k.mutation
+             OR (k2.mutation = k.mutation AND k2.mutation_t > k.mutation_t)))
+  -- Nhieu dong tra US cung (labelno, voucher_s): chi lay dong tra MOI NHAT
+  AND NOT EXISTS (
+      SELECT 1 FROM NQT.dbo.real_us1 r3
+      WHERE r3.labelno = r.labelno AND r3.voucher_s = r.voucher_s
+        AND (r3.del_time > r.del_time
+             OR (r3.del_time = r.del_time AND r3.historyno_ > r.historyno_)))
 ORDER BY tat_ngay DESC;
 
 ------------------------------------------------------------------------------
@@ -165,6 +183,21 @@ FROM (
       -- AND NOT (LTRIM(RTRIM(ISNULL(k.receiver,''))) LIKE '%[0-9]%'
       --      AND LTRIM(RTRIM(ISNULL(k.receiver,''))) NOT LIKE '%[^0-9.,]%')
       AND r.del_time >= @from AND r.del_time < @to
+      -- CHONG TRUNG LAP cap xuat<->tra US (giong muc A):
+      AND v.time_vn < r.del_time
+      AND NOT EXISTS (
+          SELECT 1 FROM NQT.dbo.kho_ser1 k2
+          WHERE k2.vm = 'T' AND k2.labelno = k.labelno AND k2.voucherno = k.voucherno
+            AND DATEADD(HOUR, @tz, DATEADD(MILLISECOND,
+                TRY_CONVERT(int, TRY_CONVERT(bigint, TRY_CONVERT(float, k2.mutation_t)) % 86400000),
+                DATEADD(DAY, TRY_CONVERT(int, TRY_CONVERT(float, k2.mutation)), @epoch))) < r.del_time
+            AND (k2.mutation > k.mutation
+                 OR (k2.mutation = k.mutation AND k2.mutation_t > k.mutation_t)))
+      AND NOT EXISTS (
+          SELECT 1 FROM NQT.dbo.real_us1 r3
+          WHERE r3.labelno = r.labelno AND r3.voucher_s = r.voucher_s
+            AND (r3.del_time > r.del_time
+                 OR (r3.del_time = r.del_time AND r3.historyno_ > r.historyno_)))
 ) x
 GROUP BY x.trung_tam
 ORDER BY avg_install DESC;

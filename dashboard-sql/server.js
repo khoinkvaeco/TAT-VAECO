@@ -329,6 +329,33 @@ function recertApply(kAlias) {
     ) rc`;
 }
 
+/** CHONG TRUNG LAP cho cap XUAT <-> TRA US (alias co dinh: k = kho_ser1,
+ *  r = real_us1). 1 cap (labelno, voucher) co the co NHIEU dong booking
+ *  (lich su T cu con sot / dong tra ghi nhieu lan) -> join nhan ban dong
+ *  va dinh ca phieu xuat cu (vd xuat 28/02 ghep tra 12/07 trong khi da co
+ *  dong doi ung dung). Quy tac:
+ *   1) phieu xuat phai TRUOC gio tra US;
+ *   2) nhieu dong T cung (labelno, voucherno) -> chi lay dong XUAT GAN NHAT
+ *      truoc gio tra (nguyen tac "lay ngay xuat gan nhat");
+ *   3) nhieu dong tra cung (labelno, voucher_s) -> chi lay dong tra MOI NHAT
+ *      (del_time lon nhat; hoa thi historyno_ lon nhat). */
+function usPairDedup() {
+  return `
+      AND ${amosToVN('k')} < r.[del_time]
+      AND NOT EXISTS (
+        SELECT 1 FROM [NQT].[dbo].[kho_ser1] k2
+        WHERE k2.[vm] = 'T' AND k2.[labelno] = k.[labelno]
+          AND k2.[voucherno] = k.[voucherno]
+          AND ${amosToVN('k2')} < r.[del_time]
+          AND (k2.[mutation] > k.[mutation]
+               OR (k2.[mutation] = k.[mutation] AND k2.[mutation_t] > k.[mutation_t])))
+      AND NOT EXISTS (
+        SELECT 1 FROM [NQT].[dbo].[real_us1] r3
+        WHERE r3.[labelno] = r.[labelno] AND r3.[voucher_s] = r.[voucher_s]
+          AND (r3.[del_time] > r.[del_time]
+               OR (r3.[del_time] = r.[del_time] AND r3.[historyno_] > r.[historyno_])))`;
+}
+
 /** Phieu xuat CHUA bi huy/hoan kho: khong co dong TC voucher 'P-CA-<so PS>'
  *  CUNG SO PHIEU + labelno (TRANSFER CANCELLED trong AMOS). */
 function issueNotCancelled(a) {
@@ -521,6 +548,7 @@ async function qTatDepartments(range, f) {
       AND UPPER(LTRIM(RTRIM(ISNULL(k.[store], '')))) NOT IN ('MAIN','3RD')  -- bo qua store MAIN/3RD
       AND UPPER(LTRIM(RTRIM(ISNULL(k.[condition], '')))) <> 'US'  -- bo qua condition US
       AND r.[del_time] >= @from AND r.[del_time] < @to
+      ${usPairDedup()}
       ${excludeCostcenterClause(f, 'k')}
       ${where}
 
@@ -1066,6 +1094,7 @@ async function qDashboardAgg(range, f) {
       WHERE ${khoBase}
         AND LTRIM(RTRIM(ISNULL(k.[receiver], ''))) <> ''
         AND r.[del_time] >= @from AND r.[del_time] < @to
+        ${usPairDedup()}
         ${wDept}
 
       UNION ALL
@@ -1177,6 +1206,7 @@ async function qDashboardAgg(range, f) {
       WHERE ${khoBase}
         AND LTRIM(RTRIM(ISNULL(k.[receiver], ''))) <> ''
         AND r.[del_time] >= @from AND r.[del_time] < @to
+        ${usPairDedup()}
         ${wDept}
       UNION ALL
       SELECT k.[station]
