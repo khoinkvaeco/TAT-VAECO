@@ -1158,6 +1158,13 @@ function buildDashboardFromAgg(range, agg) {
   const reconciled = sum(agg.deptAgg, (x) => x.cnt);
   const notRec = sum(agg.notRecAgg, (x) => x.cnt);
 
+  // KHONG tinh TAT install / US return cho CUVT (TAT cua CUVT do rieng bang
+  // KPI "TAT CUVT" = reci - del). Chi loai khoi TRUNG BINH TAT + bieu do cot;
+  // cac so dem (Thiet bi xuat kho, Ty le doi ung, phan bo...) van giu CUVT.
+  const deptTat = agg.deptAgg.filter(
+    (x) => String(x.department || '').trim().toUpperCase() !== 'CUVT'
+  );
+
   // So luong CUVT: reci = so thiet bi da NHAN (real_us1.reci_time hop le, cuvtAgg.cnt);
   // del = tong so thiet bi da GIAO/tra unservice trong ky (real_us1.del_time,
   // = tong retUSAgg.cnt - cung dieu kien filter voi cuvtAgg nen so sanh duoc truc tiep).
@@ -1165,9 +1172,9 @@ function buildDashboardFromAgg(range, agg) {
   const cntDel = sum(agg.retUSAgg, (x) => x.cnt);
 
   const kpis = {
-    // TAT tach 2 thanh phan (thay cho TAT TB tong truoc day)
-    tatInstallAvg: round1(wavgBy(agg.deptAgg, 'avg_install', 'cnt_install')),
-    tatUsReturnAvg: round1(wavgBy(agg.deptAgg, 'avg_usret', 'cnt_usret')),
+    // TAT tach 2 thanh phan (thay cho TAT TB tong truoc day) - KHONG gom CUVT
+    tatInstallAvg: round1(wavgBy(deptTat, 'avg_install', 'cnt_install')),
+    tatUsReturnAvg: round1(wavgBy(deptTat, 'avg_usret', 'cnt_usret')),
     tatCuvtAvg: round1(agg.cuvtAgg?.avg_tat || 0),
     tatReturnStoreAvg: round1(wavg(agg.retAgg)),
     countIssued: reconciled + notRec,
@@ -1178,8 +1185,8 @@ function buildDashboardFromAgg(range, agg) {
     cntDel,
   };
 
-  // Bieu do cot theo Trung tam: 2 series (install / US return)
-  const byDept = [...agg.deptAgg].sort((a, b) => (b.avg_install || 0) - (a.avg_install || 0));
+  // Bieu do cot theo Trung tam: 2 series (install / US return) - KHONG gom CUVT
+  const byDept = [...deptTat].sort((a, b) => (b.avg_install || 0) - (a.avg_install || 0));
   const barDept = {
     labels: byDept.map((x) => x.department),
     install: byDept.map((x) => round1(x.avg_install)),

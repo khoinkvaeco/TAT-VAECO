@@ -316,7 +316,8 @@ function dashboard(range, f) {
       avgU: g.cu ? g.su / g.cu : 0, cntU: g.cu,
     }));
   };
-  const byDept2 = grp2(dept).sort((a, b) => b.avgI - a.avgI);
+  // KPI/bieu do TAT install & US return: KHONG gom CUVT (giong server that)
+  const byDept2 = grp2(dept.filter((r) => r.department !== 'CUVT')).sort((a, b) => b.avgI - a.avgI);
   const wavg = (arr, aF, cF) => {
     const c = arr.reduce((s, x) => s + x[cF], 0);
     return c ? arr.reduce((s, x) => s + x[aF] * x[cF], 0) / c : 0;

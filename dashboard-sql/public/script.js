@@ -503,11 +503,15 @@ function setKpiCard(idx, value) {
   if (card) card.innerHTML = `${value} <span class="kpi-unit">ngày</span>`;
 }
 
-/** Tính lại TAT install & US return, bỏ các dòng đã tích checkbox "Bỏ qua". */
+/** Tính lại TAT install & US return, bỏ các dòng đã tích checkbox "Bỏ qua".
+ *  LƯU Ý: loại luôn dòng CUVT khỏi trung bình — giống cách server tính 2 card
+ *  KPI (TAT của CUVT đã có card "TAT CUVT" riêng). */
 function recalcTat() {
   if (!mainTable) return;
   const all = mainTable.getData();
-  const kept = all.filter((r) => !excludedKeys.has(rowKey(r)));
+  const kept = all.filter(
+    (r) => !excludedKeys.has(rowKey(r)) && String(r.department || '').trim().toUpperCase() !== 'CUVT'
+  );
   const newInstall = avgField(kept, 'tat_install_days');
   const newUsret = avgField(kept, 'tat_usreturn_days');
 

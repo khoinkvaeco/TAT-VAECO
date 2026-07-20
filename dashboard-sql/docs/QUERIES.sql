@@ -113,6 +113,9 @@ ORDER BY tat_ngay DESC;
 --    avg_install / avg_us_return khop card "TAT install" / "TAT US return" +
 --    bieu do cot 2 series dau tien tren Dashboard. AVG() tu bo NULL -> dong
 --    thieu su kien lap/thao KHONG tinh vao trung binh.
+--    LUU Y khi doi chieu: 2 card KPI + bieu do cot tren dashboard KHONG gom
+--    CUVT (TAT cua CUVT do rieng bang card "TAT CUVT") -> bo dong
+--    trung_tam='CUVT' trong ket qua duoi day khi so voi dashboard.
 ------------------------------------------------------------------------------
 SELECT x.trung_tam,
        COUNT(*) AS so_thiet_bi,
