@@ -308,11 +308,16 @@ function excludeCostcenterClause(f, alias) {
 // ---------------------------------------------------------------------------
 
 /** CROSS APPLY lay lan recertify DAU TIEN sau gio xuat kho cua phieu xuat.
- *  Tra ve rc.removal_time (gio thao YA) va rc.recert_time (gio CI). */
+ *  Tra ve rc.removal_time (gio thao YA), rc.recert_time (gio CI) va
+ *  rc.partno_off / rc.serialno_off (thiet bi THAO xuong - tu dong YA). */
 function recertApply(kAlias) {
   return `
     CROSS APPLY (
-      SELECT TOP 1 t1.[mut_t] AS removal_time, t2.[mut_t] AS recert_time
+      SELECT TOP 1
+        t1.[partno]   AS partno_off,
+        t1.[serialno] AS serialno_off,
+        t1.[mut_t]    AS removal_time,
+        t2.[mut_t]    AS recert_time
       FROM [NQT].[dbo].[on_off] t1
       INNER JOIN [NQT].[dbo].[on_off] t2
         ON t2.[psn] = t1.[psn] AND t2.[orderno] = t1.[orderno]
@@ -441,7 +446,9 @@ function resolveRange(q) {
  *    van trong -> 'PA'. (Neu co khac biet don vi thi SIGN la nguon chuan.)
  */
 async function qTatDepartments(range, f) {
-  const params = { from: range.from, to: range.to, tzOffset: CONFIG.tzOffset, top: CONFIG.maxRows };
+  // amosDayParams: loc tho sargable theo [mutation] cho nhanh "tra service"
+  // (nhanh nay xet PHIEU XUAT trong ky, khong quet toan bo lich su)
+  const params = { from: range.from, to: range.to, tzOffset: CONFIG.tzOffset, top: CONFIG.maxRows, ...amosDayParams(range) };
   // Trung tam: real_us1.department -> mutator('PA'/SIGN) -> 'PA'.
   const dept = deptFromReal('r', 'sm');
   let where = buildFilterClause(
@@ -525,8 +532,8 @@ async function qTatDepartments(range, f) {
       k.[event_perf], k.[partno], k.[serialno], k.[labelno], k.[descriptio],
       k.[receiver], k.[station], k.[store1],
       k.[voucherno], k.[picking_li],
-      NULL,                              -- partno_off (khong co dong real_us1)
-      NULL,                              -- serialno_off
+      rc.[partno_off],                   -- thiet bi thao (tu dong YA cua chuoi recertify)
+      rc.[serialno_off],
       k.[created_b2],                    -- staff = nguoi lap phieu xuat
       ${deptSvc},
       ${amosToVN('k')},
@@ -553,16 +560,24 @@ async function qTatDepartments(range, f) {
       AND LTRIM(RTRIM(ISNULL(k.[costcenter], ''))) <> 'VN-SPL'
       AND UPPER(LTRIM(RTRIM(ISNULL(k.[store], '')))) NOT IN ('MAIN','3RD')
       AND UPPER(LTRIM(RTRIM(ISNULL(k.[condition], '')))) <> 'US'
-      -- Chi lay phieu CHUA doi ung kieu tra unservice (tranh trung nhanh 1)
+      -- CHI XET tap "CHUA DOI UNG TRONG KY" (nhu bao cao Chua doi ung):
+      -- phieu xuat trong ky, chua tra US, chua hoan kho, khong phai CUVT.
+      -- KHONG quet toan bo lich su phieu xuat.
       AND NOT EXISTS (
         SELECT 1 FROM [NQT].[dbo].[real_us1] r2
         WHERE r2.[labelno] = k.[labelno] AND r2.[voucher_s] = k.[voucherno])
+      AND NOT EXISTS (
+        SELECT 1 FROM [NQT].[dbo].[kho_ser1] tc
+        WHERE tc.[vm] = 'TC' AND tc.[voucherno] LIKE 'P-CA-%'
+          AND tc.[partno] = k.[partno] AND tc.[serialno] = k.[serialno] AND tc.[labelno] = k.[labelno])
+      AND ${deptSvc} <> 'CUVT'
       -- Thiet bi phai co su kien LAP (YE, higher_par NULL) - theo T3 cua SQL goc
       AND EXISTS (
         SELECT 1 FROM [NQT].[dbo].[on_off] t3
         WHERE t3.[labelno] = k.[labelno] AND t3.[vm] = 'YE' AND t3.[higher_par] IS NULL)
-      -- Ky bao cao tinh theo THOI DIEM TRA SERVICE (gio CI), giong del_time nhanh 1
-      AND rc.recert_time >= @from AND rc.recert_time < @to
+      -- Ky bao cao = PHIEU XUAT trong ky (mutation loc tho theo index truoc)
+      AND k.[mutation] BETWEEN @fromDay AND @toDay
+      AND ${amosToVN('k')} >= @from AND ${amosToVN('k')} < @to
       ${svcLatestIssueOnly('k')}
       ${excludeCostcenterClause(f, 'k')}
       ${whereSvc}
@@ -997,19 +1012,25 @@ async function qDashboardAgg(range, f) {
   // Nhanh "tra service": dept theo created_b2 (khong co real_us1)
   const wSvc = buildFilterClause(f, { station: 'k.[station]', store: 'k.[store]', department: deptK }, params);
 
-  // Dieu kien chung cua nhanh TRA SERVICE (dung trong [0] va [6]):
-  // phieu xuat chua doi ung kieu tra US + co su kien lap YE (higher_par NULL)
-  // + lan recertify dau tien (rc) roi vao ky bao cao
+  // Dieu kien chung cua nhanh TRA SERVICE (dung trong [0] va [6]).
+  // CHI XET tap "CHUA DOI UNG TRONG KY" (phieu xuat trong ky, chua tra US,
+  // chua hoan kho, khong phai CUVT) - KHONG quet toan bo lich su phieu xuat.
   // + phieu chua bi huy & la PHIEU XUAT GAN NHAT truoc gio CI (svcLatestIssueOnly).
   const svcWhere = `
       AND LTRIM(RTRIM(ISNULL(k.[receiver], ''))) <> ''
       AND NOT EXISTS (
         SELECT 1 FROM [NQT].[dbo].[real_us1] r2
         WHERE r2.[labelno] = k.[labelno] AND r2.[voucher_s] = k.[voucherno])
+      AND NOT EXISTS (
+        SELECT 1 FROM [NQT].[dbo].[kho_ser1] tc
+        WHERE tc.[vm] = 'TC' AND tc.[voucherno] LIKE 'P-CA-%'
+          AND tc.[partno] = k.[partno] AND tc.[serialno] = k.[serialno] AND tc.[labelno] = k.[labelno])
+      AND ${deptK} <> 'CUVT'
       AND EXISTS (
         SELECT 1 FROM [NQT].[dbo].[on_off] t3
         WHERE t3.[labelno] = k.[labelno] AND t3.[vm] = 'YE' AND t3.[higher_par] IS NULL)
-      AND rc.recert_time >= @from AND rc.recert_time < @to
+      AND k.[mutation] BETWEEN @fromDay AND @toDay
+      AND ${amosToVN('k')} >= @from AND ${amosToVN('k')} < @to
       ${svcLatestIssueOnly('k')}
       ${wSvc}`;
 

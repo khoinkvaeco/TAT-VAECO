@@ -560,9 +560,12 @@ ORDER BY T2.historyno_ DESC;
 --      dashboard dung de (a) loai khoi "Chua doi ung" va (b) tinh TAT:
 --      TAT install   = gio lap YE  - gio xuat kho
 --      TAT US return = gio CI      - gio thao YA   (CI thay cho del_time)
---      Ky bao cao tinh theo GIO RECERTIFY (rc.recert_time).
+--      PHAM VI: chi xet tap "CHUA DOI UNG TRONG KY" (PHIEU XUAT trong ky,
+--      chua tra US, chua hoan kho, khong phai CUVT) — KHONG quet toan bo
+--      lich su phieu xuat. Ky bao cao tinh theo GIO XUAT KHO.
 SELECT
     k.partno, k.serialno, k.labelno, k.descriptio AS mo_ta,
+    rc.partno_off, rc.serialno_off,                -- thiet bi THAO (tu dong YA)
     k.station, k.store1 AS store, k.voucherno AS pickslip,
     v.time_vn        AS gio_xuat_vn,
     ye.install_time  AS gio_lap,
@@ -576,7 +579,11 @@ CROSS APPLY (SELECT DATEADD(HOUR, @tz, DATEADD(MILLISECOND,
     TRY_CONVERT(int, TRY_CONVERT(bigint, TRY_CONVERT(float, k.mutation_t)) % 86400000),
     DATEADD(DAY, TRY_CONVERT(int, TRY_CONVERT(float, k.mutation)), @epoch)))) v(time_vn)
 CROSS APPLY (                                -- lan recertify DAU TIEN sau gio xuat
-    SELECT TOP 1 t1.mut_t AS removal_time, t2.mut_t AS recert_time
+    SELECT TOP 1
+        t1.partno   AS partno_off,               -- thiet bi thao xuong (YA)
+        t1.serialno AS serialno_off,
+        t1.mut_t    AS removal_time,
+        t2.mut_t    AS recert_time
     FROM NQT.dbo.on_off t1
     JOIN NQT.dbo.on_off t2
       ON t2.psn = t1.psn AND t2.orderno = t1.orderno
@@ -603,9 +610,15 @@ WHERE k.vm = 'T' AND k.voucherno LIKE 'P-%'
   AND UPPER(LTRIM(RTRIM(ISNULL(k.condition, '')))) <> 'US'
   AND NOT EXISTS (SELECT 1 FROM NQT.dbo.real_us1 r2          -- chua tra US
                   WHERE r2.labelno = k.labelno AND r2.voucher_s = k.voucherno)
+  AND NOT EXISTS (SELECT 1 FROM NQT.dbo.kho_ser1 tc          -- chua hoan kho
+                  WHERE tc.vm = 'TC' AND tc.voucherno LIKE 'P-CA-%'
+                    AND tc.partno = k.partno AND tc.serialno = k.serialno
+                    AND tc.labelno = k.labelno)
   AND EXISTS (SELECT 1 FROM NQT.dbo.on_off t3                -- da tung lap (T3)
               WHERE t3.labelno = k.labelno AND t3.vm = 'YE' AND t3.higher_par IS NULL)
-  AND rc.recert_time >= @from AND rc.recert_time < @to
+  -- Ky bao cao = PHIEU XUAT trong ky (khong quet toan bo lich su)
+  AND k.mutation BETWEEN @fromDay AND @toDay
+  AND v.time_vn >= @from AND v.time_vn < @to
   -- Phieu xuat DA BI HUY (TRANSFER CANCELLED: TC 'P-CA-<so PS>' cung phieu
   -- + labelno) khong tinh tra service
   AND NOT EXISTS (SELECT 1 FROM NQT.dbo.kho_ser1 tc
