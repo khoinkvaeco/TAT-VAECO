@@ -37,6 +37,10 @@ const CONFIG = {
   // Xac dinh tu moc neo: hom nay 2026-07-08 = AMOS 19913 -> epoch = 1971-12-31.
   amosEpoch: process.env.AMOS_DATE_EPOCH || '1971-12-31',
   demoMode: String(process.env.DEMO_MODE || 'false').toLowerCase() === 'true',
+  // Cache bang SIGN (Oracle linked server DWH_DB) vao bang local NQT.dbo.SIGN_CACHE
+  // de moi query khong phai keo qua linked server (cham). Tu lam moi dinh ky.
+  signCache: String(process.env.SIGN_CACHE || 'true').toLowerCase() !== 'false',
+  signCacheMinutes: parseInt(process.env.SIGN_CACHE_MINUTES || '360', 10), // mac dinh 6h
 };
 
 // Cau hinh ket noi mssql - LAY TU BIEN MOI TRUONG, khong hardcode password.
@@ -136,6 +140,48 @@ async function queryMulti(text, params = {}) {
 }
 
 // ---------------------------------------------------------------------------
+// 2b. CACHE BANG SIGN VE BANG LOCAL (tang toc: bo truy van linked server Oracle)
+//     Moi lan load dashboard co ~10 luot join SIGN; truoc day moi luot deu keo
+//     [DWH_DB]..[STG_AMOS].[SIGN] qua linked server -> rat cham. Nay:
+//       - Dinh ky do SIGN (da GROUP BY USER_SIGN) vao bang local
+//         [NQT].[dbo].[SIGN_CACHE] (co clustered index theo USER_SIGN).
+//       - signJoin() se join bang local; neu chua/refresh loi -> tu dong
+//         fallback ve join linked server truc tiep nhu cu (khong hong app).
+//     Ky thuat: keo ve #temp truoc (chi la READ tu linked server, khong can
+//     MSDTC), roi TRUNCATE + INSERT local -> khong co distributed transaction.
+// ---------------------------------------------------------------------------
+let signCacheReady = false;
+
+async function refreshSignCache() {
+  if (CONFIG.demoMode || !CONFIG.signCache) return;
+  try {
+    await query(`
+      SELECT [USER_SIGN], MAX([DEPARTMENT]) AS [DEPARTMENT]
+      INTO #sign_new
+      FROM [DWH_DB]..[STG_AMOS].[SIGN]
+      GROUP BY [USER_SIGN];
+
+      IF OBJECT_ID('[NQT].[dbo].[SIGN_CACHE]', 'U') IS NULL
+      BEGIN
+        SELECT [USER_SIGN], [DEPARTMENT] INTO [NQT].[dbo].[SIGN_CACHE] FROM #sign_new;
+        CREATE CLUSTERED INDEX [IX_SIGN_CACHE_USER] ON [NQT].[dbo].[SIGN_CACHE]([USER_SIGN]);
+      END
+      ELSE
+      BEGIN
+        TRUNCATE TABLE [NQT].[dbo].[SIGN_CACHE];
+        INSERT INTO [NQT].[dbo].[SIGN_CACHE] ([USER_SIGN], [DEPARTMENT])
+        SELECT [USER_SIGN], [DEPARTMENT] FROM #sign_new;
+      END`);
+    signCacheReady = true;
+    console.log(`[SIGN] Da lam moi SIGN_CACHE (chu ky ${CONFIG.signCacheMinutes} phut).`);
+  } catch (err) {
+    // Khong co quyen tao bang / linked server loi -> dung duong cu (linked server)
+    signCacheReady = false;
+    console.warn('[SIGN] Khong lam moi duoc SIGN_CACHE, tam dung linked server truc tiep:', err.message);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // 3. CAC MANH SQL DUNG CHUNG (nghiep vu)
 // ---------------------------------------------------------------------------
 
@@ -211,6 +257,10 @@ function pickDept(sources) {
  * @param {string} alias     alias cua bang con (vd 'sm')
  */
 function signJoin(staffCol, alias) {
+  // Uu tien bang cache local (nhanh, co index) - xem refreshSignCache().
+  if (signCacheReady) {
+    return `LEFT JOIN [NQT].[dbo].[SIGN_CACHE] ${alias} ON ${alias}.[USER_SIGN] = ${staffCol}`;
+  }
   return `LEFT JOIN (
       SELECT [USER_SIGN], MAX([DEPARTMENT]) AS [DEPARTMENT]
       FROM [DWH_DB]..[STG_AMOS].[SIGN]
@@ -786,10 +836,8 @@ async function qRemovedNotReturned(range, f) {
     FROM [NQT].[dbo].[on_off] o
     LEFT JOIN [NQT].[dbo].[real_us1] r
       ON o.[labelno] = r.[labelno]   -- so sanh so truc tiep (cot so; RTRIM lam float->chuoi 6 chu so -> ghep nham)
-    LEFT JOIN [DWH_DB]..[STG_AMOS].ROTABLES RO ON o.PSN = RO.PSN 
-      LEFT JOIN (SELECT USER_SIGN, MAX(DEPARTMENT) AS DEPARTMENT
-           FROM DWH_DB..STG_AMOS.SIGN GROUP BY USER_SIGN) sm
-  ON sm.USER_SIGN = o.created_by
+    LEFT JOIN [DWH_DB]..[STG_AMOS].ROTABLES RO ON o.PSN = RO.PSN
+    ${signJoin('o.[created_by]', 'sm')}
     WHERE o.[vm] = 'YA' AND RO.MUTATION > @fromDay and RO.condition ='US'
       AND r.[historyno_] IS NULL
       AND o.[mutation] BETWEEN @fromDay AND @toDay  -- loc tho theo index (sargable)
@@ -1651,8 +1699,9 @@ app.get(
       `SELECT DISTINCT LTRIM(RTRIM([store])) AS v FROM [NQT].[dbo].[kho_ser1]
        WHERE [store] IS NOT NULL AND LTRIM(RTRIM([store])) <> '' ORDER BY v`
     );
+    const signSrc = signCacheReady ? '[NQT].[dbo].[SIGN_CACHE]' : '[DWH_DB]..[STG_AMOS].[SIGN]';
     const departments = await query(
-      `SELECT DISTINCT LTRIM(RTRIM([DEPARTMENT])) AS v FROM [DWH_DB]..[STG_AMOS].[SIGN]
+      `SELECT DISTINCT LTRIM(RTRIM([DEPARTMENT])) AS v FROM ${signSrc}
        WHERE [DEPARTMENT] IS NOT NULL AND LTRIM(RTRIM([DEPARTMENT])) <> '' ORDER BY v`
     );
     res.json({
@@ -1832,5 +1881,11 @@ app.listen(CONFIG.port, () => {
     getPool().catch((err) =>
       console.error('[DB] Chua ket noi duoc SQL Server:', err.message)
     );
+    // Lam moi SIGN_CACHE ngay khi khoi dong + dinh ky (bo linked server khoi query)
+    if (CONFIG.signCache) {
+      refreshSignCache();
+      const t = setInterval(refreshSignCache, CONFIG.signCacheMinutes * 60 * 1000);
+      if (t.unref) t.unref();
+    }
   }
 });
