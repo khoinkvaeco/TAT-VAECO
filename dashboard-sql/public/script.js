@@ -242,6 +242,34 @@ const fmtTatCell = (cell) => {
   return `<span class="tat-badge" style="background:${color}22;color:${color}">${v.toFixed(1)}</span>`;
 };
 
+// Loc cot NGAY theo CHUOI HIEN THI (dd/mm/yyyy hh:mm) thay vi chuoi ISO tho,
+// de nguoi dung go '12/04' hay '2026' deu tim duoc.
+const dateFilterFunc = (term, rowVal) =>
+  fmtDateTime(rowVal).toLowerCase().includes(String(term ?? '').toLowerCase());
+
+/**
+ * Tu dong bo sung header-filter cho MOI cot chua khai bao (tru cot checkbox
+ * "Bo qua" - khong co field). Cot ngay (formatter=fmtDateCell) loc theo chuoi
+ * hien thi; cot so TAT (fmtTatCell) loc kieu 'like' (chua); con lai 'input'.
+ * Giu nguyen cot da co san headerFilter (vd 'Nguon tra' dung list).
+ */
+function withHeaderFilters(columns) {
+  return columns.map((c) => {
+    if (c.headerFilter || !c.field) return c; // da co filter / cot checkbox
+    const col = { ...c };
+    if (c.formatter === fmtDateCell) {
+      col.headerFilter = 'input';
+      col.headerFilterFunc = dateFilterFunc;
+    } else if (c.formatter === fmtTatCell) {
+      col.headerFilter = 'input';
+      col.headerFilterFunc = 'like';
+    } else {
+      col.headerFilter = 'input';
+    }
+    return col;
+  });
+}
+
 // --- Checkbox "Bỏ qua" (tính lại TAT): quản lý THỦ CÔNG bằng Set khóa dòng.
 //     Chỉ click TRỰC TIẾP vào ô checkbox mới chọn/bỏ chọn — click/double-click
 //     chỗ khác trên dòng KHÔNG có tác dụng.
@@ -438,6 +466,7 @@ const REPORT_DEFS = {
 let baseKpiInstall = 0; // TAT install goc (khoi phuc khi Dat lai)
 let baseKpiUsret = 0;   // TAT US return goc
 let mainTotalRows = 0;  // tong so dong bang chi tiet (cho bo dem X/Y)
+let reportTotalRows = 0; // tong so dong bang bao cao (cho bo dem X/Y)
 
 async function loadDashboard() {
   showError('');
@@ -464,13 +493,11 @@ async function loadDashboard() {
     if (!mainTable) {
       mainTable = new Tabulator('#mainTable', {
         data: rows,
-        columns: COLS_TAT_DEPT,
+        columns: withHeaderFilters(COLS_TAT_DEPT),
         layout: 'fitDataFill',
-        pagination: true,
-        paginationSize: 15,
-        paginationSizeSelector: [true], // true = Tat ca
+        pagination: false,     // hien HET cac dong (cuon doc, render ao)
         placeholder: 'Không có dữ liệu',
-        height: '540px',
+        height: '600px',
       });
       // Khi tim kiem/loc cot: hien "X/Y dong" de biet so luong cu the
       mainTable.on('dataFiltered', (filters, rowsFiltered) => {
@@ -481,7 +508,7 @@ async function loadDashboard() {
             : `${n.toLocaleString('vi')}/${mainTotalRows.toLocaleString('vi')} dòng`;
       });
     } else {
-      mainTable.setColumns(COLS_TAT_DEPT);
+      mainTable.setColumns(withHeaderFilters(COLS_TAT_DEPT));
       mainTable.replaceData(rows);
     }
   } catch (err) {
@@ -554,25 +581,32 @@ async function loadReport(name) {
       data = await api(`/api/reports/${name}`);
       reportCache.set(cacheKey, data);
     }
+    reportTotalRows = data.count;
     $('#reportCount').textContent =
       `${data.count.toLocaleString('vi')} dòng` +
       (data.truncated ? ' ⚠ chạm giới hạn MAX_ROWS' : '');
     if (!reportTable) {
       reportTable = new Tabulator('#reportTable', {
         data: data.rows,
-        columns: def.columns,
+        columns: withHeaderFilters(def.columns),
         layout: 'fitDataFill',
-        pagination: true,
-        paginationSize: 15,
-        paginationSizeSelector: [true], // true = Tat ca
+        pagination: false,     // hien HET cac dong (cuon doc, render ao)
         placeholder: 'Không có dữ liệu',
-        height: '540px',
+        height: '600px',
+      });
+      // Khi tim kiem/loc cot: hien "X/Y dong"
+      reportTable.on('dataFiltered', (filters, rowsFiltered) => {
+        const n = rowsFiltered.length;
+        $('#reportCount').textContent =
+          n === reportTotalRows
+            ? `${reportTotalRows.toLocaleString('vi')} dòng`
+            : `${n.toLocaleString('vi')}/${reportTotalRows.toLocaleString('vi')} dòng`;
       });
     } else {
       // Xoa filter tim kiem cu (cua bao cao truoc) de khong loc nham het du lieu
       reportTable.clearFilter(true);
       $('#reportSearch').value = '';
-      reportTable.setColumns(def.columns);
+      reportTable.setColumns(withHeaderFilters(def.columns));
       reportTable.replaceData(data.rows);
       reportTable.redraw(true); // dam bao ve lai day du sau khi tab vua duoc hien thi
     }
