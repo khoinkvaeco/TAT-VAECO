@@ -840,6 +840,7 @@ async function qRemovedNotReturned(range, f) {
     ${signJoin('o.[created_by]', 'sm')}
     WHERE o.[vm] = 'YA' AND RO.MUTATION > @fromDay and RO.condition ='US'
       AND r.[historyno_] IS NULL
+      AND o.higher_par IS NULL
       AND o.[mutation] BETWEEN @fromDay AND @toDay  -- loc tho theo index (sargable)
       AND ${amosToVN('o')} >= @from AND ${amosToVN('o')} < @to
       ${where}
