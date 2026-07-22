@@ -37,6 +37,10 @@ const CONFIG = {
   // Xac dinh tu moc neo: hom nay 2026-07-08 = AMOS 19913 -> epoch = 1971-12-31.
   amosEpoch: process.env.AMOS_DATE_EPOCH || '1971-12-31',
   demoMode: String(process.env.DEMO_MODE || 'false').toLowerCase() === 'true',
+  // IP duoc phep vao trang ADMIN (localhost + IP quan tri). Cau hinh qua .env
+  // ADMIN_IPS (danh sach, ngan cach dau phay). Localhost luon duoc phep.
+  adminIps: (process.env.ADMIN_IPS || '10.99.89.120')
+    .split(',').map((s) => s.trim()).filter(Boolean),
   // Cache bang SIGN (Oracle linked server DWH_DB) vao bang local NQT.dbo.SIGN_CACHE
   // de moi query khong phai keo qua linked server (cham). Tu lam moi dinh ky.
   signCache: String(process.env.SIGN_CACHE || 'true').toLowerCase() !== 'false',
@@ -1571,6 +1575,47 @@ function clientIp(req) {
   return ip.replace(/^::ffff:/, '') || 'unknown';
 }
 
+// --- Han che truy cap trang ADMIN theo IP (localhost + danh sach ADMIN_IPS) ---
+const LOCALHOST_IPS = ['127.0.0.1', '::1', 'localhost', '0.0.0.0'];
+function isAdminAllowed(ip) {
+  return LOCALHOST_IPS.includes(ip) || CONFIG.adminIps.includes(ip);
+}
+/** Duong dan thuoc khu vuc ADMIN (trang + API). */
+function isAdminPath(p) {
+  return p === '/admin' || p === '/admin.html' || p.startsWith('/api/admin');
+}
+/**
+ * Middleware chan truy cap admin tu IP la. Ghi CANH BAO ra console +
+ * logs/admin-access-YYYY-MM-DD.log (ke ca truy cap hop le lan bi tu choi).
+ */
+function adminGuard(req, res, next) {
+  if (!isAdminPath(req.path)) return next();
+  // Dung IP SOCKET that (khong tin x-forwarded-for) -> chong gia mao header.
+  // Neu chay sau reverse proxy, them IP proxy vao ADMIN_IPS hoac bo proxy.
+  const ip = String(req.socket.remoteAddress || '').replace(/^::ffff:/, '') || 'unknown';
+  const allowed = isAdminAllowed(ip);
+  const day = new Date().toISOString().slice(0, 10);
+  const vn = new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh', hour12: false });
+  const line = [vn, ip, allowed ? 'ALLOW' : 'DENY', req.method, req.originalUrl].join('\t') + '\n';
+  fs.appendFile(path.join(LOG_DIR, `admin-access-${day}.log`), line, () => {});
+  if (!allowed) {
+    console.warn(`[ADMIN] ⚠ CANH BAO: IP la ${ip} thu truy cap trang admin (${req.originalUrl}) -> TU CHOI`);
+    res.status(403);
+    if (req.path.startsWith('/api/')) {
+      return res.json({ error: true, code: 'ADMIN_FORBIDDEN', message: `Truy cap bi tu choi. IP ${ip} khong nam trong danh sach quan tri.` });
+    }
+    return res.type('html').send(
+      `<!doctype html><meta charset="utf-8"><div style="font-family:system-ui;max-width:640px;margin:60px auto;padding:24px;border:1px solid #fecaca;background:#fef2f2;border-radius:12px;color:#991b1b">
+      <h2 style="margin:0 0 8px">⛔ Truy cập bị từ chối</h2>
+      <p>Trang quản trị này chỉ cho phép truy cập từ máy quản trị.</p>
+      <p style="font-size:13px;color:#7f1d1d">IP của bạn: <b>${ip}</b> — không nằm trong danh sách được phép.<br>
+      Lần truy cập này đã được ghi log.</p>
+      <p><a href="/" style="color:#0e6b74">← Về Dashboard</a></p></div>`
+    );
+  }
+  next();
+}
+
 /**
  * Middleware ghi log truy cap: thoi gian, IP, ten may (reverse DNS), method,
  * duong dan, ma tra ve, thoi gian xu ly (ms). Moi ngay 1 file
@@ -1844,6 +1889,7 @@ app.use(compression());
 app.use(cors());
 app.use(express.json());
 app.use(accessLogger); // ghi log IP + ten may cho MOI request (truoc static/API)
+app.use(adminGuard);   // chan truy cap admin tu IP la (truoc static de chan /admin.html)
 app.use(express.static(path.join(__dirname, 'public')));
 
 /** Boc route async + xu ly loi tap trung. */
@@ -2164,6 +2210,7 @@ app.listen(CONFIG.port, () => {
   console.log(`  Dashboard TAT dang chay: http://localhost:${CONFIG.port}`);
   console.log(`  Che do: ${CONFIG.demoMode ? 'DEMO (du lieu mau)' : 'LIVE (SQL Server)'}`);
   console.log(`  AMOS -> VN offset: +${CONFIG.tzOffset}h | MAX_ROWS: ${CONFIG.maxRows}`);
+  console.log(`  Admin IPs (ngoai localhost): ${CONFIG.adminIps.join(', ') || '(khong co)'}`);
   // Trang thai chatbot: rule-based luon bat; local LLM neu co cau hinh + hop le
   if (!llm.isEnabled()) {
     console.log('  Chatbot: rule/intent noi bo (local LLM: TAT)');
