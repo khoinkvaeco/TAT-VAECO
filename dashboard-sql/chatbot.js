@@ -20,6 +20,31 @@ function norm(s) {
     .trim();
 }
 
+// Dong nghia -> tu khoa chuan (ap dung SAU khi norm) de hieu nhieu cach hoi.
+const SYNONYMS = [
+  [/\b(ton dong|ton kho lau|chua xu ly|chua hoan tat|chua khop|chua tra ve kho)\b/g, 'chua doi ung'],
+  [/\b(mat may ngay|mat bao lau|bao lau|thoi gian quay vong|quay vong)\b/g, 'tat'],
+  [/\b(binh quan|trung binh|tb)\b/g, 'trung binh'],
+  [/\b(so luong|sl|dem|tong so)\b/g, 'so luong'],
+  [/\b(don vi|bo phan)\b/g, 'trung tam'],
+  [/\b(may bay|tau bay|tau|phi co)\b/g, 'tau'],
+  [/\b(xuat file|tai ve|download|export)\b/g, 'xuat excel'],
+  [/\b(hoan tra|tra lai kho|nhap lai kho)\b/g, 'hoan kho'],
+  [/\b(kiem dinh|recert|recertify|chung nhan lai)\b/g, 'tra service'],
+];
+function expandSyn(n) {
+  let s = ' ' + n + ' ';
+  for (const [re, rep] of SYNONYMS) s = s.replace(re, rep);
+  return s.replace(/\s+/g, ' ').trim();
+}
+
+/** So khop 1 tu khoa: chua nguyen cum, HOAC moi tu trong cum deu xuat hien. */
+function hasKey(n, key) {
+  if (n.includes(key)) return true;
+  const toks = key.split(' ').filter(Boolean);
+  return toks.length > 1 && toks.every((t) => n.includes(t));
+}
+
 // ---------------------------------------------------------------------------
 // 1. KIEN THUC (KB): dinh nghia nghiep vu + huong dan dung dashboard
 //    Moi muc: { keys: [tu khoa da BO DAU], answer: 'noi dung' }
@@ -130,7 +155,7 @@ const METRICS = [
 // ---------------------------------------------------------------------------
 function matchKB(list, n) {
   for (const item of list) {
-    if (item.keys.some((k) => n.includes(k))) return item.answer;
+    if (item.keys.some((k) => hasKey(n, k))) return item.answer;
   }
   return null;
 }
@@ -151,14 +176,23 @@ function findDepartment(n, departments) {
 
 /** Nhan dien ky bao cao tu cau hoi. Tra { periodType, month?, week? } hoac null. */
 function findPeriod(n) {
+  const now = new Date();
+  // Ky tuong doi
+  if (/thang truoc/.test(n)) {
+    const d = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    return { periodType: 'month', month: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}` };
+  }
+  if (/thang nay/.test(n)) {
+    return { periodType: 'month', month: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}` };
+  }
   // "thang 7" hoac "thang 7/2026" hoac "thang 7 2026"
   const m = n.match(/thang\s*(\d{1,2})(?:\s*[/\-]?\s*(\d{4}))?/);
   if (m) {
     const mm = String(Math.min(12, Math.max(1, parseInt(m[1], 10)))).padStart(2, '0');
-    const yyyy = m[2] || String(new Date().getFullYear());
+    const yyyy = m[2] || String(now.getFullYear());
     return { periodType: 'month', month: `${yyyy}-${mm}` };
   }
-  if (/tuan/.test(n)) return { periodType: 'week' };
+  if (/tuan (nay|truoc)|tuan/.test(n)) return { periodType: 'week' };
   return null;
 }
 
@@ -174,7 +208,7 @@ function findDeviceCode(raw) {
 
 function interpret(message, ctx = {}) {
   const raw = String(message || '');
-  const n = norm(raw);
+  const n = expandSyn(norm(raw)); // bo dau + ap dong nghia
   if (!n) return { intent: 'help' };
 
   const department = findDepartment(n, ctx.departments);
@@ -209,7 +243,7 @@ function interpret(message, ctx = {}) {
 
   // --- (4) Truy van so lieu: co chi so / xep hang / tu de hoi / co ky / trung tam ---
   //     UU TIEN truoc huong dan (tranh tu 'thang'/'tuan' khop nham muc huong dan).
-  const metrics = METRICS.filter((mt) => mt.keys.some((k) => n.includes(k)));
+  const metrics = METRICS.filter((mt) => mt.keys.some((k) => hasKey(n, k)));
   const rankTop = /(cao nhat|top|xep hang|nhieu nhat)/.test(n);
   const rankLow = /(thap nhat|it nhat)/.test(n);
   const wantsSummary = /(tong quan|tong hop|tom tat|summary|ky nay|tinh hinh|so lieu)/.test(n);
@@ -230,7 +264,28 @@ function interpret(message, ctx = {}) {
   // --- (6) Con lai: thu KB dinh nghia lan cuoi, khong thi tra ve unknown ---
   const anyDef = matchKB(DEFINITIONS, n);
   if (anyDef) return { intent: 'kb', answer: anyDef };
-  return { intent: 'unknown' };
+  return { intent: 'unknown', suggestions: suggestTopics(n) };
+}
+
+/** Goi y chu de gan nhat dua tren so tu khoa trung (khi chua hieu cau hoi). */
+function suggestTopics(n) {
+  const pool = [
+    { label: 'TAT install là gì', keys: ['tat', 'install', 'lap'] },
+    { label: 'TAT US return là gì', keys: ['us', 'return', 'tra', 'unservice'] },
+    { label: 'Đối ứng là gì', keys: ['doi ung', 'khop', 'dong vong'] },
+    { label: 'Trả service là gì', keys: ['tra service', 'recert', 'kiem dinh'] },
+    { label: 'Có bao nhiêu thiết bị chưa đối ứng', keys: ['chua doi ung', 'ton'] },
+    { label: 'Đối ứng của serial …', keys: ['doi ung', 'thiet bi', 'serial', 'part', 'label'] },
+    { label: 'Cách xuất Excel', keys: ['excel', 'xuat', 'file'] },
+    { label: 'Cách lọc', keys: ['loc', 'filter', 'tim'] },
+  ];
+  const scored = pool
+    .map((p) => ({ label: p.label, score: p.keys.reduce((s, k) => s + (n.includes(k) ? 1 : 0), 0) }))
+    .filter((p) => p.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 3)
+    .map((p) => p.label);
+  return scored;
 }
 
 /** Van ban tro giup (liet ke nang luc). */

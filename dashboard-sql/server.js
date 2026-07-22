@@ -1506,6 +1506,7 @@ function groupAvgByDay(arr, dateField, valField) {
 // ---------------------------------------------------------------------------
 const DEMO = require('./demo-data');
 const chatbot = require('./chatbot');
+const llm = require('./llm');
 
 // ---------------------------------------------------------------------------
 // 7b. GHI LOG TRUY CAP (IP + ten may) - ghi ra file, 1 file/ngay
@@ -1788,6 +1789,30 @@ function logChatGap(message) {
   } catch (_) { /* khong de loi ghi log lam vo chat */ }
 }
 
+/**
+ * Cau chua hieu -> neu co LLM NOI BO (LLM_URL) thi nho LLM tra loi, GROUNDING
+ * bang kho tri thuc (KB). Huong dan LLM: chi dung kien thuc duoc cung cap,
+ * KHONG bia so lieu (cau hoi so lieu -> huong dan nguoi dung hoi lai co ky).
+ * Bat ky loi/khoa an toan -> tra null de fallback ve rule-based.
+ */
+async function chatTryLLM(message) {
+  if (!llm.isEnabled() || llm.blockReason()) return null;
+  const kb = [...chatbot.DEFINITIONS, ...chatbot.USAGE].map((x) => '- ' + x.answer).join('\n');
+  const system =
+    'Bạn là trợ lý nội bộ cho Dashboard TAT của VAECO (bảo dưỡng khí tài hàng không). ' +
+    'CHỈ trả lời dựa trên KIẾN THỨC được cung cấp dưới đây, bằng tiếng Việt, ngắn gọn. ' +
+    'TUYỆT ĐỐI KHÔNG bịa số liệu. Nếu là câu hỏi số liệu cụ thể, hãy hướng dẫn người dùng ' +
+    'hỏi lại kèm kỳ và trung tâm (ví dụ: "TAT install tháng 7 của CNBDNT"). ' +
+    'Nếu ngoài phạm vi, nói không có thông tin.\n\nKIẾN THỨC:\n' + kb;
+  try {
+    const text = await llm.ask(system, String(message || ''));
+    return text || null;
+  } catch (err) {
+    console.warn('[LLM] Bo qua, dung rule-based:', err.message);
+    return null;
+  }
+}
+
 /** Dieu phoi: tu intent -> cau tra loi (text). */
 async function chatRespond(message, ctx) {
   const departments = await getDepartments().catch(() => []);
@@ -1798,9 +1823,16 @@ async function chatRespond(message, ctx) {
     case 'device': return { intent: intent.intent, reply: await chatAnswerDevice(intent.term) };
     case 'kpi': return { intent: intent.intent, reply: await chatAnswerKpi(intent, ctx) };
     case 'help': return { intent: intent.intent, reply: chatbot.helpText() };
-    default:
+    default: {
+      // Thu LLM noi bo (neu bat) truoc khi tra loi mac dinh
+      const llmReply = await chatTryLLM(message);
+      if (llmReply) return { intent: 'llm', reply: llmReply };
       logChatGap(message); // ghi lai de bo sung kho tri thuc ve sau
-      return { intent: 'unknown', reply: 'Xin lỗi, tôi chưa hiểu câu hỏi.\n\n' + chatbot.helpText() };
+      const sugg = (intent.suggestions && intent.suggestions.length)
+        ? '\n\nCó phải anh/chị muốn hỏi:\n' + intent.suggestions.map((s) => '• ' + s).join('\n')
+        : '\n\n' + chatbot.helpText();
+      return { intent: 'unknown', reply: 'Xin lỗi, tôi chưa hiểu câu hỏi.' + sugg };
+    }
   }
 }
 
@@ -2088,6 +2120,14 @@ app.listen(CONFIG.port, () => {
   console.log(`  Dashboard TAT dang chay: http://localhost:${CONFIG.port}`);
   console.log(`  Che do: ${CONFIG.demoMode ? 'DEMO (du lieu mau)' : 'LIVE (SQL Server)'}`);
   console.log(`  AMOS -> VN offset: +${CONFIG.tzOffset}h | MAX_ROWS: ${CONFIG.maxRows}`);
+  // Trang thai chatbot: rule-based luon bat; local LLM neu co cau hinh + hop le
+  if (!llm.isEnabled()) {
+    console.log('  Chatbot: rule/intent noi bo (local LLM: TAT)');
+  } else if (llm.blockReason()) {
+    console.log(`  Chatbot: rule/intent (local LLM BI CHAN: ${llm.blockReason()})`);
+  } else {
+    console.log(`  Chatbot: rule/intent + local LLM (${llm.CFG.url}, model ${llm.CFG.model})`);
+  }
   console.log('====================================================');
   if (!CONFIG.demoMode) {
     // Thu ket noi som de bao loi ngay neu cau hinh sai
