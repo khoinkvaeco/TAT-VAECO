@@ -1657,6 +1657,42 @@ async function qDeviceLookup(term) {
   return query(text, params);
 }
 
+/**
+ * TRA CUU TRANG THAI DOI UNG cua 1 thiet bi (part/serial/label).
+ * Voi cac PHIEU XUAT gan nhat (kho_ser1 vm=T) cua thiet bi, kiem tra tung
+ * duong "dong vong": tra unservice / tra service (recertify) / hoan kho /
+ * phieu da bi huy -> con lai la CHUA doi ung.
+ */
+async function qReconcileStatus(term) {
+  const params = { term: String(term || '').trim() };
+  const text = `
+    SELECT TOP 5
+      k.[labelno] AS labelno, RTRIM(k.[partno]) AS partno, RTRIM(k.[serialno]) AS serialno,
+      RTRIM(k.[voucherno]) AS voucherno, ${amosToVN('k')} AS issue_time_vn,
+      -- (1) tra unservice: real_us1 khop labelno+voucherno
+      CASE WHEN EXISTS (SELECT 1 FROM [NQT].[dbo].[real_us1] r
+             WHERE r.[labelno] = k.[labelno] AND r.[voucher_s] = k.[voucherno]) THEN 1 ELSE 0 END AS has_us,
+      -- (2) tra service: chuoi thao YA -> recertify CI @SHOPLOC
+      CASE WHEN ${recertExists('k')} THEN 1 ELSE 0 END AS has_service,
+      -- (3) hoan kho: TC 'P-CA-...' cung thiet bi
+      CASE WHEN EXISTS (SELECT 1 FROM [NQT].[dbo].[kho_ser1] tc
+             WHERE tc.[vm] = 'TC' AND tc.[voucherno] LIKE 'P-CA-%'
+               AND tc.[partno] = k.[partno] AND tc.[serialno] = k.[serialno]
+               AND tc.[labelno] = k.[labelno]) THEN 1 ELSE 0 END AS has_return,
+      -- (4) phieu bi HUY (TRANSFER CANCELLED cung so phieu)
+      CASE WHEN EXISTS (SELECT 1 FROM [NQT].[dbo].[kho_ser1] tc2
+             WHERE tc2.[vm] = 'TC' AND tc2.[voucherno] LIKE 'P-CA-%'
+               AND tc2.[labelno] = k.[labelno]
+               AND RTRIM(tc2.[voucherno]) = 'P-CA-' + SUBSTRING(RTRIM(k.[voucherno]), 3, 50)) THEN 1 ELSE 0 END AS cancelled
+    FROM [NQT].[dbo].[kho_ser1] k
+    WHERE k.[vm] = 'T' AND k.[voucherno] LIKE 'P-%'
+      AND ( RTRIM(k.[partno]) = @term
+         OR RTRIM(k.[serialno]) = @term
+         OR TRY_CONVERT(float, k.[labelno]) = TRY_CONVERT(float, @term) )
+    ORDER BY k.[mutation] DESC, k.[mutation_t] DESC`;
+  return query(text, params);
+}
+
 /** Tao cau tra loi cho intent 'kpi' (truy van so lieu). */
 async function chatAnswerKpi(intent, ctx) {
   // Uu tien ky + trung tam LAY TU CAU HOI; thieu thi dung filter hien tai cua trang.
@@ -1722,16 +1758,48 @@ async function chatAnswerDevice(term) {
     lines.join('\n') + more;
 }
 
+/** Tao cau tra loi cho intent 'reconcile' (tim doi ung cua 1 thiet bi). */
+async function chatAnswerReconcile(term) {
+  const rows = CONFIG.demoMode ? DEMO.reconcileStatus(term) : await qReconcileStatus(term);
+  if (!rows || !rows.length) {
+    return `Không tìm thấy phiếu xuất kho nào cho "${term}" để kiểm tra đối ứng. Hãy thử Part No / Serial No / Label khác.`;
+  }
+  const statusOf = (r) => {
+    if (r.cancelled) return '⛔ Phiếu đã hủy (TRANSFER CANCELLED)';
+    if (r.has_us) return '✅ Đã đối ứng — Trả unservice';
+    if (r.has_service) return '✅ Đã đối ứng — Trả service (recertify)';
+    if (r.has_return) return '✅ Đã hoàn kho';
+    return '⚠️ CHƯA đối ứng';
+  };
+  const h0 = rows[0];
+  const lines = rows.map(
+    (r) => `• Phiếu ${r.voucherno} (xuất ${fmtVNServer(r.issue_time_vn)}): ${statusOf(r)}`
+  );
+  return `Đối ứng của ${h0.partno || ''} / SN ${h0.serialno || ''} (label ${h0.labelno || ''}) — ${rows.length} phiếu xuất gần nhất:\n` +
+    lines.join('\n');
+}
+
+/** Ghi lai cau hoi bot CHUA tra loi duoc de review + bo sung kho tri thuc. */
+function logChatGap(message) {
+  try {
+    const day = new Date().toISOString().slice(0, 10);
+    const vn = new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh', hour12: false });
+    fs.appendFile(path.join(LOG_DIR, `chat-unknown-${day}.log`), `${vn}\t${message}\n`, () => {});
+  } catch (_) { /* khong de loi ghi log lam vo chat */ }
+}
+
 /** Dieu phoi: tu intent -> cau tra loi (text). */
 async function chatRespond(message, ctx) {
   const departments = await getDepartments().catch(() => []);
   const intent = chatbot.interpret(message, { departments });
   switch (intent.intent) {
     case 'kb': return { intent: intent.intent, reply: intent.answer };
+    case 'reconcile': return { intent: intent.intent, reply: await chatAnswerReconcile(intent.term) };
     case 'device': return { intent: intent.intent, reply: await chatAnswerDevice(intent.term) };
     case 'kpi': return { intent: intent.intent, reply: await chatAnswerKpi(intent, ctx) };
     case 'help': return { intent: intent.intent, reply: chatbot.helpText() };
     default:
+      logChatGap(message); // ghi lai de bo sung kho tri thuc ve sau
       return { intent: 'unknown', reply: 'Xin lỗi, tôi chưa hiểu câu hỏi.\n\n' + chatbot.helpText() };
   }
 }

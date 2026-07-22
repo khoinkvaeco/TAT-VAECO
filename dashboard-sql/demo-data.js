@@ -392,9 +392,33 @@ function dashboard(range, f) {
   };
 }
 
+/** Trang thai doi ung mau cho 1 thiet bi (dung cho chatbot o DEMO_MODE). */
+function reconcileStatus(term) {
+  const now = Date.now();
+  const n = 2 + rndInt(0, 3);
+  const rows = [];
+  for (let i = 0; i < n; i++) {
+    // Ngau nhien 1 trong cac trang thai (dong dau uu tien "chua doi ung" de de thay)
+    const roll = i === 0 ? rndInt(0, 4) : rndInt(1, 4);
+    rows.push({
+      labelno: /^[0-9]+$/.test(String(term)) ? term : 'L' + rndInt(1000, 9999),
+      partno: /[a-z]/i.test(String(term)) ? term : 'PN-' + pad(rndInt(100, 999)),
+      serialno: 'SN' + rndInt(10000, 99999),
+      voucherno: 'P-' + rndInt(100000, 999999),
+      issue_time_vn: new Date(now - i * 86400000 * rndInt(10, 60)).toISOString(),
+      has_us: roll === 1 ? 1 : 0,
+      has_service: roll === 2 ? 1 : 0,
+      has_return: roll === 3 ? 1 : 0,
+      cancelled: roll === 4 ? 1 : 0,
+    });
+  }
+  return rows;
+}
+
 module.exports = {
   filters,
   deviceLookup,
+  reconcileStatus,
   dashboard,
   tatDepartments,
   tatCuvt,

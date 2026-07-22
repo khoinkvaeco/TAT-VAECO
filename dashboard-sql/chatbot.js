@@ -51,6 +51,11 @@ const DEFINITIONS = [
       'Đối ứng = phiếu xuất kho (kho_ser1 vm=T) tìm được đường "đóng vòng": hoặc có TRẢ UNSERVICE (real_us1, khớp labelno+voucherno), hoặc có TRẢ SERVICE (tháo YA → recertify CI @SHOPLOC), hoặc đã HOÀN KHO (TC). "Chưa đối ứng" = phiếu xuất trong kỳ chưa có đường nào ở trên và chưa bị hủy.',
   },
   {
+    keys: ['tim doi ung', 'tra cuu doi ung', 'kiem tra doi ung', 'trang thai doi ung', 'cach tim doi ung', 'tim kiem doi ung'],
+    answer:
+      'Tìm đối ứng của 1 thiết bị: gõ "đối ứng của <part / serial / label>" (ví dụ: "đối ứng serial 43842"). Tôi kiểm tra các phiếu xuất gần nhất của thiết bị đã "đóng vòng" chưa — Trả unservice / Trả service (recertify) / Hoàn kho — hay vẫn CHƯA đối ứng, kèm số phiếu và thời điểm.',
+  },
+  {
     keys: ['tra service', 'recertify', 'recert'],
     answer:
       'Trả service (recertify) = thiết bị tháo khỏi tàu (on_off YA) được kiểm định lại tại shop (on_off CI, location=SHOPLOC, cùng psn+orderno với YA) và chuyển thành serviceable. Đây cũng là 1 dạng đối ứng; giờ recertify (CI) đóng vai trò như giờ trả unservice khi tính TAT US return.',
@@ -84,7 +89,7 @@ const USAGE = [
       'Xuất Excel: mỗi bảng có nút "⬇ Excel" ở góc phải. Bảng đang lọc/tìm kiếm sẽ xuất đúng phần đang hiển thị. Bảng Chi tiết TAT dùng nút Excel ở khu vực "Chi tiết TAT theo thiết bị".',
   },
   {
-    keys: ['loc', 'filter', 'tim kiem', 'tim'],
+    keys: ['cach loc', 'bo loc', 'filter', 'tim kiem', 'loc theo cot', 'loc cot'],
     answer:
       'Lọc: dùng thanh trên cùng (Kỳ báo cáo, Station, Store, Trung tâm) — dữ liệu tự tải lại khi đổi. Trong mỗi bảng, gõ vào ô dưới tiêu đề cột để lọc theo cột đó; số "X/Y dòng" hiện số dòng khớp trên tổng. Cột ngày gõ dạng dd/mm/yyyy.',
   },
@@ -178,7 +183,13 @@ function interpret(message, ctx = {}) {
   const isQuestionWord = /(bao nhieu|may|so luong|trung binh|cao nhat|thap nhat|top|ty le|list|liet ke|thong ke)/.test(n);
   const isDefine = /(la gi|nghia la|dinh nghia|giai thich|khac nhau|the nao)/.test(n);
   const wantsDevice = /(tra cuu|tra thiet bi|lich su|thiet bi|part\s*no|serial|label|linh kien)/.test(n);
+  const wantsReconcile = /(doi ung|dong vong|khop phieu|da tra|da hoan)/.test(n);
   const deviceCode = findDeviceCode(raw);
+
+  // --- (0) Tim doi ung cua 1 thiet bi: co "doi ung" + ma thiet bi (KHONG hoi "la gi") ---
+  if (wantsReconcile && deviceCode && !isDefine) {
+    return { intent: 'reconcile', term: deviceCode };
+  }
 
   // --- (1) Tra cuu thiet bi: co tu khoa tra cuu + ma, hoac chi 1 ma don doc ---
   if ((wantsDevice && deviceCode) || (deviceCode && n.replace(deviceCode.toLowerCase(), '').trim().length <= 3)) {
@@ -227,6 +238,7 @@ function helpText() {
   return [
     'Tôi có thể giúp anh/chị:',
     '• Số liệu: "TAT install tháng 7 của CNBDNT", "có bao nhiêu thiết bị chưa đối ứng", "trung tâm nào TAT cao nhất".',
+    '• Tìm đối ứng: "đối ứng của serial 43842" — kiểm tra thiết bị đã trả unservice / trả service / hoàn kho hay chưa.',
     '• Tra cứu thiết bị: "tra cứu serial 43842" hoặc gõ số label/part.',
     '• Định nghĩa: "TAT US return là gì", "trả service là gì", "costcenter là gì".',
     '• Hướng dẫn: "cách xuất Excel", "cách lọc", "tính lại TAT là gì".',
