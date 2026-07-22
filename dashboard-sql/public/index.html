@@ -188,6 +188,30 @@
     VAECO · Dashboard TAT — dữ liệu từ SQL Server (AMOS/NQT). Giờ đã quy đổi sang múi giờ Việt Nam (+7). Đơn vị TAT: ngày.
   </footer>
 
+  <!-- ===================== CHATBOX (tro ly noi bo) ===================== -->
+  <button id="chatToggle" class="chat-fab" title="Trợ lý TAT (hỏi số liệu, tra cứu thiết bị, định nghĩa)">💬</button>
+  <div id="chatPanel" class="chat-panel hidden">
+    <div class="chat-head">
+      <div>
+        <div class="chat-title">Trợ lý TAT</div>
+        <div class="chat-sub">Nội bộ · không gửi dữ liệu ra ngoài</div>
+      </div>
+      <button id="chatClose" class="chat-x" title="Đóng">✕</button>
+    </div>
+    <div id="chatBody" class="chat-body"></div>
+    <div class="chat-quick" id="chatQuick">
+      <button data-q="Tổng quan kỳ này">Tổng quan kỳ này</button>
+      <button data-q="Có bao nhiêu thiết bị chưa đối ứng">Chưa đối ứng?</button>
+      <button data-q="Trung tâm nào TAT cao nhất">TAT cao nhất</button>
+      <button data-q="TAT install là gì">TAT install là gì</button>
+    </div>
+    <form id="chatForm" class="chat-input">
+      <input id="chatText" type="text" autocomplete="off"
+        placeholder="Hỏi: TAT install tháng 7 của CNBDNT, tra cứu SN 43842…" />
+      <button type="submit" title="Gửi">➤</button>
+    </form>
+  </div>
+
   <script src="script.js"></script>
 </body>
 </html>

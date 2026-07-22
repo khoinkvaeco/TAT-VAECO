@@ -274,6 +274,27 @@ function filters() {
   return { stations: ['HAN', 'SGN', 'DAD', 'OTHER'], stores: STORES, departments: DEPARTMENTS };
 }
 
+/** Tra cuu lich su booking mau cho 1 thiet bi (dung cho chatbot o DEMO_MODE). */
+function deviceLookup(term) {
+  const vms = ['YE', 'YA', 'T', 'TC', 'CI', 'B1'];
+  const now = Date.now();
+  const rows = [];
+  const n = 6 + rndInt(0, 8);
+  for (let i = 0; i < n; i++) {
+    rows.push({
+      vm: rnd(vms),
+      voucherno: 'P-' + rndInt(100000, 999999),
+      labelno: /^[0-9]+$/.test(String(term)) ? term : 'L' + rndInt(1000, 9999),
+      partno: /[a-z]/i.test(String(term)) ? term : 'PN-' + pad(rndInt(100, 999)),
+      serialno: 'SN' + rndInt(10000, 99999),
+      time: new Date(now - i * 86400000 * rndInt(1, 20)).toISOString(),
+      ac_registr: rnd(AC),
+      station: rnd(STATIONS),
+    });
+  }
+  return rows;
+}
+
 /** Dashboard mau (dung lai logic tong hop don gian). */
 function dashboard(range, f) {
   const dept = tatDepartments(range, f);
@@ -373,6 +394,7 @@ function dashboard(range, f) {
 
 module.exports = {
   filters,
+  deviceLookup,
   dashboard,
   tatDepartments,
   tatCuvt,

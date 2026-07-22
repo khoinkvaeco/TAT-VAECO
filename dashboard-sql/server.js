@@ -1505,6 +1505,7 @@ function groupAvgByDay(arr, dateField, valField) {
 // 7. DU LIEU MAU (DEMO_MODE) - de chay thu giao dien khi chua co SQL Server
 // ---------------------------------------------------------------------------
 const DEMO = require('./demo-data');
+const chatbot = require('./chatbot');
 
 // ---------------------------------------------------------------------------
 // 7b. GHI LOG TRUY CAP (IP + ten may) - ghi ra file, 1 file/ngay
@@ -1606,6 +1607,136 @@ function accessLogger(req, res, next) {
 }
 
 // ---------------------------------------------------------------------------
+// 7c. CHATBOT NOI BO (rule/intent) - xu ly du lieu, KHONG goi dich vu ngoai
+// ---------------------------------------------------------------------------
+
+// Ma booking on_off -> nhan tieng Viet (de hien lich su thiet bi de doc).
+const VM_LABELS = {
+  YE: 'Lắp lên tàu', YA: 'Tháo khỏi tàu', T: 'Xuất/chuyển kho', TC: 'Hủy chuyển kho',
+  CI: 'Kiểm định (recertify)', B1: 'Nhận hàng', SX: 'Gửi ngoài', IN: 'Hàng đến',
+  TR: 'Nhận chuyển', OU: 'Gửi đi', TS: 'Ship chuyển', EX: 'Trao đổi', LC: 'Đổi vị trí',
+};
+const vmLabel = (vm) => VM_LABELS[String(vm || '').trim().toUpperCase()] || String(vm || '').trim();
+
+/** Dinh dang datetime VN cho chat (doc getUTC* de khong bi cong them mui gio). */
+function fmtVNServer(v) {
+  if (!v) return '';
+  const d = new Date(v);
+  if (isNaN(d) || d.getUTCFullYear() <= 1901) return '';
+  const p = (n) => String(n).padStart(2, '0');
+  return `${p(d.getUTCDate())}/${p(d.getUTCMonth() + 1)}/${d.getUTCFullYear()} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
+}
+
+/** Danh sach Trung tam (cache 10 phut) - de chatbot nhan dien ten trong cau hoi. */
+let _deptCache = { at: 0, list: [] };
+async function getDepartments() {
+  if (CONFIG.demoMode) return DEMO.filters().departments;
+  if (Date.now() - _deptCache.at < 10 * 60 * 1000 && _deptCache.list.length) return _deptCache.list;
+  const src = signCacheReady ? '[NQT].[dbo].[SIGN_CACHE]' : '[DWH_DB]..[STG_AMOS].[SIGN]';
+  const rows = await query(
+    `SELECT DISTINCT LTRIM(RTRIM([DEPARTMENT])) AS v FROM ${src}
+     WHERE [DEPARTMENT] IS NOT NULL AND LTRIM(RTRIM([DEPARTMENT])) <> ''`
+  );
+  _deptCache = { at: Date.now(), list: rows.map((r) => r.v) };
+  return _deptCache.list;
+}
+
+/** Tra cuu lich su booking cua 1 thiet bi theo part/serial/label (on_off). */
+async function qDeviceLookup(term) {
+  const params = { term: String(term || '').trim() };
+  const text = `
+    SELECT TOP 40
+      o.[vm] AS vm, o.[voucherno] AS voucherno, o.[labelno] AS labelno,
+      RTRIM(o.[partno]) AS partno, RTRIM(o.[serialno]) AS serialno,
+      o.[mut_t] AS time, o.[ac_registr] AS ac_registr, o.[station] AS station
+    FROM [NQT].[dbo].[on_off] o
+    WHERE RTRIM(o.[partno]) = @term
+       OR RTRIM(o.[serialno]) = @term
+       OR TRY_CONVERT(float, o.[labelno]) = TRY_CONVERT(float, @term)
+    ORDER BY o.[mut_t] DESC`;
+  return query(text, params);
+}
+
+/** Tao cau tra loi cho intent 'kpi' (truy van so lieu). */
+async function chatAnswerKpi(intent, ctx) {
+  // Uu tien ky + trung tam LAY TU CAU HOI; thieu thi dung filter hien tai cua trang.
+  const q = {
+    periodType: (intent.period && intent.period.periodType) || ctx.periodType || 'month',
+    month: (intent.period && intent.period.month) || ctx.month || '',
+    week: (intent.period && intent.period.week) || ctx.week || '',
+    station: ctx.station || '',
+    store: ctx.store || '',
+    department: intent.department || ctx.department || '',
+    excludeCC: ctx.excludeCC ? '1' : '',
+  };
+  const range = resolveRange(q);
+  const f = readFilters(q);
+  const dash = CONFIG.demoMode
+    ? DEMO.dashboard(range, f)
+    : buildDashboardFromAgg(range, await qDashboardAgg(range, f));
+  const k = dash.kpis;
+  const ctxLine =
+    `Kỳ: ${range.label}${q.periodType === 'month' && q.month ? ' ' + q.month : ''}` +
+    (q.department ? ` · Trung tâm: ${q.department}` : '') +
+    (q.station ? ` · Station: ${q.station}` : '');
+
+  // Xep hang trung tam theo TAT install (tu bieu do cot)
+  if (intent.rank) {
+    const bar = dash.charts.barDept;
+    const rows = bar.labels.map((lb, i) => ({ dep: lb, v: bar.install[i] }))
+      .filter((x) => isFinite(x.v));
+    rows.sort((a, b) => (intent.rank === 'top' ? b.v - a.v : a.v - b.v));
+    const top = rows.slice(0, 5).map((x, i) => `${i + 1}. ${x.dep}: ${x.v} ngày`);
+    return `${ctxLine}\nTrung tâm TAT install ${intent.rank === 'top' ? 'CAO' : 'THẤP'} nhất:\n` +
+      (top.length ? top.join('\n') : 'Không có dữ liệu.');
+  }
+
+  const fmtMetric = (field) => {
+    const meta = chatbot.METRICS.find((m) => m.field === field);
+    const val = k[field];
+    return `• ${meta ? meta.label : field}: ${val ?? 0}${meta && meta.unit ? ' ' + meta.unit : ''}`;
+  };
+
+  if (intent.metrics && intent.metrics.length) {
+    return `${ctxLine}\n` + intent.metrics.map(fmtMetric).join('\n');
+  }
+
+  // Khong chi ro chi so -> tom tat cac KPI chinh
+  return `${ctxLine}\n` +
+    ['tatInstallAvg', 'tatUsReturnAvg', 'tatCuvtAvg', 'tatReturnStoreAvg',
+     'countIssued', 'countNotReconciled', 'reconcileRate'].map(fmtMetric).join('\n');
+}
+
+/** Tao cau tra loi cho intent 'device' (tra cuu 1 thiet bi). */
+async function chatAnswerDevice(term) {
+  const rows = CONFIG.demoMode ? DEMO.deviceLookup(term) : await qDeviceLookup(term);
+  if (!rows || !rows.length) {
+    return `Không tìm thấy booking nào cho "${term}". Hãy thử nhập Part No / Serial No / Label khác.`;
+  }
+  const h0 = rows[0];
+  const lines = rows.slice(0, 12).map(
+    (r) => `• ${fmtVNServer(r.time)} — ${vmLabel(r.vm)}${r.ac_registr ? ' · ' + r.ac_registr : ''}${r.voucherno ? ' · ' + String(r.voucherno).trim() : ''}`
+  );
+  const more = rows.length > 12 ? `\n… và ${rows.length - 12} booking cũ hơn.` : '';
+  return `Thiết bị ${h0.partno || ''} / SN ${h0.serialno || ''} (label ${h0.labelno || ''}) — ${rows.length} booking gần đây:\n` +
+    lines.join('\n') + more;
+}
+
+/** Dieu phoi: tu intent -> cau tra loi (text). */
+async function chatRespond(message, ctx) {
+  const departments = await getDepartments().catch(() => []);
+  const intent = chatbot.interpret(message, { departments });
+  switch (intent.intent) {
+    case 'kb': return { intent: intent.intent, reply: intent.answer };
+    case 'device': return { intent: intent.intent, reply: await chatAnswerDevice(intent.term) };
+    case 'kpi': return { intent: intent.intent, reply: await chatAnswerKpi(intent, ctx) };
+    case 'help': return { intent: intent.intent, reply: chatbot.helpText() };
+    default:
+      return { intent: 'unknown', reply: 'Xin lỗi, tôi chưa hiểu câu hỏi.\n\n' + chatbot.helpText() };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // 8. EXPRESS APP + ROUTES
 // ---------------------------------------------------------------------------
 const app = express();
@@ -1687,6 +1818,19 @@ app.get(
     }
     await query('SELECT 1 AS ok');
     res.json({ status: 'ok', mode: 'live', message: 'Ket noi SQL Server OK.' });
+  })
+);
+
+// --- Chatbot noi bo: nhan { message, ...filter hien tai } -> { reply, intent } ---
+//     Xu ly cuc bo (rule/intent), KHONG goi dich vu ngoai, khong gui du lieu ra.
+app.post(
+  '/api/chat',
+  h(async (req, res) => {
+    const body = req.body || {};
+    const message = String(body.message || '').slice(0, 500);
+    if (!message.trim()) return res.json({ reply: chatbot.helpText(), intent: 'help' });
+    const out = await chatRespond(message, body);
+    res.json(out);
   })
 );
 

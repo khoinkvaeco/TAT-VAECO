@@ -97,6 +97,7 @@ Mở trình duyệt: **http://localhost:3000**
 - **Báo cáo đơn vị:** 6 tab (xuất kho chưa lắp, tháo chưa trả US, chưa đối ứng, tháo trước lắp sau, other, TAT hoàn kho) — mỗi tab **export Excel**.
 - **Bộ lọc:** Station, Store, Department, kỳ **tháng** hoặc **tuần** (Thứ 5 tuần này → Thứ 5 tuần trước).
 - **Khác:** loading indicator, thông báo lỗi kết nối, theme sáng/tối, responsive.
+- **Trợ lý TAT (chatbox nội bộ):** nút 💬 góc dưới-phải. Xử lý **cục bộ** theo luật/ý định (rule/intent) — **không gọi dịch vụ ngoài, không gửi dữ liệu ra ngoài**. Trả lời 4 nhóm: (1) **số liệu** ("TAT install tháng 7 của CNBDNT", "bao nhiêu thiết bị chưa đối ứng", "trung tâm nào TAT cao nhất"); (2) **tra cứu 1 thiết bị** theo part/serial/label → lịch sử booking (on_off); (3) **định nghĩa nghiệp vụ** (TAT install/US return/hoàn kho, đối ứng, trả service, costcenter…); (4) **hướng dẫn dùng dashboard**. Câu hỏi không nêu kỳ/trung tâm sẽ dùng bộ lọc đang chọn trên trang. Logic NLU ở `chatbot.js` (hàm thuần, test được không cần DB).
 - **Ghi log truy cập:** mọi request được ghi vào `logs/access-YYYY-MM-DD.log` (1 file/ngày, định dạng TSV — mở trực tiếp bằng Excel) gồm: thời gian, IP, tên máy, method, đường dẫn, mã trạng thái, thời gian xử lý. Thư mục `logs/` không commit lên git (`.gitignore`).
   - **Tra tên máy** theo 2 bước, cache 10 phút/IP: (1) reverse-DNS (PTR record) — chỉ có nếu DNS nội bộ khai báo; (2) nếu thất bại và server chạy trên **Windows**, thử `nbtstat -A <ip>` (NetBIOS qua UDP 137) — không phụ thuộc DNS, thường lấy được tên máy Windows trong cùng LAN. Nếu cả hai đều thất bại (mạng khác VLAN chặn UDP 137, máy tắt NetBIOS, hoặc server chạy Linux/macOS), cột tên máy ghi `N/A` — vẫn còn cột IP để tra thủ công.
 
@@ -149,5 +150,6 @@ CREATE INDEX IX_SIGN_user ON [DWH_DB].[STG_AMOS].[SIGN] ([USER_SIGN]) INCLUDE ([
 | `GET /api/tat/departments` | Bảng chi tiết TAT theo đơn vị |
 | `GET /api/tat/cuvt` | Chi tiết TAT CUVT |
 | `GET /api/reports/:name` | Báo cáo (`issued-not-installed`, `removed-not-returned`, `not-reconciled`, `removed-before-installed`, `other`, `return-store-tat`) |
+| `POST /api/chat` | Trợ lý TAT nội bộ. Body JSON `{ message, ...filter }` → `{ reply, intent }`. Xử lý cục bộ, không gọi dịch vụ ngoài. |
 
-Tham số query chung: `periodType=month|week`, `month=YYYY-MM`, `week=YYYY-MM-DD`, `station`, `store`, `department`.
+Tham số query chung: `periodType=month|week`, `month=YYYY-MM`, `week=YYYY-MM-DD`, `station`, `store`, `department`, `excludeCC=1`.

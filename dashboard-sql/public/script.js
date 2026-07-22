@@ -782,12 +782,77 @@ async function init() {
 
   // Khoi tao
   initTheme();
+  initChat();
   checkHealth();
   await loadFilters(); // doi nap xong option roi moi khoi phuc gia tri da luu
   $('#stationSelect').value = state.station;
   $('#storeSelect').value = state.store;
   $('#deptSelect').value = state.department;
   loadDashboard();
+}
+
+// --------------------------------------------------------------------------
+// 13. Chatbox (tro ly noi bo) - goi /api/chat, xu ly cuc bo o server
+// --------------------------------------------------------------------------
+function chatAppend(text, who) {
+  const b = document.createElement('div');
+  b.className = `chat-msg ${who}`;
+  b.textContent = text;
+  $('#chatBody').appendChild(b);
+  $('#chatBody').scrollTop = $('#chatBody').scrollHeight;
+  return b;
+}
+
+async function chatSend(msg) {
+  const text = (msg || '').trim();
+  if (!text) return;
+  chatAppend(text, 'user');
+  $('#chatText').value = '';
+  const typing = chatAppend('Đang trả lời…', 'bot typing');
+  try {
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      // Gui kem filter hien tai de cau hoi khong ghi ro ky/trung tam se dung dung ngu canh
+      body: JSON.stringify({
+        message: text,
+        periodType: state.periodType, month: state.month, week: state.week,
+        station: state.station, store: state.store,
+        department: state.department, excludeCC: state.excludeCC,
+      }),
+    });
+    const data = await res.json();
+    typing.remove();
+    chatAppend(data.reply || 'Xin lỗi, đã có lỗi.', 'bot');
+  } catch (err) {
+    typing.remove();
+    chatAppend('Lỗi kết nối: ' + err.message, 'bot');
+  }
+}
+
+function initChat() {
+  const panel = $('#chatPanel');
+  const open = () => {
+    panel.classList.remove('hidden');
+    if (!$('#chatBody').children.length) {
+      chatAppend(
+        'Xin chào! Tôi là trợ lý TAT nội bộ. Hỏi tôi về số liệu, tra cứu thiết bị, định nghĩa nghiệp vụ hoặc cách dùng dashboard.',
+        'bot'
+      );
+    }
+    $('#chatText').focus();
+  };
+  $('#chatToggle').addEventListener('click', () =>
+    panel.classList.contains('hidden') ? open() : panel.classList.add('hidden')
+  );
+  $('#chatClose').addEventListener('click', () => panel.classList.add('hidden'));
+  $('#chatForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    chatSend($('#chatText').value);
+  });
+  $$('#chatQuick button').forEach((b) =>
+    b.addEventListener('click', () => { open(); chatSend(b.dataset.q); })
+  );
 }
 
 /** Filter "tim kiem tren moi cot" cho Tabulator. */
