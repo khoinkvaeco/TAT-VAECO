@@ -2109,6 +2109,50 @@ app.get(
   })
 );
 
+// --- ADMIN: gop log cau hoi chatbot CHUA HIEU de review + bo sung KB ---
+//     Doc cac file logs/chat-unknown-YYYY-MM-DD.log, gom theo NOI DUNG cau hoi
+//     (dem so lan, lan dau/cuoi) de admin xem nhung gi nguoi dung hay hoi ma
+//     bot chua tra loi duoc -> bo sung vao chatbot.js.
+app.get(
+  '/api/admin/chat-unknown',
+  h(async (req, res) => {
+    const days = Math.max(0, parseInt(req.query.days || '0', 10)); // 0 = tat ca
+    const cutoff = days ? Date.now() - days * 86400000 : 0;
+    let files = [];
+    try {
+      files = fs.readdirSync(LOG_DIR).filter((f) => /^chat-unknown-\d{4}-\d{2}-\d{2}\.log$/.test(f)).sort();
+    } catch (_) { /* thu muc log co the chua co */ }
+
+    const byMsg = new Map(); // message -> { message, count, first, last }
+    let totalLines = 0;
+    for (const f of files) {
+      const day = f.slice('chat-unknown-'.length, -4); // YYYY-MM-DD
+      if (cutoff && new Date(day + 'T23:59:59Z').getTime() < cutoff) continue;
+      let content = '';
+      try { content = fs.readFileSync(path.join(LOG_DIR, f), 'utf8'); } catch (_) { continue; }
+      for (const line of content.split('\n')) {
+        if (!line.trim()) continue;
+        const tab = line.indexOf('\t');
+        const time = tab >= 0 ? line.slice(0, tab) : '';
+        const message = (tab >= 0 ? line.slice(tab + 1) : line).trim();
+        if (!message) continue;
+        totalLines++;
+        const stamp = time || day; // dong log da co dang 'HH:MM:SS DD/MM/YYYY'
+        const key = message.toLowerCase();
+        const cur = byMsg.get(key) || { message, count: 0, first: stamp, last: '' };
+        cur.count++;
+        cur.last = stamp;
+        byMsg.set(key, cur);
+      }
+    }
+    const items = [...byMsg.values()].sort((a, b) => b.count - a.count);
+    res.json({ items, totalLines, totalUnique: items.length, days, files });
+  })
+);
+
+// Route tien: /admin -> trang admin review log cau hoi chua hieu
+app.get('/admin', (req, res) => res.sendFile(path.join(__dirname, 'public', 'admin.html')));
+
 // Route mac dinh -> tra index.html (SPA)
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 

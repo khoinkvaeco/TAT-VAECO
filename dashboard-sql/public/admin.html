@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Admin · Câu hỏi chatbot chưa hiểu — Dashboard TAT</title>
+  <link href="https://unpkg.com/tabulator-tables@6.2.1/dist/css/tabulator.min.css" rel="stylesheet" />
+  <script src="https://unpkg.com/tabulator-tables@6.2.1/dist/js/tabulator.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <style>
+    :root {
+      --bg:#f4f7f8; --surface:#fff; --hair:#dbe3e7; --text:#0f1e28; --muted:#5b6b73;
+      --brand:#0b4f5a; --brand2:#0e6b74; --accent:#d4a017;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg:#0e1a20; --surface:#14212a; --hair:#24333d; --text:#eef4f6; --muted:#9fb2ba; }
+    }
+    * { box-sizing: border-box; }
+    body { font-family: system-ui,"Segoe UI",sans-serif; margin:0; background:var(--bg); color:var(--text); }
+    header { background:var(--brand); color:#fff; padding:14px 20px; display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+    header h1 { font-size:16px; margin:0; font-weight:700; }
+    header .sub { font-size:12px; opacity:.85; }
+    header a { color:#fff; font-size:12px; margin-left:auto; opacity:.9; }
+    main { max-width:1100px; margin:0 auto; padding:18px 20px; }
+    .bar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:14px; }
+    .bar select, .bar input { padding:7px 10px; border:1px solid var(--hair); border-radius:8px; background:var(--surface); color:var(--text); font-size:13px; }
+    button { cursor:pointer; border:none; border-radius:8px; padding:7px 12px; font-size:13px; color:#fff; background:var(--brand2); }
+    button.ghost { background:transparent; color:var(--text); border:1px solid var(--hair); }
+    .cards { display:flex; gap:12px; flex-wrap:wrap; margin-bottom:14px; }
+    .card { flex:1; min-width:150px; background:var(--surface); border:1px solid var(--hair); border-radius:12px; padding:12px 14px; }
+    .card .k { font-size:12px; color:var(--muted); }
+    .card .v { font-size:24px; font-weight:700; }
+    .panel { background:var(--surface); border:1px solid var(--hair); border-radius:12px; padding:14px; }
+    .note { font-size:12.5px; color:var(--muted); margin:6px 0 12px; line-height:1.5; }
+    .tabulator { background:transparent; font-size:13px; border:none; }
+    .tabulator .tabulator-header { background:var(--bg); border-color:var(--hair); color:var(--muted); }
+    .tabulator-row { background:var(--surface); color:var(--text); border-color:var(--hair); }
+    .tabulator-row.tabulator-row-even { background:var(--bg); }
+    #err { display:none; background:#fee2e2; color:#991b1b; border:1px solid #fecaca; padding:10px 14px; border-radius:8px; font-size:13px; margin-bottom:12px; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>🛠️ Admin · Câu hỏi chatbot chưa hiểu</h1>
+      <div class="sub">Review để bổ sung kho tri thức (chatbot.js) — dữ liệu nội bộ</div>
+    </div>
+    <a href="/">← Về Dashboard</a>
+  </header>
+
+  <main>
+    <div id="err"></div>
+
+    <div class="bar">
+      <label style="font-size:13px;color:var(--muted)">Khoảng thời gian</label>
+      <select id="days">
+        <option value="7">7 ngày</option>
+        <option value="30" selected>30 ngày</option>
+        <option value="90">90 ngày</option>
+        <option value="0">Tất cả</option>
+      </select>
+      <button id="reload">↻ Tải lại</button>
+      <input id="search" type="text" placeholder="Tìm trong câu hỏi…" style="min-width:220px" />
+      <span id="count" style="font-size:12px;color:var(--muted)"></span>
+      <button id="export" class="ghost" style="margin-left:auto">⬇ Excel</button>
+    </div>
+
+    <div class="cards">
+      <div class="card"><div class="k">Tổng lượt hỏi chưa hiểu</div><div class="v" id="cTotal">—</div></div>
+      <div class="card"><div class="k">Số câu hỏi khác nhau</div><div class="v" id="cUnique">—</div></div>
+      <div class="card"><div class="k">Số file log</div><div class="v" id="cFiles">—</div></div>
+    </div>
+
+    <div class="panel">
+      <div class="note">
+        Danh sách câu hỏi bot <b>chưa trả lời được</b>, gom theo nội dung và đếm số lần. Câu hỏi
+        <b>lặp nhiều</b> nên được ưu tiên bổ sung vào <code>SYNONYMS</code>/<code>DEFINITIONS</code>/<code>USAGE</code>/<code>METRICS</code>
+        trong <code>chatbot.js</code>. (Ghi log ở <code>logs/chat-unknown-YYYY-MM-DD.log</code>.)
+      </div>
+      <div id="table"></div>
+    </div>
+  </main>
+
+  <script>
+    const $ = (s) => document.querySelector(s);
+    let table = null, total = 0;
+
+    function showErr(m) {
+      const e = $('#err');
+      if (!m) { e.style.display = 'none'; return; }
+      e.textContent = m; e.style.display = 'block';
+    }
+
+    async function load() {
+      showErr('');
+      try {
+        const days = $('#days').value;
+        const res = await fetch(`/api/admin/chat-unknown?days=${days}`);
+        const data = await res.json();
+        if (!res.ok || data.error) throw new Error(data.message || `Lỗi ${res.status}`);
+        $('#cTotal').textContent = (data.totalLines || 0).toLocaleString('vi');
+        $('#cUnique').textContent = (data.totalUnique || 0).toLocaleString('vi');
+        $('#cFiles').textContent = (data.files ? data.files.length : 0).toLocaleString('vi');
+        total = data.totalUnique || 0;
+        const cols = [
+          { title: 'Câu hỏi', field: 'message', headerFilter: 'input', widthGrow: 4 },
+          { title: 'Số lần', field: 'count', hozAlign: 'right', sorter: 'number', width: 90 },
+          { title: 'Lần đầu', field: 'first', width: 170 },
+          { title: 'Lần cuối', field: 'last', width: 170 },
+        ];
+        if (!table) {
+          table = new Tabulator('#table', {
+            data: data.items, columns: cols, layout: 'fitColumns',
+            pagination: false, height: '60vh', placeholder: 'Chưa có câu hỏi nào chưa hiểu — tốt!',
+          });
+          table.on('dataFiltered', (f, rows) => {
+            $('#count').textContent = rows.length === total ? `${total} câu` : `${rows.length}/${total} câu`;
+          });
+        } else {
+          table.replaceData(data.items);
+        }
+        $('#count').textContent = `${total} câu`;
+      } catch (err) {
+        showErr('Không tải được log: ' + err.message);
+      }
+    }
+
+    $('#reload').addEventListener('click', load);
+    $('#days').addEventListener('change', load);
+    $('#search').addEventListener('input', (e) => { if (table) table.setFilter('message', 'like', e.target.value); });
+    $('#export').addEventListener('click', () => { if (table) table.download('xlsx', `chat-unknown-${Date.now()}.xlsx`, { sheetName: 'ChuaHieu' }); });
+    load();
+  </script>
+</body>
+</html>
