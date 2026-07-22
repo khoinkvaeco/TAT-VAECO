@@ -64,11 +64,22 @@ Mở `.env` và sửa:
 # Chạy production
 npm start
 
-# Chạy dev (tự reload khi sửa server.js — Node >= 18)
+# Chạy dev (tự reload khi sửa server.js/chatbot.js/llm.js — Node >= 18)
 npm run dev
 ```
 
 Mở trình duyệt: **http://localhost:3000**
+
+### Chạy nền như Windows Service
+
+Để dashboard tự chạy khi bật máy (không phải mở CMD thủ công), cài thành Windows
+Service — xem hướng dẫn đầy đủ ở **[`docs/DEPLOY-SERVICE.md`](docs/DEPLOY-SERVICE.md)**. Tóm tắt (CMD/PowerShell **Run as Administrator**):
+
+```cmd
+npm run service:install      :: cài + khởi động service "DashboardTAT"
+npm run service:uninstall    :: gỡ service
+```
+Sau khi sửa code: `git pull` (hoặc copy) rồi `sc stop DashboardTAT & sc start DashboardTAT` để nạp bản mới.
 
 ### Chạy thử không cần SQL Server (DEMO)
 
