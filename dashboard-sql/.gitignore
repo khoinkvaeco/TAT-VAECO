@@ -7,3 +7,5 @@ npm-debug.log*
 dist/
 logs/*
 !logs/.gitkeep
+data/*
+!data/.gitkeep

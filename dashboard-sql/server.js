@@ -1656,6 +1656,27 @@ function accessLogger(req, res, next) {
 // 7c. CHATBOT NOI BO (rule/intent) - xu ly du lieu, KHONG goi dich vu ngoai
 // ---------------------------------------------------------------------------
 
+// --- KHO TRI THUC "DA HOC" (admin duyet) - luu NOI BO o data/kb-learned.json ---
+const DATA_DIR = path.join(__dirname, 'data');
+const KB_LEARNED_FILE = path.join(DATA_DIR, 'kb-learned.json');
+function loadLearnedKB() {
+  try {
+    if (!fs.existsSync(KB_LEARNED_FILE)) return [];
+    const arr = JSON.parse(fs.readFileSync(KB_LEARNED_FILE, 'utf8'));
+    return Array.isArray(arr) ? arr : [];
+  } catch (e) {
+    console.warn('[KB] Khong doc duoc kb-learned.json:', e.message);
+    return [];
+  }
+}
+function saveLearnedKB(arr) {
+  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+  fs.writeFileSync(KB_LEARNED_FILE, JSON.stringify(arr, null, 2), 'utf8');
+  chatbot.setLearned(arr); // nap ngay cho chatbot
+}
+// Nap luc khoi dong
+chatbot.setLearned(loadLearnedKB());
+
 // Ma booking on_off -> nhan tieng Viet (de hien lich su thiet bi de doc).
 const VM_LABELS = {
   YE: 'Lắp lên tàu', YA: 'Tháo khỏi tàu', T: 'Xuất/chuyển kho', TC: 'Hủy chuyển kho',
@@ -1946,6 +1967,7 @@ async function chatRespond(message, ctx) {
   const intent = chatbot.interpret(message, { departments });
   switch (intent.intent) {
     case 'kb': return { intent: intent.intent, reply: intent.answer };
+    case 'learned': return { intent: intent.intent, reply: intent.answer };
     case 'reconcile': return { intent: intent.intent, reply: await chatAnswerReconcile(intent.term, intent.direction) };
     case 'device': return { intent: intent.intent, reply: await chatAnswerDevice(intent.term) };
     case 'kpi': return { intent: intent.intent, reply: await chatAnswerKpi(intent, ctx) };
@@ -2278,6 +2300,121 @@ app.get(
     res.json({ items, totalLines, totalUnique: items.length, days, files });
   })
 );
+
+/** Doc + parse cac file log chat theo prefix, trong khoang `days` ngay.
+ *  Moi dong chat-*.log: 'time \t ip \t intent \t message'. Tra ve mang dong. */
+function readChatLogLines(prefix, days) {
+  const cutoff = days ? Date.now() - days * 86400000 : 0;
+  let files = [];
+  try {
+    files = fs.readdirSync(LOG_DIR)
+      .filter((f) => new RegExp(`^${prefix}\\d{4}-\\d{2}-\\d{2}\\.log$`).test(f)).sort();
+  } catch (_) { /* chua co thu muc log */ }
+  const rows = [];
+  for (const f of files) {
+    const day = f.slice(prefix.length, -4);
+    if (cutoff && new Date(day + 'T23:59:59Z').getTime() < cutoff) continue;
+    let content = '';
+    try { content = fs.readFileSync(path.join(LOG_DIR, f), 'utf8'); } catch (_) { continue; }
+    for (const line of content.split('\n')) {
+      if (!line.trim()) continue;
+      // Ho tro CA 2 dinh dang: chat-unknown ('time \t message') va
+      // chat-log ('time \t ip \t intent \t message'). Message LUON la cot cuoi.
+      const p = line.split('\t');
+      const message = (p[p.length - 1] || '').trim();
+      rows.push({
+        time: p[0] || day,
+        ip: p.length >= 4 ? p[1] : '',
+        intent: p.length >= 4 ? p[2] : '',
+        message,
+      });
+    }
+  }
+  return rows;
+}
+
+// --- ADMIN: TAT CA cau hoi chatbot (gom theo noi dung + thong ke theo intent) ---
+app.get(
+  '/api/admin/chat-log',
+  h(async (req, res) => {
+    const days = Math.max(0, parseInt(req.query.days || '0', 10));
+    const rows = readChatLogLines('chat-', days).filter((r) => r.message);
+    const byMsg = new Map();
+    const byIntent = {};
+    for (const r of rows) {
+      byIntent[r.intent || '(none)'] = (byIntent[r.intent || '(none)'] || 0) + 1;
+      const key = r.message.toLowerCase();
+      const cur = byMsg.get(key) || { message: r.message, count: 0, intents: new Set(), last: '' };
+      cur.count++;
+      if (r.intent) cur.intents.add(r.intent);
+      cur.last = r.time;
+      byMsg.set(key, cur);
+    }
+    const items = [...byMsg.values()]
+      .map((x) => ({ message: x.message, count: x.count, intents: [...x.intents].join(', '), last: x.last }))
+      .sort((a, b) => b.count - a.count);
+    res.json({ items, total: rows.length, totalUnique: items.length, byIntent, days });
+  })
+);
+
+// --- ADMIN: GOI Y bo sung KB tu cac cau hoi CHUA HIEU (vong hoc noi bo) ---
+//     Voi moi cau hoi chua hieu: tim chu de KB gan nhat (trung nhieu tu) de
+//     admin them dong nghia, hoac tao muc moi (admin tu nhap cau tra loi).
+app.get(
+  '/api/admin/kb-suggestions',
+  h(async (req, res) => {
+    const days = Math.max(0, parseInt(req.query.days || '0', 10));
+    const rows = readChatLogLines('chat-unknown-', days).filter((r) => r.message);
+    const byMsg = new Map();
+    for (const r of rows) {
+      const key = r.message.toLowerCase();
+      const cur = byMsg.get(key) || { question: r.message, count: 0, last: '' };
+      cur.count++; cur.last = r.time;
+      byMsg.set(key, cur);
+    }
+    const learnedKeys = new Set(loadLearnedKB().map((x) => (x.keys[0] || '').toLowerCase()));
+    const items = [...byMsg.values()]
+      .filter((x) => !learnedKeys.has(chatbot.norm(x.question))) // bo cai da hoc
+      .map((x) => {
+        const m = chatbot.bestMatch(x.question);
+        return {
+          question: x.question, count: x.count, last: x.last,
+          matchTopic: m.score > 0 ? m.topic : '',
+          matchAnswer: m.score > 0 ? m.answer : '',
+          suggestedAnswer: m.score > 0 ? m.answer : '', // admin co the sua
+        };
+      })
+      .sort((a, b) => b.count - a.count);
+    res.json({ items, days });
+  })
+);
+
+// --- ADMIN: liet ke KB da hoc ---
+app.get('/api/admin/kb-learned', h(async (req, res) => {
+  res.json({ items: loadLearnedKB() });
+}));
+
+// --- ADMIN: DUYET 1 goi y -> luu vao KB da hoc (chatbot dung ngay) ---
+app.post('/api/admin/kb-learn', h(async (req, res) => {
+  const question = String((req.body && req.body.question) || '').trim();
+  const answer = String((req.body && req.body.answer) || '').trim();
+  if (!question || !answer) {
+    return res.status(400).json({ error: true, message: 'Thieu question hoac answer.' });
+  }
+  const keyPhrase = chatbot.norm(question); // cau hoi da bo dau lam khoa
+  const arr = loadLearnedKB().filter((x) => (x.keys[0] || '') !== keyPhrase); // thay neu trung
+  arr.push({ keys: [keyPhrase], answer, addedAt: new Date().toISOString(), sample: question });
+  saveLearnedKB(arr);
+  res.json({ ok: true, count: arr.length });
+}));
+
+// --- ADMIN: XOA 1 muc KB da hoc ---
+app.post('/api/admin/kb-learn-delete', h(async (req, res) => {
+  const keyPhrase = String((req.body && req.body.key) || '').trim();
+  const arr = loadLearnedKB().filter((x) => (x.keys[0] || '') !== keyPhrase);
+  saveLearnedKB(arr);
+  res.json({ ok: true, count: arr.length });
+}));
 
 // Route tien: /admin -> trang admin review log cau hoi chua hieu
 app.get('/admin', (req, res) => res.sendFile(path.join(__dirname, 'public', 'admin.html')));

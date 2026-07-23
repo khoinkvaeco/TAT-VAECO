@@ -149,6 +149,28 @@ const METRICS = [
   { keys: ['chua lap', 'xuat chua lap'], field: 'countIssuedNotInstalled', label: 'Xuất kho chưa lắp', unit: 'thiết bị' },
 ];
 
+// KHO TRI THUC "DA HOC": cac muc admin duyet bo sung (luu o data/kb-learned.json,
+// server nap va goi setLearned). Moi muc: { keys:[da bo dau], answer:'...' }.
+let LEARNED = [];
+function setLearned(arr) {
+  LEARNED = Array.isArray(arr) ? arr.filter((x) => x && Array.isArray(x.keys) && x.answer) : [];
+}
+function getLearned() { return LEARNED; }
+
+/** Tim chu de KB co san TRUNG NHIEU TU NHAT voi cau hoi (de goi y bo sung). */
+function bestMatch(message) {
+  const n = expandSyn(norm(message));
+  let best = { score: 0, answer: '', topic: '' };
+  for (const item of [...DEFINITIONS, ...USAGE]) {
+    for (const k of item.keys) {
+      const toks = k.split(' ').filter(Boolean);
+      const sc = toks.reduce((s, t) => s + (n.includes(t) ? 1 : 0), 0);
+      if (sc > best.score) best = { score: sc, answer: item.answer, topic: item.keys[0] };
+    }
+  }
+  return best;
+}
+
 // ---------------------------------------------------------------------------
 // 3. HAM CHINH: interpret(message, ctx) -> { intent, ... }
 //    ctx.departments: danh sach ten trung tam de nhan dien trong cau hoi
@@ -265,6 +287,10 @@ function interpret(message, ctx = {}) {
     };
   }
 
+  // --- (4b) KB DA HOC (admin duyet) - uu tien truoc huong dan/unknown ---
+  const learned = matchKB(LEARNED, n);
+  if (learned) return { intent: 'learned', answer: learned };
+
   // --- (5) Huong dan dung dashboard ---
   const usage = matchKB(USAGE, n);
   if (usage) return { intent: 'kb', answer: usage };
@@ -309,4 +335,8 @@ function helpText() {
   ].join('\n');
 }
 
-module.exports = { interpret, helpText, norm, DEFINITIONS, USAGE, METRICS };
+module.exports = {
+  interpret, helpText, norm, bestMatch,
+  setLearned, getLearned,
+  DEFINITIONS, USAGE, METRICS,
+};
