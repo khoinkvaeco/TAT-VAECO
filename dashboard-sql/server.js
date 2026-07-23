@@ -2216,6 +2216,37 @@ app.get(
   })
 );
 
+// --- BETA: XU HUONG theo THANG (N thang gan nhat) cho trang dashboard beta ---
+//     Lap tung thang -> dung lai qDashboardAgg/buildDashboardFromAgg. Cache 5'.
+app.get(
+  '/api/beta/trend',
+  cached(5 * 60 * 1000, async (req, res) => {
+    const months = Math.min(12, Math.max(2, parseInt(req.query.months || '6', 10)));
+    const f = readFilters(req.query);
+    const anchor = /^\d{4}-\d{2}$/.test(req.query.month || '')
+      ? req.query.month
+      : (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; })();
+    const [ay, am] = anchor.split('-').map(Number);
+    const series = [];
+    for (let i = months - 1; i >= 0; i--) {
+      const d = new Date(ay, am - 1 - i, 1);
+      const mstr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      const range = { ...monthRange(mstr), label: 'Thang' };
+      const dash = CONFIG.demoMode
+        ? DEMO.dashboard(range, f)
+        : buildDashboardFromAgg(range, await qDashboardAgg(range, f));
+      const k = dash.kpis;
+      series.push({
+        month: mstr,
+        tatInstall: k.tatInstallAvg, tatUsReturn: k.tatUsReturnAvg, tatReturnStore: k.tatReturnStoreAvg,
+        issued: k.countIssued, notReconciled: k.countNotReconciled, reconcileRate: k.reconcileRate,
+        cntReci: k.cntReci, cntDel: k.cntDel,
+      });
+    }
+    res.json({ series, months });
+  })
+);
+
 // --- Bang du lieu chi tiet TAT theo don vi (van giu endpoint rieng) ---
 app.get(
   '/api/tat/departments',
@@ -2418,6 +2449,9 @@ app.post('/api/admin/kb-learn-delete', h(async (req, res) => {
 
 // Route tien: /admin -> trang admin review log cau hoi chua hieu
 app.get('/admin', (req, res) => res.sendFile(path.join(__dirname, 'public', 'admin.html')));
+
+// Route: /beta -> trang dashboard beta (de xuat cai tien, lay y kien)
+app.get('/beta', (req, res) => res.sendFile(path.join(__dirname, 'public', 'beta.html')));
 
 // Route mac dinh -> tra index.html (SPA)
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));

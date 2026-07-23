@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dashboard TAT · BETA (đề xuất cải tiến)</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <link href="https://unpkg.com/tabulator-tables@6.2.1/dist/css/tabulator.min.css" rel="stylesheet" />
+  <script src="https://unpkg.com/tabulator-tables@6.2.1/dist/js/tabulator.min.js"></script>
+  <link rel="stylesheet" href="style.css" />
+  <style>
+    body { background: var(--bg-plane, #f4f7f8); }
+    .wrap { max-width: 1400px; margin: 0 auto; padding: 0 20px; }
+    .beta-badge { background:#7c3aed; color:#fff; font-size:11px; font-weight:700; padding:2px 8px; border-radius:999px; }
+    .kbox { background:var(--surface-1); border:1px solid var(--hair); border-radius:14px; padding:14px 16px; }
+    .kbig { font-size:26px; font-weight:800; line-height:1.1; }
+    .klabel { font-size:12px; color:var(--text-muted); }
+    .delta-good { color:#16a34a; } .delta-bad { color:#dc2626; }
+    .card2 { background:var(--surface-1); border:1px solid var(--hair); border-radius:14px; padding:16px; }
+    .card2 h3 { font-size:14px; font-weight:700; margin:0 0 2px; }
+    .card2 .sub { font-size:12px; color:var(--text-muted); margin-bottom:10px; }
+    .chart-h { position:relative; height:280px; }
+    .note-box { background:#f5f3ff; border:1px solid #ddd6fe; color:#5b21b6; border-radius:12px; padding:12px 16px; font-size:13px; line-height:1.6; }
+    @media (prefers-color-scheme: dark) { .note-box { background:#241b3a; border-color:#4c1d95; color:#c4b5fd; } }
+    .pill { display:inline-block; font-size:11px; padding:2px 8px; border-radius:999px; border:1px solid var(--hair); color:var(--text-muted); }
+  </style>
+</head>
+<body class="text-primary min-h-screen">
+  <header class="brand-header sticky top-0 z-30">
+    <div class="wrap py-3 flex items-center gap-3 flex-wrap">
+      <div class="brand-logo">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor"><path d="M21 16v-2l-8-5V3.5A1.5 1.5 0 0 0 11.5 2 1.5 1.5 0 0 0 10 3.5V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5L21 16z"/></svg>
+      </div>
+      <div>
+        <h1 class="text-lg font-bold leading-tight">Dashboard TAT <span class="beta-badge">BETA</span></h1>
+        <p class="text-xs brand-sub">Đề xuất cải tiến — phân tích chuyên sâu cho MRO vật tư khí tài</p>
+      </div>
+      <a href="/" class="ml-auto text-xs underline">← Dashboard hiện tại</a>
+    </div>
+  </header>
+
+  <main class="wrap py-5">
+    <div class="note-box mb-5">
+      <b>Trang thử nghiệm để anh xem &amp; góp ý.</b> Bổ sung 5 hướng phân tích mà dashboard hiện tại chưa có:
+      (1) <b>Xu hướng theo tháng</b> — TAT có đang cải thiện? tồn đọng có phình ra?;
+      (2) <b>Phân phối &amp; percentile</b> — vì trung bình bị vài ca ngoại lệ kéo lệch, xem P50/P90 + % đạt mục tiêu (SLA);
+      (3) <b>Aging tồn đọng</b> — thiết bị chưa đối ứng đang "già" bao lâu;
+      (4) <b>Top ca xấu (Pareto)</b>; (5) <b>Bảng hiệu suất theo Trung tâm</b>. Dữ liệu lấy theo bộ lọc đang lưu ở dashboard chính.
+    </div>
+
+    <div class="flex items-end gap-3 flex-wrap mb-4">
+      <div>
+        <label class="klabel block">Tháng</label>
+        <input id="month" type="month" class="finput" />
+      </div>
+      <div>
+        <label class="klabel block">Mục tiêu TAT install (SLA) — <b><span id="tgtVal">7</span> ngày</b></label>
+        <input id="target" type="range" min="1" max="30" value="7" class="w-56 align-middle" />
+      </div>
+      <button id="reload" class="btn-accent">↻ Tải lại</button>
+      <span id="status" class="text-xs text-muted"></span>
+    </div>
+
+    <!-- KPI band -->
+    <div id="kpis" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 mb-5"></div>
+
+    <!-- Row 1: Trend + Distribution -->
+    <div class="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-4">
+      <div class="card2">
+        <h3>Xu hướng TAT &amp; tồn đọng theo tháng</h3>
+        <div class="sub">Đường: TAT install / US return (ngày, trục trái) · Cột: số thiết bị chưa đối ứng (trục phải). Xem TAT có cải thiện và backlog có tăng.</div>
+        <div class="chart-h"><canvas id="cTrend"></canvas></div>
+      </div>
+      <div class="card2">
+        <h3>Phân phối TAT install (vì sao "trung bình" gây hiểu nhầm)</h3>
+        <div class="sub">Cột: số thiết bị theo dải TAT · Vạch: P50 (trung vị), P90, và mục tiêu SLA. Kéo thanh mục tiêu để xem % đạt.</div>
+        <div class="chart-h"><canvas id="cDist"></canvas></div>
+      </div>
+    </div>
+
+    <!-- Row 2: Aging + Pareto -->
+    <div class="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-4">
+      <div class="card2">
+        <h3>Aging tồn đọng — thiết bị CHƯA đối ứng theo tuổi</h3>
+        <div class="sub">Nhóm theo số ngày kể từ khi xuất kho. Vùng &gt;90 ngày là rủi ro cần xử lý ưu tiên.</div>
+        <div class="chart-h"><canvas id="cAging"></canvas></div>
+      </div>
+      <div class="card2">
+        <h3>Top 10 thiết bị TAT cao nhất (Pareto)</h3>
+        <div class="sub">Tập trung xử lý nhóm nhỏ gây phần lớn thời gian chờ.</div>
+        <div class="chart-h"><canvas id="cPareto"></canvas></div>
+      </div>
+    </div>
+
+    <!-- Row 3: Center performance table -->
+    <div class="card2 mb-6">
+      <h3>Hiệu suất theo Trung tâm</h3>
+      <div class="sub">TAT trung bình, P90 (đuôi chậm), số thiết bị, và % đạt mục tiêu SLA. Sắp xếp theo cột để tìm điểm nghẽn.</div>
+      <div id="centerTable"></div>
+    </div>
+
+    <div class="note-box mb-8">
+      <b>Câu hỏi để anh tư vấn thêm:</b> (a) Mục tiêu SLA thực tế cho TAT install / US return là bao nhiêu ngày?
+      (b) Có ngưỡng "quá hạn" cho tồn đọng (vd &gt;30 ngày phải cảnh báo)?  (c) Muốn xem theo <i>tuần</i> hay <i>tháng</i> là chính?
+      (d) Có cần tách theo <i>ATA chapter</i> / loại khí tài không? (e) Cần <i>cảnh báo tự động</i> khi TAT vượt ngưỡng?
+    </div>
+  </main>
+
+  <script>
+    const $ = (s) => document.querySelector(s);
+    const charts = {};
+    const cssVar = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+    // ---- Bo loc: lay tu localStorage (dashboard chinh) + thang tren trang ----
+    function savedFilters() { try { return JSON.parse(localStorage.getItem('tat-filters-v1') || 'null') || {}; } catch { return {}; } }
+    function buildQuery(extra) {
+      const s = savedFilters();
+      const p = new URLSearchParams();
+      p.set('periodType', 'month');
+      p.set('month', $('#month').value || s.month || '');
+      if (s.station) p.set('station', s.station);
+      if (s.store) p.set('store', s.store);
+      if (s.department) p.set('department', s.department);
+      if (s.excludeCC) p.set('excludeCC', '1');
+      Object.entries(extra || {}).forEach(([k, v]) => p.set(k, v));
+      return p.toString();
+    }
+    const api = (path, extra) => fetch(`${path}?${buildQuery(extra)}`).then((r) => r.json());
+
+    // ---- Thong ke ----
+    const nums = (arr, f) => arr.map(f).map(Number).filter((x) => isFinite(x));
+    const avg = (a) => a.length ? a.reduce((s, x) => s + x, 0) / a.length : 0;
+    const pct = (a, p) => { if (!a.length) return 0; const s = [...a].sort((x, y) => x - y); const i = Math.min(s.length - 1, Math.ceil(p * s.length) - 1); return s[Math.max(0, i)]; };
+    const r1 = (n) => Math.round(n * 10) / 10;
+
+    // ---- KPI band ----
+    function renderKPIs(dash, rows, target) {
+      const inst = nums(rows.filter((r) => (r.department || '').toUpperCase() !== 'CUVT'), (r) => r.tat_install_days);
+      const within = inst.filter((x) => x <= target).length;
+      const sla = inst.length ? Math.round((within / inst.length) * 100) : 0;
+      const k = dash.kpis;
+      const tatI = k.tatInstallAvg || 0;
+      const delta = r1(tatI - target);
+      const cards = [
+        { label: `TAT install (mục tiêu ${target}n)`, big: `${tatI} <span class="text-sm">ngày</span>`,
+          sub: `<span class="${delta <= 0 ? 'delta-good' : 'delta-bad'}">${delta <= 0 ? '▼' : '▲'} ${Math.abs(delta)} ngày so mục tiêu</span>` },
+        { label: `SLA đạt (install ≤ ${target}n)`, big: `${sla}<span class="text-sm">%</span>`,
+          sub: `${within}/${inst.length} thiết bị đạt` },
+        { label: 'TAT install P90 (đuôi chậm)', big: `${r1(pct(inst, 0.9))} <span class="text-sm">ngày</span>`,
+          sub: `P50 (trung vị): ${r1(pct(inst, 0.5))} ngày` },
+        { label: 'Tồn đọng (chưa đối ứng)', big: `${k.countNotReconciled ?? 0}`,
+          sub: `Tỷ lệ đối ứng: ${k.reconcileRate ?? 0}%` },
+        { label: 'Nhịp vào/ra (xuất vs trả US)', big: `${k.countIssued ?? 0}<span class="text-sm">/${k.cntDel ?? 0}</span>`,
+          sub: (k.cntDel && k.countIssued) ? `tỷ lệ trả/xuất: ${Math.round((k.cntDel / k.countIssued) * 100)}%` : '' },
+      ];
+      $('#kpis').innerHTML = cards.map((c) => `
+        <div class="kbox"><div class="klabel">${c.label}</div><div class="kbig">${c.big}</div><div class="text-xs mt-1">${c.sub}</div></div>`).join('');
+    }
+
+    // ---- Trend ----
+    function renderTrend(series) {
+      const grid = cssVar('--hair'), tick = cssVar('--text-muted');
+      if (charts.t) charts.t.destroy();
+      charts.t = new Chart($('#cTrend'), {
+        data: {
+          labels: series.map((x) => x.month),
+          datasets: [
+            { type: 'bar', label: 'Chưa đối ứng', data: series.map((x) => x.notReconciled), yAxisID: 'y1', backgroundColor: cssVar('--series-6') + '99', order: 3 },
+            { type: 'line', label: 'TAT install', data: series.map((x) => x.tatInstall), yAxisID: 'y', borderColor: cssVar('--series-1'), backgroundColor: cssVar('--series-1'), tension: .3, order: 1 },
+            { type: 'line', label: 'TAT US return', data: series.map((x) => x.tatUsReturn), yAxisID: 'y', borderColor: cssVar('--series-8'), backgroundColor: cssVar('--series-8'), tension: .3, order: 2 },
+          ],
+        },
+        options: { responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { labels: { color: cssVar('--text-secondary') } } },
+          scales: {
+            x: { grid: { color: grid }, ticks: { color: tick } },
+            y: { position: 'left', title: { display: true, text: 'TAT (ngày)', color: tick }, grid: { color: grid }, ticks: { color: tick }, beginAtZero: true },
+            y1: { position: 'right', title: { display: true, text: 'SL chưa đối ứng', color: tick }, grid: { drawOnChartArea: false }, ticks: { color: tick }, beginAtZero: true },
+          } },
+      });
+    }
+
+    // ---- Distribution (histogram + P50/P90/target) ----
+    function renderDist(rows, target) {
+      const data = nums(rows.filter((r) => (r.department || '').toUpperCase() !== 'CUVT'), (r) => r.tat_install_days);
+      const edges = [0, 1, 2, 3, 5, 7, 10, 14, 21, 30, 9999];
+      const labels = ['0-1', '1-2', '2-3', '3-5', '5-7', '7-10', '10-14', '14-21', '21-30', '>30'];
+      const bins = new Array(labels.length).fill(0);
+      data.forEach((v) => { for (let i = 0; i < edges.length - 1; i++) { if (v >= edges[i] && v < edges[i + 1]) { bins[i]++; break; } } });
+      const p50 = pct(data, 0.5), p90 = pct(data, 0.9);
+      const binOf = (val) => { for (let i = 0; i < edges.length - 1; i++) if (val >= edges[i] && val < edges[i + 1]) return i; return labels.length - 1; };
+      const colorFor = (i) => (edges[i] >= target ? cssVar('--critical') + 'cc' : cssVar('--series-3') + 'cc');
+      if (charts.d) charts.d.destroy();
+      charts.d = new Chart($('#cDist'), {
+        type: 'bar',
+        data: { labels, datasets: [{ label: 'Số thiết bị', data: bins, backgroundColor: bins.map((_, i) => colorFor(i)), borderRadius: 4 }] },
+        options: { responsive: true, maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false },
+            subtitle: { display: true, color: cssVar('--text-muted'),
+              text: `P50=${r1(p50)}n · P90=${r1(p90)}n · Mục tiêu=${target}n (cột đỏ = vượt mục tiêu)` },
+          },
+          scales: { x: { grid: { color: cssVar('--hair') }, ticks: { color: cssVar('--text-muted') }, title: { display: true, text: 'Dải TAT install (ngày)', color: cssVar('--text-muted') } },
+                    y: { grid: { color: cssVar('--hair') }, ticks: { color: cssVar('--text-muted') }, beginAtZero: true } } },
+      });
+    }
+
+    // ---- Aging ton dong ----
+    function renderAging(rows) {
+      const buckets = [{ l: '0-7 ngày', n: 0, c: '--good' }, { l: '8-30', n: 0, c: '--warning' }, { l: '31-90', n: 0, c: '--series-6' }, { l: '>90', n: 0, c: '--critical' }];
+      nums(rows, (r) => r.tat_days).forEach((v) => { if (v <= 7) buckets[0].n++; else if (v <= 30) buckets[1].n++; else if (v <= 90) buckets[2].n++; else buckets[3].n++; });
+      if (charts.a) charts.a.destroy();
+      charts.a = new Chart($('#cAging'), {
+        type: 'bar',
+        data: { labels: buckets.map((b) => b.l), datasets: [{ label: 'Thiết bị chưa đối ứng', data: buckets.map((b) => b.n), backgroundColor: buckets.map((b) => cssVar(b.c) + 'cc'), borderRadius: 4 }] },
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } },
+          scales: { x: { grid: { color: cssVar('--hair') }, ticks: { color: cssVar('--text-muted') } }, y: { grid: { color: cssVar('--hair') }, ticks: { color: cssVar('--text-muted') }, beginAtZero: true } } },
+      });
+    }
+
+    // ---- Pareto top 10 ----
+    function renderPareto(rows) {
+      const top = [...rows].filter((r) => isFinite(Number(r.tat_days)))
+        .sort((a, b) => b.tat_days - a.tat_days).slice(0, 10);
+      if (charts.p) charts.p.destroy();
+      charts.p = new Chart($('#cPareto'), {
+        type: 'bar',
+        data: {
+          labels: top.map((r) => `${r.partno || ''}/${r.serialno || ''}`.slice(0, 22)),
+          datasets: [{ label: 'TAT (ngày)', data: top.map((r) => r1(r.tat_days)), backgroundColor: cssVar('--series-2') + 'cc', borderRadius: 4 }],
+        },
+        options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } },
+          scales: { x: { grid: { color: cssVar('--hair') }, ticks: { color: cssVar('--text-muted') }, beginAtZero: true }, y: { grid: { display: false }, ticks: { color: cssVar('--text-muted'), font: { size: 10 } } } } },
+      });
+    }
+
+    // ---- Center table ----
+    let centerTable = null;
+    function renderCenter(rows, target) {
+      const m = new Map();
+      rows.forEach((r) => {
+        const d = r.department || '(trống)';
+        if (!m.has(d)) m.set(d, { dep: d, inst: [], us: [], n: 0 });
+        const g = m.get(d); g.n++;
+        if (isFinite(Number(r.tat_install_days))) g.inst.push(Number(r.tat_install_days));
+        if (isFinite(Number(r.tat_usreturn_days))) g.us.push(Number(r.tat_usreturn_days));
+      });
+      const data = [...m.values()].map((g) => ({
+        dep: g.dep, n: g.n,
+        avgInst: r1(avg(g.inst)), p90Inst: r1(pct(g.inst, 0.9)), avgUs: r1(avg(g.us)),
+        sla: g.inst.length ? Math.round((g.inst.filter((x) => x <= target).length / g.inst.length) * 100) : null,
+      })).sort((a, b) => b.p90Inst - a.p90Inst);
+      const cols = [
+        { title: 'Trung tâm', field: 'dep', headerFilter: 'input' },
+        { title: 'SL thiết bị', field: 'n', hozAlign: 'right', sorter: 'number' },
+        { title: 'TAT install TB', field: 'avgInst', hozAlign: 'right', sorter: 'number' },
+        { title: 'TAT install P90', field: 'p90Inst', hozAlign: 'right', sorter: 'number' },
+        { title: 'TAT US return TB', field: 'avgUs', hozAlign: 'right', sorter: 'number' },
+        { title: `SLA đạt (%)`, field: 'sla', hozAlign: 'right', sorter: 'number',
+          formatter: (c) => { const v = c.getValue(); if (v == null) return '—'; const col = v >= 80 ? '#16a34a' : v >= 50 ? '#d97706' : '#dc2626'; return `<b style="color:${col}">${v}%</b>`; } },
+      ];
+      if (!centerTable) centerTable = new Tabulator('#centerTable', { data, columns: cols, layout: 'fitColumns', height: '320px', pagination: false });
+      else centerTable.replaceData(data);
+    }
+
+    // ---- Orchestrate ----
+    let lastDash = null, lastNotRec = [];
+    async function loadAll() {
+      $('#status').textContent = 'Đang tải…';
+      try {
+        const [dash, notRec, trend] = await Promise.all([
+          api('/api/dashboard'),
+          api('/api/reports/not-reconciled'),
+          api('/api/beta/trend', { months: 6 }),
+        ]);
+        lastDash = dash; lastNotRec = notRec.rows || [];
+        const target = parseInt($('#target').value, 10);
+        renderKPIs(dash, dash.rows || [], target);
+        renderTrend(trend.series || []);
+        renderDist(dash.rows || [], target);
+        renderAging(lastNotRec);
+        renderPareto(dash.rows || []);
+        renderCenter(dash.rows || [], target);
+        $('#status').textContent = `Cập nhật ${new Date().toLocaleTimeString('vi')}`;
+      } catch (e) { $('#status').textContent = 'Lỗi: ' + e.message; }
+    }
+    // Doi muc tieu -> tinh lai nhanh cac phan phu thuoc target (khong goi API lai)
+    function recomputeTarget() {
+      const target = parseInt($('#target').value, 10);
+      $('#tgtVal').textContent = target;
+      if (lastDash) { renderKPIs(lastDash, lastDash.rows || [], target); renderDist(lastDash.rows || [], target); renderCenter(lastDash.rows || [], target); }
+    }
+
+    // Init
+    (function () {
+      const s = savedFilters();
+      const now = new Date();
+      $('#month').value = s.month || `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+      $('#target').addEventListener('input', recomputeTarget);
+      $('#month').addEventListener('change', loadAll);
+      $('#reload').addEventListener('click', loadAll);
+      loadAll();
+    })();
+  </script>
+</body>
+</html>
