@@ -221,8 +221,16 @@ function interpret(message, ctx = {}) {
   const deviceCode = findDeviceCode(raw);
 
   // --- (0) Tim doi ung cua 1 thiet bi: co "doi ung" + ma thiet bi (KHONG hoi "la gi") ---
+  //     Chieu NGUOC: hoi ve 1 SN unservice -> tim phieu xuat doi ung.
+  const reverseRecon =
+    /(^|\s)unservice\s+[0-9a-z-]*\d/.test(n) ||
+    /(phieu nao|xuat nao|tu phieu|tra ve tu|doi ung nguoc|nguoc lai)/.test(n);
   if (wantsReconcile && deviceCode && !isDefine) {
-    return { intent: 'reconcile', term: deviceCode };
+    return { intent: 'reconcile', term: deviceCode, direction: reverseRecon ? 'reverse' : 'forward' };
+  }
+  // "unservice <ma>" (khong co tu 'doi ung') cung la chieu nguoc
+  if (reverseRecon && deviceCode && !isDefine) {
+    return { intent: 'reconcile', term: deviceCode, direction: 'reverse' };
   }
 
   // --- (1) Tra cuu thiet bi: co tu khoa tra cuu + ma, hoac chi 1 ma don doc ---
@@ -293,7 +301,8 @@ function helpText() {
   return [
     'Tôi có thể giúp anh/chị:',
     '• Số liệu: "TAT install tháng 7 của CNBDNT", "có bao nhiêu thiết bị chưa đối ứng", "trung tâm nào TAT cao nhất".',
-    '• Tìm đối ứng: "đối ứng của serial 43842" — kiểm tra thiết bị đã trả unservice / trả service / hoàn kho hay chưa.',
+    '• Tìm đối ứng: "đối ứng của serial 43842" — thiết bị đã trả unservice (SN nào, khi nào) / trả service (giờ recertify) / hoàn kho hay chưa.',
+    '• Chiều ngược: "unservice 43842" hoặc "SN 43842 trả về từ phiếu nào" — tìm phiếu xuất đối ứng của 1 SN đã trả về kho.',
     '• Tra cứu thiết bị: "tra cứu serial 43842" hoặc gõ số label/part.',
     '• Định nghĩa: "TAT US return là gì", "trả service là gì", "costcenter là gì".',
     '• Hướng dẫn: "cách xuất Excel", "cách lọc", "tính lại TAT là gì".',

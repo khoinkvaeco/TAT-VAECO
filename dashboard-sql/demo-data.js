@@ -400,16 +400,44 @@ function reconcileStatus(term) {
   for (let i = 0; i < n; i++) {
     // Ngau nhien 1 trong cac trang thai (dong dau uu tien "chua doi ung" de de thay)
     const roll = i === 0 ? rndInt(0, 4) : rndInt(1, 4);
+    const issue = new Date(now - i * 86400000 * rndInt(10, 60));
     rows.push({
       labelno: /^[0-9]+$/.test(String(term)) ? term : 'L' + rndInt(1000, 9999),
       partno: /[a-z]/i.test(String(term)) ? term : 'PN-' + pad(rndInt(100, 999)),
       serialno: 'SN' + rndInt(10000, 99999),
       voucherno: 'P-' + rndInt(100000, 999999),
-      issue_time_vn: new Date(now - i * 86400000 * rndInt(10, 60)).toISOString(),
-      has_us: roll === 1 ? 1 : 0,
-      has_service: roll === 2 ? 1 : 0,
+      issue_time_vn: issue.toISOString(),
+      // Chi tiet: tra unservice (SN + gio) / tra service (gio recertify)
+      us_part: roll === 1 ? 'PN-' + pad(rndInt(100, 999)) : null,
+      us_serial: roll === 1 ? 'SN' + rndInt(10000, 99999) : null,
+      us_del_time: roll === 1 ? new Date(issue.getTime() + rndInt(1, 40) * 86400000).toISOString() : null,
+      svc_serial: roll === 2 ? 'SN' + rndInt(10000, 99999) : null,
+      svc_recert_time: roll === 2 ? new Date(issue.getTime() + rndInt(1, 40) * 86400000).toISOString() : null,
       has_return: roll === 3 ? 1 : 0,
       cancelled: roll === 4 ? 1 : 0,
+    });
+  }
+  return rows;
+}
+
+/** Doi ung NGUOC mau: hoi ve 1 SN unservice -> phieu xuat doi ung. */
+function reconcileReverse(term) {
+  const now = Date.now();
+  const n = 1 + rndInt(0, 2);
+  const rows = [];
+  for (let i = 0; i < n; i++) {
+    const del = new Date(now - i * 86400000 * rndInt(5, 40));
+    const hasIssue = Math.random() > 0.2;
+    rows.push({
+      labelno: /^[0-9]+$/.test(String(term)) ? term : 'L' + rndInt(1000, 9999),
+      returned_part: 'PN-' + pad(rndInt(100, 999)),
+      returned_serial: /[a-z]/i.test(String(term)) ? term : 'SN' + rndInt(10000, 99999),
+      voucher_s: 'P-' + rndInt(100000, 999999),
+      del_time: del.toISOString(),
+      issued_part: hasIssue ? 'PN-' + pad(rndInt(100, 999)) : null,
+      issued_serial: hasIssue ? 'SN' + rndInt(10000, 99999) : null,
+      issue_voucher: hasIssue ? 'P-' + rndInt(100000, 999999) : null,
+      issue_time_vn: hasIssue ? new Date(del.getTime() - rndInt(1, 30) * 86400000).toISOString() : null,
     });
   }
   return rows;
@@ -419,6 +447,7 @@ module.exports = {
   filters,
   deviceLookup,
   reconcileStatus,
+  reconcileReverse,
   dashboard,
   tatDepartments,
   tatCuvt,

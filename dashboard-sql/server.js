@@ -1715,11 +1715,10 @@ async function qReconcileStatus(term) {
     SELECT TOP 5
       k.[labelno] AS labelno, RTRIM(k.[partno]) AS partno, RTRIM(k.[serialno]) AS serialno,
       RTRIM(k.[voucherno]) AS voucherno, ${amosToVN('k')} AS issue_time_vn,
-      -- (1) tra unservice: real_us1 khop labelno+voucherno
-      CASE WHEN EXISTS (SELECT 1 FROM [NQT].[dbo].[real_us1] r
-             WHERE r.[labelno] = k.[labelno] AND r.[voucher_s] = k.[voucherno]) THEN 1 ELSE 0 END AS has_us,
-      -- (2) tra service: chuoi thao YA -> recertify CI @SHOPLOC
-      CASE WHEN ${recertExists('k')} THEN 1 ELSE 0 END AS has_service,
+      -- (1) TRA UNSERVICE: real_us1 khop labelno+voucherno -> lay SN duoc tra + gio tra
+      us.[part_off] AS us_part, us.[serial_off] AS us_serial, us.[del_time] AS us_del_time,
+      -- (2) TRA SERVICE: chuoi thao YA -> recertify CI @SHOPLOC -> gio recertify
+      sv.[removal_serial] AS svc_serial, sv.[recert_time] AS svc_recert_time,
       -- (3) hoan kho: TC 'P-CA-...' cung thiet bi
       CASE WHEN EXISTS (SELECT 1 FROM [NQT].[dbo].[kho_ser1] tc
              WHERE tc.[vm] = 'TC' AND tc.[voucherno] LIKE 'P-CA-%'
@@ -1731,11 +1730,55 @@ async function qReconcileStatus(term) {
                AND tc2.[labelno] = k.[labelno]
                AND RTRIM(tc2.[voucherno]) = 'P-CA-' + SUBSTRING(RTRIM(k.[voucherno]), 3, 50)) THEN 1 ELSE 0 END AS cancelled
     FROM [NQT].[dbo].[kho_ser1] k
+    -- Chi tiet TRA UNSERVICE (dong tra moi nhat): SN thao tra ve + gio tra
+    OUTER APPLY (
+      SELECT TOP 1 RTRIM(r.[partno_off]) AS part_off, RTRIM(r.[serialno_o]) AS serial_off, r.[del_time] AS del_time
+      FROM [NQT].[dbo].[real_us1] r
+      WHERE r.[labelno] = k.[labelno] AND r.[voucher_s] = k.[voucherno]
+      ORDER BY r.[del_time] DESC
+    ) us
+    -- Chi tiet TRA SERVICE (recertify dau tien sau gio xuat): SN thao + gio CI
+    OUTER APPLY (
+      SELECT TOP 1 RTRIM(t1.[serialno]) AS removal_serial, t2.[mut_t] AS recert_time
+      FROM [NQT].[dbo].[on_off] t1
+      INNER JOIN [NQT].[dbo].[on_off] t2
+        ON t2.[psn] = t1.[psn] AND t2.[orderno] = t1.[orderno]
+       AND t2.[vm] = 'CI' AND t2.[location] = 'SHOPLOC'
+      WHERE t1.[vm] = 'YA' AND t1.[labelno] = k.[labelno]
+        AND t2.[mut_t] > ${amosToVN('k')}
+      ORDER BY t2.[mut_t] ASC, t1.[mut_t] ASC
+    ) sv
     WHERE k.[vm] = 'T' AND k.[voucherno] LIKE 'P-%'
       AND ( RTRIM(k.[partno]) = @term
          OR RTRIM(k.[serialno]) = @term
          OR TRY_CONVERT(float, k.[labelno]) = TRY_CONVERT(float, @term) )
     ORDER BY k.[mutation] DESC, k.[mutation_t] DESC`;
+  return query(text, params);
+}
+
+/**
+ * DOI UNG NGUOC: hoi ve 1 SN UNSERVICE (thiet bi da tra ve kho) -> tim PHIEU
+ * XUAT doi ung tuong ung. Lien ket real_us1(labelno,voucher_s) = kho_ser1
+ * (labelno,voucherno). Tra ve thiet bi da tra + phieu xuat + thiet bi xuat.
+ */
+async function qReconcileReverse(term) {
+  const params = { term: String(term || '').trim() };
+  const text = `
+    SELECT TOP 5
+      r.[labelno] AS labelno,
+      RTRIM(r.[partno_off]) AS returned_part, RTRIM(r.[serialno_o]) AS returned_serial,
+      RTRIM(r.[voucher_s]) AS voucher_s, r.[del_time] AS del_time,
+      RTRIM(k.[partno]) AS issued_part, RTRIM(k.[serialno]) AS issued_serial,
+      RTRIM(k.[voucherno]) AS issue_voucher, ${amosToVN('k')} AS issue_time_vn
+    FROM [NQT].[dbo].[real_us1] r
+    LEFT JOIN [NQT].[dbo].[kho_ser1] k
+      ON k.[labelno] = r.[labelno] AND k.[voucherno] = r.[voucher_s] AND k.[vm] = 'T'
+    WHERE r.[del_time] IS NOT NULL
+      AND ( RTRIM(r.[serialno_o]) = @term
+         OR RTRIM(r.[partno_off]) = @term
+         OR RTRIM(r.[serialno]) = @term
+         OR TRY_CONVERT(float, r.[labelno]) = TRY_CONVERT(float, @term) )
+    ORDER BY r.[del_time] DESC`;
   return query(text, params);
 }
 
@@ -1804,16 +1847,27 @@ async function chatAnswerDevice(term) {
     lines.join('\n') + more;
 }
 
-/** Tao cau tra loi cho intent 'reconcile' (tim doi ung cua 1 thiet bi). */
-async function chatAnswerReconcile(term) {
+/** Tao cau tra loi cho intent 'reconcile' (tim doi ung cua 1 thiet bi).
+ *  direction='reverse' -> hoi ve SN unservice, tim nguoc ra phieu xuat. */
+async function chatAnswerReconcile(term, direction) {
+  if (direction === 'reverse') return chatAnswerReconcileReverse(term);
+
   const rows = CONFIG.demoMode ? DEMO.reconcileStatus(term) : await qReconcileStatus(term);
   if (!rows || !rows.length) {
     return `Không tìm thấy phiếu xuất kho nào cho "${term}" để kiểm tra đối ứng. Hãy thử Part No / Serial No / Label khác.`;
   }
+  // Chi tiet tung trang thai: tra unservice (SN + gio), tra service (gio recertify)
   const statusOf = (r) => {
     if (r.cancelled) return '⛔ Phiếu đã hủy (TRANSFER CANCELLED)';
-    if (r.has_us) return '✅ Đã đối ứng — Trả unservice';
-    if (r.has_service) return '✅ Đã đối ứng — Trả service (recertify)';
+    if (r.us_del_time) {
+      const sn = r.us_serial ? `SN ${r.us_serial}` : 'SN (trống)';
+      const pn = r.us_part ? ` / PN ${r.us_part}` : '';
+      return `✅ Trả unservice: ${sn}${pn} — trả lúc ${fmtVNServer(r.us_del_time)}`;
+    }
+    if (r.svc_recert_time) {
+      const sn = r.svc_serial ? ` (SN tháo ${r.svc_serial})` : '';
+      return `✅ Trả service (recertify)${sn} — lúc ${fmtVNServer(r.svc_recert_time)}`;
+    }
     if (r.has_return) return '✅ Đã hoàn kho';
     return '⚠️ CHƯA đối ứng';
   };
@@ -1822,6 +1876,23 @@ async function chatAnswerReconcile(term) {
     (r) => `• Phiếu ${r.voucherno} (xuất ${fmtVNServer(r.issue_time_vn)}): ${statusOf(r)}`
   );
   return `Đối ứng của ${h0.partno || ''} / SN ${h0.serialno || ''} (label ${h0.labelno || ''}) — ${rows.length} phiếu xuất gần nhất:\n` +
+    lines.join('\n');
+}
+
+/** Chieu NGUOC: hoi ve 1 SN unservice -> phieu xuat doi ung tuong ung. */
+async function chatAnswerReconcileReverse(term) {
+  const rows = CONFIG.demoMode ? DEMO.reconcileReverse(term) : await qReconcileReverse(term);
+  if (!rows || !rows.length) {
+    return `Không tìm thấy bản ghi trả unservice nào cho "${term}". Hãy thử Serial No / Part No / Label của thiết bị đã trả về kho.`;
+  }
+  const h0 = rows[0];
+  const lines = rows.map((r) => {
+    const back = r.issue_voucher
+      ? `đối ứng phiếu xuất ${r.issue_voucher} (thiết bị xuất ${r.issued_part || ''}/${r.issued_serial || ''}, xuất ${fmtVNServer(r.issue_time_vn)})`
+      : '⚠️ chưa tìm thấy phiếu xuất đối ứng';
+    return `• Trả unservice lúc ${fmtVNServer(r.del_time)} (label ${r.labelno}) — ${back}`;
+  });
+  return `SN ${h0.returned_serial || term} (đơn vị trả unservice) — ${rows.length} lần trả gần nhất:\n` +
     lines.join('\n');
 }
 
@@ -1864,7 +1935,7 @@ async function chatRespond(message, ctx) {
   const intent = chatbot.interpret(message, { departments });
   switch (intent.intent) {
     case 'kb': return { intent: intent.intent, reply: intent.answer };
-    case 'reconcile': return { intent: intent.intent, reply: await chatAnswerReconcile(intent.term) };
+    case 'reconcile': return { intent: intent.intent, reply: await chatAnswerReconcile(intent.term, intent.direction) };
     case 'device': return { intent: intent.intent, reply: await chatAnswerDevice(intent.term) };
     case 'kpi': return { intent: intent.intent, reply: await chatAnswerKpi(intent, ctx) };
     case 'help': return { intent: intent.intent, reply: chatbot.helpText() };
