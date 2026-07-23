@@ -1905,6 +1905,17 @@ function logChatGap(message) {
   } catch (_) { /* khong de loi ghi log lam vo chat */ }
 }
 
+/** Ghi lai MOI cau hoi gui toi chatbot (TSV: gio, IP, intent, noi dung).
+ *  1 file/ngay: logs/chat-YYYY-MM-DD.log. Luu NOI BO (khong gui ra ngoai). */
+function logChatQuestion(message, intent, ip) {
+  try {
+    const day = new Date().toISOString().slice(0, 10);
+    const vn = new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh', hour12: false });
+    const safe = String(message || '').replace(/[\t\r\n]+/g, ' ').trim();
+    fs.appendFile(path.join(LOG_DIR, `chat-${day}.log`), `${vn}\t${ip || ''}\t${intent || ''}\t${safe}\n`, () => {});
+  } catch (_) { /* khong de loi ghi log lam vo chat */ }
+}
+
 /**
  * Cau chua hieu -> neu co LLM NOI BO (LLM_URL) thi nho LLM tra loi, GROUNDING
  * bang kho tri thuc (KB). Huong dan LLM: chi dung kien thuc duoc cung cap,
@@ -2047,6 +2058,7 @@ app.post(
     const message = String(body.message || '').slice(0, 500);
     if (!message.trim()) return res.json({ reply: chatbot.helpText(), intent: 'help' });
     const out = await chatRespond(message, body);
+    logChatQuestion(message, out.intent, clientIp(req)); // ghi log MOI cau hoi (noi bo)
     res.json(out);
   })
 );
