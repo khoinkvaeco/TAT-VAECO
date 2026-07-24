@@ -64,6 +64,24 @@
   <main>
     <div id="err"></div>
 
+    <!-- ===== Trang thai & kiem tra AI (LLM) ===== -->
+    <div class="panel" style="margin-bottom:14px">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <b style="font-size:14px">🤖 Trạng thái AI (LLM)</b>
+        <span id="llmStatus" style="font-size:13px;color:var(--muted)">Đang kiểm tra…</span>
+        <button id="llmReload" class="ghost" style="margin-left:auto">↻ Kiểm tra lại</button>
+      </div>
+      <div class="note" style="margin-top:8px">
+        LLM <b>chỉ</b> trả lời câu bot <b>chưa hiểu</b> hoặc khi bấm <b>👎 Báo sai</b>. Câu số liệu/tra cứu/đối ứng
+        luôn tính bằng <b>SQL nội bộ</b> (không qua AI). Gõ câu bên dưới để gọi thử AI một lần:
+      </div>
+      <div class="bar" style="margin-top:8px">
+        <input id="llmTestMsg" type="text" placeholder="VD: TAT install là gì? / Bạn có hoạt động không?" style="flex:1;min-width:240px" />
+        <button id="llmTestBtn" class="act">Gọi thử AI</button>
+      </div>
+      <div id="llmTestOut" style="font-size:13px;margin-top:8px"></div>
+    </div>
+
     <div class="tabs">
       <button data-tab="unknown" class="active">Câu hỏi chưa hiểu</button>
       <button data-tab="all">Tất cả câu hỏi</button>
@@ -286,6 +304,44 @@
       const t = curTab === 'unknown' ? unknownTable : curTab === 'all' ? allTable : null;
       if (t) t.download('xlsx', `chatbot-${curTab}-${Date.now()}.xlsx`, { sheetName: 'Chatbot' });
     });
+
+    // ---- Trang thai & kiem tra AI (LLM) ----
+    async function loadLlmStatus() {
+      const el = $('#llmStatus');
+      try {
+        const d = await getJSON('/api/admin/llm-status');
+        if (!d.enabled) {
+          el.innerHTML = `<span style="color:#b45309">● TẮT</span> — provider: <b>${esc(d.provider)}</b> (chatbot chạy thuần rule/intent).`;
+        } else if (d.blockReason) {
+          el.innerHTML = `<span style="color:#dc2626">● BỊ CHẶN</span> — ${esc(d.blockReason)}`;
+        } else {
+          el.innerHTML = `<span style="color:#16a34a">● SẴN SÀNG</span> — provider: <b>${esc(d.provider)}</b>, model: <b>${esc(d.model)}</b>, che dữ liệu: <b>${d.redact ? 'BẬT' : 'TẮT'}</b>${d.provider === 'anthropic' ? ', API key: ' + (d.hasApiKey ? '✔' : '✖') : ''}`;
+        }
+      } catch (e) { el.textContent = 'Không lấy được trạng thái: ' + e.message; }
+    }
+    async function testLlm() {
+      const out = $('#llmTestOut');
+      const msg = $('#llmTestMsg').value.trim();
+      out.innerHTML = '<span style="color:var(--muted)">Đang gọi AI…</span>';
+      try {
+        const r = await fetch('/api/admin/llm-test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: msg }) });
+        const d = await r.json();
+        if (d.ok) {
+          out.innerHTML =
+            `<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:10px">
+              <div style="color:#166534"><b>✔ AI trả lời</b> (${esc(d.provider)} · ${esc(d.model)} · ${d.ms}ms${d.redacted ? ' · đã che dữ liệu' : ''})</div>
+              <div style="margin-top:6px;white-space:pre-wrap">${esc(d.reply || '(rỗng)')}</div>
+              ${d.provider === 'anthropic' ? `<div style="margin-top:6px;font-size:12px;color:var(--muted)">Nội dung đã GỬI ra ngoài: <code>${esc(d.sent || '')}</code></div>` : ''}
+            </div>`;
+        } else {
+          out.innerHTML = `<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:10px;color:#991b1b"><b>✖ Không gọi được AI.</b> ${esc(d.error || d.blockReason || 'LLM chưa bật')}</div>`;
+        }
+      } catch (e) { out.innerHTML = `<div style="color:#991b1b">Lỗi kết nối: ${esc(e.message)}</div>`; }
+    }
+    $('#llmReload').addEventListener('click', loadLlmStatus);
+    $('#llmTestBtn').addEventListener('click', testLlm);
+    $('#llmTestMsg').addEventListener('keydown', (e) => { if (e.key === 'Enter') testLlm(); });
+    loadLlmStatus();
 
     load();
   </script>

@@ -2528,6 +2528,47 @@ app.post('/api/admin/kb-learn-delete', h(async (req, res) => {
   res.json({ ok: true, count: arr.length });
 }));
 
+// --- ADMIN: TRANG THAI LLM (de kiem tra cau hinh da dung chua) ---
+app.get('/api/admin/llm-status', h(async (req, res) => {
+  res.json({
+    provider: llm.CFG.provider || '(tat)',
+    enabled: llm.isEnabled(),
+    blockReason: llm.blockReason(),           // null = san sang goi
+    ready: llm.isEnabled() && !llm.blockReason(),
+    model: llm.modelName(),
+    redact: llm.CFG.redact,
+    allowPublic: llm.CFG.allowPublic,
+    hasApiKey: !!llm.CFG.apiKey,              // chi bao co/khong, KHONG lo khoa
+    url: llm.CFG.provider === 'local' ? llm.CFG.url : undefined,
+    note: 'LLM chi tra loi cau HOI bot chua hieu / bam Bao sai. Cau so lieu do SQL noi bo.',
+  });
+}));
+
+// --- ADMIN: GOI THU LLM 1 lan (kiem tra ket noi that + xem loi neu co) ---
+app.post('/api/admin/llm-test', h(async (req, res) => {
+  const message = String((req.body && req.body.message) || 'Bạn có hoạt động không? Trả lời ngắn gọn.').slice(0, 500);
+  const reason = llm.blockReason();
+  if (!llm.isEnabled() || reason) {
+    return res.json({ ok: false, provider: llm.CFG.provider || '(tat)', blockReason: reason || 'LLM chua bat', model: llm.modelName() });
+  }
+  const kb = [...chatbot.DEFINITIONS, ...chatbot.USAGE].map((x) => '- ' + x.answer).join('\n');
+  const system = 'Bạn là trợ lý nội bộ Dashboard TAT VAECO. Trả lời tiếng Việt, ngắn gọn, không bịa số liệu.\n\nKIẾN THỨC:\n' + kb;
+  const t0 = Date.now();
+  try {
+    const out = await llm.ask(system, message);
+    if (out.provider === 'anthropic') logCloudCall(out.provider, out.redacted, !!out.text, out.sent);
+    res.json({
+      ok: true, provider: out.provider, model: llm.modelName(),
+      ms: Date.now() - t0, redacted: out.redacted,
+      sent: out.sent,          // NOI DUNG that su da gui (da che neu bat redact)
+      reply: out.text,
+    });
+  } catch (err) {
+    if (llm.CFG.provider === 'anthropic') logCloudCall('anthropic', llm.CFG.redact, false, err.message);
+    res.json({ ok: false, provider: llm.CFG.provider, model: llm.modelName(), ms: Date.now() - t0, error: err.message });
+  }
+}));
+
 // Route tien: /admin -> trang admin review log cau hoi chua hieu
 app.get('/admin', (req, res) => res.sendFile(path.join(__dirname, 'public', 'admin.html')));
 
