@@ -803,6 +803,39 @@ function chatAppend(text, who) {
   return b;
 }
 
+/** Gan hang "👍 / 👎 Báo sai" duoi 1 cau tra loi cua bot.
+ *  Bam "Báo sai" -> goi /api/chat/flag (nho LLM tra loi lai neu duoc bat). */
+function chatAddFeedback(question) {
+  const row = document.createElement('div');
+  row.className = 'chat-fb';
+  const flag = document.createElement('button');
+  flag.type = 'button';
+  flag.className = 'chat-fb-btn';
+  flag.textContent = '👎 Báo sai';
+  flag.title = 'Câu trả lời chưa đúng — gửi để cải thiện';
+  flag.addEventListener('click', async () => {
+    flag.disabled = true;
+    row.remove();
+    const typing = chatAppend('Đang xem lại…', 'bot typing');
+    try {
+      const res = await fetch('/api/chat/flag', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: question }),
+      });
+      const data = await res.json();
+      typing.remove();
+      chatAppend(data.reply || 'Đã ghi nhận phản hồi.', 'bot');
+    } catch (err) {
+      typing.remove();
+      chatAppend('Lỗi kết nối: ' + err.message, 'bot');
+    }
+  });
+  row.appendChild(flag);
+  $('#chatBody').appendChild(row);
+  $('#chatBody').scrollTop = $('#chatBody').scrollHeight;
+}
+
 async function chatSend(msg) {
   const text = (msg || '').trim();
   if (!text) return;
@@ -824,6 +857,8 @@ async function chatSend(msg) {
     const data = await res.json();
     typing.remove();
     chatAppend(data.reply || 'Xin lỗi, đã có lỗi.', 'bot');
+    // Cho phep bao sai voi cac cau tra loi nghiep vu (khong phai tra cuu du lieu cung)
+    chatAddFeedback(text);
   } catch (err) {
     typing.remove();
     chatAppend('Lỗi kết nối: ' + err.message, 'bot');

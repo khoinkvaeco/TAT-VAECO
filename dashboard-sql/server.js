@@ -1937,11 +1937,28 @@ function logChatQuestion(message, intent, ip) {
   } catch (_) { /* khong de loi ghi log lam vo chat */ }
 }
 
+/** Ghi log AUDIT moi lan goi LLM dam may (de kiem tra du lieu da gui ra ngoai).
+ *  TSV: gio | provider | redacted | ok | noi_dung_da_gui (da che neu bat redact). */
+function logCloudCall(provider, redacted, ok, sentText) {
+  try {
+    const day = new Date().toISOString().slice(0, 10);
+    const vn = new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh', hour12: false });
+    const safe = String(sentText || '').replace(/[\t\r\n]+/g, ' ').trim();
+    fs.appendFile(
+      path.join(LOG_DIR, `llm-cloud-${day}.log`),
+      `${vn}\t${provider}\tredacted=${redacted ? 1 : 0}\tok=${ok ? 1 : 0}\t${safe}\n`,
+      () => {}
+    );
+  } catch (_) { /* khong de loi log lam vo chat */ }
+}
+
 /**
- * Cau chua hieu -> neu co LLM NOI BO (LLM_URL) thi nho LLM tra loi, GROUNDING
- * bang kho tri thuc (KB). Huong dan LLM: chi dung kien thuc duoc cung cap,
- * KHONG bia so lieu (cau hoi so lieu -> huong dan nguoi dung hoi lai co ky).
+ * Cau chua hieu / nguoi dung bao sai -> neu co LLM (noi bo hoac dam may) thi nho
+ * LLM tra loi, GROUNDING bang kho tri thuc (KB). Huong dan LLM: chi dung kien
+ * thuc duoc cung cap, KHONG bia so lieu (cau hoi so lieu -> huong dan hoi lai co ky).
+ * Voi LLM dam may: du lieu nhay cam da duoc CHE (redact) trong llm.ask + ghi audit.
  * Bat ky loi/khoa an toan -> tra null de fallback ve rule-based.
+ * @returns {{reply:string, provider:string}|null}
  */
 async function chatTryLLM(message) {
   if (!llm.isEnabled() || llm.blockReason()) return null;
@@ -1953,11 +1970,33 @@ async function chatTryLLM(message) {
     'hỏi lại kèm kỳ và trung tâm (ví dụ: "TAT install tháng 7 của CNBDNT"). ' +
     'Nếu ngoài phạm vi, nói không có thông tin.\n\nKIẾN THỨC:\n' + kb;
   try {
-    const text = await llm.ask(system, String(message || ''));
-    return text || null;
+    const out = await llm.ask(system, String(message || ''));
+    if (out.provider === 'anthropic') logCloudCall(out.provider, out.redacted, !!out.text, out.sent);
+    return out.text ? { reply: out.text, provider: out.provider } : null;
   } catch (err) {
+    if (llm.CFG.provider === 'anthropic') logCloudCall('anthropic', llm.CFG.redact, false, err.message);
     console.warn('[LLM] Bo qua, dung rule-based:', err.message);
     return null;
+  }
+}
+
+/**
+ * Luu cau tra loi cua LLM vao KB "da hoc" (kinh nghiem) de lan sau khong phai
+ * goi LLM nua. Danh dau source de admin KIEM TRA/xoa (dac biet source='cloud').
+ */
+function rememberFromLLM(question, answer, source) {
+  try {
+    const keyPhrase = chatbot.norm(question);
+    if (!keyPhrase || !answer) return;
+    const arr = loadLearnedKB().filter((x) => (x.keys[0] || '') !== keyPhrase);
+    arr.push({
+      keys: [keyPhrase], answer,
+      addedAt: new Date().toISOString(), sample: question,
+      source: source || 'cloud', reviewed: false,
+    });
+    saveLearnedKB(arr);
+  } catch (e) {
+    console.warn('[KB] Khong luu duoc kinh nghiem LLM:', e.message);
   }
 }
 
@@ -1973,9 +2012,13 @@ async function chatRespond(message, ctx) {
     case 'kpi': return { intent: intent.intent, reply: await chatAnswerKpi(intent, ctx) };
     case 'help': return { intent: intent.intent, reply: chatbot.helpText() };
     default: {
-      // Thu LLM noi bo (neu bat) truoc khi tra loi mac dinh
-      const llmReply = await chatTryLLM(message);
-      if (llmReply) return { intent: 'llm', reply: llmReply };
+      // Thu LLM (noi bo hoac dam may, neu bat) truoc khi tra loi mac dinh
+      const llmOut = await chatTryLLM(message);
+      if (llmOut) {
+        // Luu lai "kinh nghiem" de lan sau tra loi ngay, khong goi LLM lai.
+        rememberFromLLM(message, llmOut.reply, llmOut.provider === 'anthropic' ? 'cloud' : 'llm');
+        return { intent: 'llm', reply: llmOut.reply, source: llmOut.provider };
+      }
       logChatGap(message); // ghi lai de bo sung kho tri thuc ve sau
       const sugg = (intent.suggestions && intent.suggestions.length)
         ? '\n\nCó phải anh/chị muốn hỏi:\n' + intent.suggestions.map((s) => '• ' + s).join('\n')
@@ -2082,6 +2125,29 @@ app.post(
     const out = await chatRespond(message, body);
     logChatQuestion(message, out.intent, clientIp(req)); // ghi log MOI cau hoi (noi bo)
     res.json(out);
+  })
+);
+
+// --- Chatbot: nguoi dung "Bao sai" cau tra loi -> nho LLM (neu bat) tra loi lai,
+//     luu lai kinh nghiem de lan sau tot hon. Neu LLM chua bat -> ghi log de admin
+//     review va bao nguoi dung. KHONG bao gio tu tra "dung" ma khong co can cu. ---
+app.post(
+  '/api/chat/flag',
+  h(async (req, res) => {
+    const body = req.body || {};
+    const message = String(body.message || '').slice(0, 500).trim();
+    if (!message) return res.json({ ok: false, reply: 'Không có câu hỏi để xử lý.' });
+    logChatQuestion(message, 'flagged', clientIp(req)); // danh dau bi bao sai
+    logChatGap(message); // luon ghi vao hang doi review cua admin
+    const llmOut = await chatTryLLM(message);
+    if (llmOut) {
+      rememberFromLLM(message, llmOut.reply, llmOut.provider === 'anthropic' ? 'cloud' : 'llm');
+      return res.json({ ok: true, reply: llmOut.reply, source: llmOut.provider });
+    }
+    return res.json({
+      ok: false,
+      reply: 'Cảm ơn phản hồi. Tôi đã ghi nhận câu hỏi này để quản trị viên xem lại và bổ sung kiến thức.',
+    });
   })
 );
 
@@ -2434,9 +2500,24 @@ app.post('/api/admin/kb-learn', h(async (req, res) => {
   }
   const keyPhrase = chatbot.norm(question); // cau hoi da bo dau lam khoa
   const arr = loadLearnedKB().filter((x) => (x.keys[0] || '') !== keyPhrase); // thay neu trung
-  arr.push({ keys: [keyPhrase], answer, addedAt: new Date().toISOString(), sample: question });
+  arr.push({
+    keys: [keyPhrase], answer, addedAt: new Date().toISOString(), sample: question,
+    source: 'admin', reviewed: true,
+  });
   saveLearnedKB(arr);
   res.json({ ok: true, count: arr.length });
+}));
+
+// --- ADMIN: XAC NHAN 1 muc AI dam may da hoc la DUNG (danh dau reviewed) ---
+app.post('/api/admin/kb-review', h(async (req, res) => {
+  const keyPhrase = String((req.body && req.body.key) || '').trim();
+  const arr = loadLearnedKB();
+  const it = arr.find((x) => (x.keys[0] || '') === keyPhrase);
+  if (!it) return res.status(404).json({ error: true, message: 'Khong tim thay muc.' });
+  it.reviewed = true;
+  it.reviewedAt = new Date().toISOString();
+  saveLearnedKB(arr);
+  res.json({ ok: true });
 }));
 
 // --- ADMIN: XOA 1 muc KB da hoc ---
@@ -2465,13 +2546,16 @@ app.listen(CONFIG.port, () => {
   console.log(`  Che do: ${CONFIG.demoMode ? 'DEMO (du lieu mau)' : 'LIVE (SQL Server)'}`);
   console.log(`  AMOS -> VN offset: +${CONFIG.tzOffset}h | MAX_ROWS: ${CONFIG.maxRows}`);
   console.log(`  Admin IPs (ngoai localhost): ${CONFIG.adminIps.join(', ') || '(khong co)'}`);
-  // Trang thai chatbot: rule-based luon bat; local LLM neu co cau hinh + hop le
+  // Trang thai chatbot: rule-based luon bat; LLM (noi bo/dam may) neu cau hinh + hop le
   if (!llm.isEnabled()) {
-    console.log('  Chatbot: rule/intent noi bo (local LLM: TAT)');
+    console.log('  Chatbot: rule/intent noi bo (LLM: TAT)');
   } else if (llm.blockReason()) {
-    console.log(`  Chatbot: rule/intent (local LLM BI CHAN: ${llm.blockReason()})`);
+    console.log(`  Chatbot: rule/intent (LLM BI CHAN: ${llm.blockReason()})`);
+  } else if (llm.CFG.provider === 'anthropic') {
+    console.log(`  Chatbot: rule/intent + LLM DAM MAY [Anthropic] (model ${llm.modelName()}, che du lieu=${llm.CFG.redact ? 'BAT' : 'TAT'})`);
+    console.log('  ⚠️  LLM dam may GUI DU LIEU RA NGOAI cong ty. Tat bang cach xoa LLM_PROVIDER trong .env.');
   } else {
-    console.log(`  Chatbot: rule/intent + local LLM (${llm.CFG.url}, model ${llm.CFG.model})`);
+    console.log(`  Chatbot: rule/intent + LLM noi bo (${llm.CFG.url}, model ${llm.modelName()})`);
   }
   console.log('====================================================');
   if (!CONFIG.demoMode) {

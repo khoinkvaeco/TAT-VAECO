@@ -43,6 +43,10 @@
     .sugg .row { display:flex; gap:8px; align-items:center; margin-top:8px; }
     .learned-item { display:flex; gap:10px; align-items:flex-start; padding:8px 0; border-bottom:1px dashed var(--hair); font-size:13px; }
     .learned-item .a { flex:1; }
+    .learned-item.need-review { background:#fffbeb; border-left:3px solid #f59e0b; padding-left:8px; }
+    .src-badge { display:inline-block; font-size:10.5px; padding:1px 7px; border-radius:999px; vertical-align:middle; }
+    .src-badge.cloud { background:#eff6ff; color:#1d4ed8; border:1px solid #bfdbfe; }
+    .src-badge.admin { background:#f0fdf4; color:#166534; border:1px solid #bbf7d0; }
     #err { display:none; background:#fee2e2; color:#991b1b; border:1px solid #fecaca; padding:10px 14px; border-radius:8px; font-size:13px; margin-bottom:12px; }
     .hidden { display:none; }
     h3 { font-size:14px; margin:18px 0 8px; }
@@ -221,14 +225,33 @@
 
     function renderLearned(items) {
       $('#learnedCount').textContent = items.length;
-      $('#learnedList').innerHTML = items.length ? items.map((it) => `
-        <div class="learned-item">
-          <div class="a"><b>${esc(it.sample || (it.keys && it.keys[0]) || '')}</b><br><span class="meta">${esc(it.answer)}</span></div>
-          <button class="ghost danger" data-del="${esc((it.keys && it.keys[0]) || '')}" style="color:#fff">Xóa</button>
-        </div>`).join('') : '<div class="note">Chưa có mục nào được học.</div>';
+      $('#learnedList').innerHTML = items.length ? items.map((it) => {
+        const isCloud = it.source === 'cloud' || it.source === 'llm';
+        const needReview = isCloud && !it.reviewed;
+        const badge = it.source === 'cloud'
+          ? `<span class="src-badge cloud">☁ AI đám mây${it.reviewed ? ' · đã kiểm tra' : ' · CẦN KIỂM TRA'}</span>`
+          : (it.source === 'llm'
+            ? `<span class="src-badge cloud">🤖 AI nội bộ${it.reviewed ? ' · đã kiểm tra' : ' · CẦN KIỂM TRA'}</span>`
+            : '<span class="src-badge admin">🛠 Quản trị</span>');
+        const key = esc((it.keys && it.keys[0]) || '');
+        const reviewBtn = needReview
+          ? `<button class="ghost" data-review="${key}" title="Xác nhận câu trả lời này đúng">✔ Xác nhận</button>` : '';
+        return `
+        <div class="learned-item${needReview ? ' need-review' : ''}">
+          <div class="a"><b>${esc(it.sample || (it.keys && it.keys[0]) || '')}</b> ${badge}<br><span class="meta">${esc(it.answer)}</span></div>
+          <div style="display:flex;gap:6px">
+            ${reviewBtn}
+            <button class="ghost danger" data-del="${key}" style="color:#fff">Xóa</button>
+          </div>
+        </div>`;
+      }).join('') : '<div class="note">Chưa có mục nào được học.</div>';
       $('#learnedList').querySelectorAll('[data-del]').forEach((b) => b.addEventListener('click', async () => {
         if (!confirm('Xóa mục đã học này?')) return;
         await fetch('/api/admin/kb-learn-delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: b.dataset.del }) });
+        loadLearn();
+      }));
+      $('#learnedList').querySelectorAll('[data-review]').forEach((b) => b.addEventListener('click', async () => {
+        await fetch('/api/admin/kb-review', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: b.dataset.review }) });
         loadLearn();
       }));
     }

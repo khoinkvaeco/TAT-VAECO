@@ -245,6 +245,12 @@ body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
 .chat-msg.bot { align-self: flex-start; background: var(--hover); color: var(--text-primary); border-bottom-left-radius: 4px; }
 .chat-msg.user { align-self: flex-end; background: var(--brand-2); color: #fff; border-bottom-right-radius: 4px; }
 .chat-msg.typing { color: var(--text-muted); font-style: italic; }
+.chat-fb { align-self: flex-start; margin: -2px 0 2px; }
+.chat-fb-btn {
+  font-size: 11px; padding: 2px 8px; border-radius: 999px; cursor: pointer;
+  background: transparent; border: 1px solid var(--hair); color: var(--text-muted);
+}
+.chat-fb-btn:hover { border-color: var(--brand-accent); color: var(--text-primary); }
 .chat-quick { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 12px 8px; }
 .chat-quick button {
   font-size: 11.5px; padding: 4px 9px; border-radius: 999px; cursor: pointer;
