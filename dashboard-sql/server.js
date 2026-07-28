@@ -1708,6 +1708,43 @@ async function getDepartments() {
   return _deptCache.list;
 }
 
+/**
+ * TRA CUU PART ON/OFF (bang WO_PART_ON_OFF - linked server DWH_DB/Oracle).
+ * Khop CHINH XAC (=) theo 1 trong 6 truong: EVENT_PERFNO_I, PARTNO, SERIALNO,
+ * LABELNO, PARTNO_OFF, SERIALNO_OFF (nguoi dung go 1 gia tri).
+ * Dung so sanh = tren cot goc (day dc xuong Oracle - nhanh); RTRIM khi HIEN THI.
+ * MUTATION_TIME va CREATED_DATE la datetime UTC -> DATEADD +@tzOffset gio = gio VN.
+ */
+async function qPartOnOff(term) {
+  const params = { term: String(term || '').trim(), top: CONFIG.maxRows, tzOffset: CONFIG.tzOffset };
+  const text = `
+    SELECT TOP (@top)
+      RTRIM(w.[EVENT_PERFNO_I]) AS event_perfno_i,
+      RTRIM(w.[PARTNO])         AS partno,
+      RTRIM(w.[SERIALNO])       AS serialno,
+      RTRIM(w.[LABELNO])        AS labelno,
+      RTRIM(w.[AC_POSITION])    AS ac_position,
+      RTRIM(w.[LOCID_PK])       AS locid_pk,
+      RTRIM(w.[PARTNO_OFF])     AS partno_off,
+      RTRIM(w.[SERIALNO_OFF])   AS serialno_off,
+      RTRIM(w.[RELEASENO])      AS releaseno,
+      w.[MUTATION]              AS mutation,
+      RTRIM(w.[MUTATOR])        AS mutator,
+      RTRIM(w.[STATUS])         AS status,
+      DATEADD(HOUR, @tzOffset, w.[MUTATION_TIME]) AS mutation_time_vn,
+      RTRIM(w.[CREATED_BY])     AS created_by,
+      DATEADD(HOUR, @tzOffset, w.[CREATED_DATE]) AS created_date_vn
+    FROM [DWH_DB]..[STG_AMOS].[WO_PART_ON_OFF] w
+    WHERE w.[PARTNO]         = @term
+       OR w.[SERIALNO]       = @term
+       OR w.[EVENT_PERFNO_I] = @term
+       OR w.[LABELNO]        = @term
+       OR w.[PARTNO_OFF]     = @term
+       OR w.[SERIALNO_OFF]   = @term
+    ORDER BY w.[MUTATION_TIME] DESC`;
+  return query(text, params);
+}
+
 /** Tra cuu lich su booking cua 1 thiet bi theo part/serial/label (on_off). */
 async function qDeviceLookup(term) {
   const params = { term: String(term || '').trim() };
@@ -2354,6 +2391,18 @@ app.get(
     const f = readFilters(req.query);
     const data = CONFIG.demoMode ? DEMO[def.demo](range, f) : await def.live(range, f);
     res.json({ rows: data, count: data.length, range });
+  })
+);
+
+// --- Tra cuu Part On/Off (WO_PART_ON_OFF): khop chinh xac theo 1 trong 6 truong ---
+//     Yeu cau ?term=... ; khong co term -> tra rong (khong quet ca bang).
+app.get(
+  '/api/part-onoff',
+  cached(60 * 1000, async (req, res) => {
+    const term = String(req.query.term || '').trim();
+    if (!term) return res.json({ rows: [], count: 0, term: '' });
+    const rows = CONFIG.demoMode ? DEMO.partOnOff(term) : await qPartOnOff(term);
+    res.json({ rows, count: rows.length, term, truncated: rows.length >= CONFIG.maxRows });
   })
 );
 

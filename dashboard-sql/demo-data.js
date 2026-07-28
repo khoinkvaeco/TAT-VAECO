@@ -443,9 +443,39 @@ function reconcileReverse(term) {
   return rows;
 }
 
+/** Tra cuu Part On/Off mau (WO_PART_ON_OFF) - phuc vu xem giao dien che do DEMO. */
+function partOnOff(term) {
+  const now = Date.now();
+  const rows = [];
+  const n = 3 + rndInt(0, 6);
+  for (let i = 0; i < n; i++) {
+    const t = new Date(now - i * 86400000 * rndInt(1, 30));
+    rows.push({
+      event_perfno_i: 'EVT' + rndInt(100000, 999999),
+      partno: /[a-z]/i.test(String(term)) ? term : String(term),
+      serialno: 'SN' + rndInt(10000, 99999),
+      labelno: /^[0-9]+$/.test(String(term)) ? term : 'L' + rndInt(1000, 9999),
+      ac_position: rnd(['1L', '2R', '11A', '21C', 'DOOR2']),
+      locid_pk: rnd(STATIONS) + '-STORE',
+      partno_off: 'PN-' + pad(rndInt(100, 999)),
+      serialno_off: 'SN' + rndInt(10000, 99999),
+      releaseno: 'REL' + rndInt(1000, 9999),
+      mutation: rndInt(19000, 20000),
+      mutator: 'USER' + rndInt(10, 99),
+      status: rnd(['ON', 'OFF', 'RELEASED']),
+      // Gia lap gio VN (server that se DATEADD +7 tu UTC): tra ve chuoi ISO-Z
+      mutation_time_vn: t.toISOString(),
+      created_by: 'USER' + rndInt(10, 99),
+      created_date_vn: new Date(t.getTime() - 3600000).toISOString(),
+    });
+  }
+  return rows;
+}
+
 module.exports = {
   filters,
   deviceLookup,
+  partOnOff,
   reconcileStatus,
   reconcileReverse,
   dashboard,

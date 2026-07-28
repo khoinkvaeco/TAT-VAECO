@@ -106,6 +106,7 @@ Sau khi sửa code: `git pull` (hoặc copy) rồi `sc stop DashboardTAT & sc st
 
 - **Dashboard:** 6 KPI cards, 4 biểu đồ (cột / tròn / đường / top 10), bảng chi tiết có phân trang + tìm kiếm + filter theo cột.
 - **Báo cáo đơn vị:** 6 tab (xuất kho chưa lắp, tháo chưa trả US, chưa đối ứng, tháo trước lắp sau, other, TAT hoàn kho) — mỗi tab **export Excel**.
+- **Tra cứu Part On/Off:** tab riêng đọc `WO_PART_ON_OFF` (DWH_DB, Oracle). Gõ 1 giá trị → khớp **chính xác** theo EVENT_PERFNO_I / PARTNO / SERIALNO / LABELNO / PARTNO_OFF / SERIALNO_OFF; giờ đổi sang VN (+7); lọc trong kết quả + export Excel. Không phụ thuộc kỳ báo cáo (tra toàn bộ lịch sử, giới hạn MAX_ROWS).
 - **Bộ lọc:** Station, Store, Department, kỳ **tháng** hoặc **tuần** (Thứ 5 tuần này → Thứ 5 tuần trước).
 - **Khác:** loading indicator, thông báo lỗi kết nối, theme sáng/tối, responsive.
 - **Trợ lý TAT (chatbox nội bộ):** nút 💬 góc dưới-phải. Xử lý **cục bộ** theo luật/ý định (rule/intent) — **không gọi dịch vụ ngoài, không gửi dữ liệu ra ngoài**. Trả lời 5 nhóm: (1) **số liệu** ("TAT install tháng 7 của CNBDNT", "bao nhiêu thiết bị chưa đối ứng", "trung tâm nào TAT cao nhất"); (2) **tìm đối ứng** của 1 thiết bị ("đối ứng của serial 43842") → từng phiếu xuất gần nhất: trả unservice (kèm **SN được trả + giờ trả**) / trả service (kèm **giờ recertify**) / hoàn kho / bị hủy / CHƯA đối ứng. **Chiều ngược** ("unservice 43842", "SN 43842 trả về từ phiếu nào") → tìm ngược phiếu xuất đối ứng của 1 SN đã trả về kho; (3) **tra cứu 1 thiết bị** theo part/serial/label → lịch sử booking (on_off); (4) **định nghĩa nghiệp vụ** (TAT install/US return/hoàn kho, đối ứng, trả service, costcenter…); (5) **hướng dẫn dùng dashboard**. Câu hỏi không nêu kỳ/trung tâm sẽ dùng bộ lọc đang chọn trên trang. Logic NLU ở `chatbot.js` (hàm thuần, test được không cần DB).
@@ -167,6 +168,7 @@ CREATE INDEX IX_SIGN_user ON [DWH_DB].[STG_AMOS].[SIGN] ([USER_SIGN]) INCLUDE ([
 | `GET /api/tat/departments` | Bảng chi tiết TAT theo đơn vị |
 | `GET /api/tat/cuvt` | Chi tiết TAT CUVT |
 | `GET /api/reports/:name` | Báo cáo (`issued-not-installed`, `removed-not-returned`, `not-reconciled`, `removed-before-installed`, `other`, `return-store-tat`) |
+| `GET /api/part-onoff?term=…` | Tra cứu Part On/Off (`WO_PART_ON_OFF`, linked server DWH_DB). Khớp **chính xác** theo 1 trong 6 trường: EVENT_PERFNO_I / PARTNO / SERIALNO / LABELNO / PARTNO_OFF / SERIALNO_OFF. `MUTATION_TIME`, `CREATED_DATE` đổi UTC → giờ VN (+7). |
 | `POST /api/chat` | Trợ lý TAT. Body JSON `{ message, ...filter }` → `{ reply, intent }`. Số liệu/tra cứu tính bằng SQL nội bộ; câu chưa hiểu mới (tùy chọn) chuyển AI theo `LLM_PROVIDER`. |
 | `POST /api/chat/flag` | Người dùng **👎 Báo sai** một câu trả lời. Body `{ message }` → nhờ AI (nếu bật) trả lời lại + lưu kinh nghiệm; nếu AI tắt thì ghi nhận để admin review. |
 | `GET /api/admin/chat-unknown` | Gộp log câu hỏi chatbot chưa hiểu (gom theo nội dung, đếm số lần). Query `days` (0 = tất cả). Trang xem: `/admin` hoặc `/admin.html`. **Chỉ IP quản trị.** |

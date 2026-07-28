@@ -329,6 +329,25 @@ const COLS_TAT_DEPT = [
   COL_EXCLUDE, // checkbox "Bỏ qua" — cột cuối
 ];
 
+/** Cột tab Tra cứu Part On/Off (WO_PART_ON_OFF). Giờ đã đổi sang VN ở server. */
+const COLS_PART_ONOFF = [
+  { title: 'Event Perf', field: 'event_perfno_i', headerFilter: 'input' },
+  { title: 'Part No', field: 'partno', headerFilter: 'input' },
+  { title: 'Serial No', field: 'serialno', headerFilter: 'input' },
+  { title: 'Label', field: 'labelno', headerFilter: 'input' },
+  { title: 'AC Position', field: 'ac_position', headerFilter: 'input' },
+  { title: 'Loc ID', field: 'locid_pk', headerFilter: 'input' },
+  { title: 'Part No (off)', field: 'partno_off', headerFilter: 'input' },
+  { title: 'Serial No (off)', field: 'serialno_off', headerFilter: 'input' },
+  { title: 'Release No', field: 'releaseno', headerFilter: 'input' },
+  { title: 'Mutation', field: 'mutation', hozAlign: 'right', sorter: 'number' },
+  { title: 'Mutator', field: 'mutator', headerFilter: 'input' },
+  { title: 'Status', field: 'status', headerFilter: 'input' },
+  { title: 'Mutation Time (VN)', field: 'mutation_time_vn', formatter: fmtDateCell },
+  { title: 'Created By', field: 'created_by', headerFilter: 'input' },
+  { title: 'Created Date (VN)', field: 'created_date_vn', formatter: fmtDateCell },
+];
+
 /** Định nghĩa cột cho từng báo cáo. */
 const REPORT_DEFS = {
   'returned-unservice': {
@@ -687,13 +706,76 @@ function switchTab(tab) {
   $$('.mainTab').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
   $('#tab-dashboard').classList.toggle('hidden', tab !== 'dashboard');
   $('#tab-reports').classList.toggle('hidden', tab !== 'reports');
+  $('#tab-partlookup').classList.toggle('hidden', tab !== 'partlookup');
   if (tab === 'reports') {
     // LUON tai lai khi mo tab (cache lam viec nay re); tranh cap nhat bang khi
     // tab dang an (Tabulator ve rong neu container display:none).
     loadReport(state.currentReport);
+  } else if (tab === 'partlookup') {
+    if (partTable) partTable.redraw(true); // ve lai sau khi container hien thi
+    $('#partSearchInput').focus();
   } else if (mainTable) {
     mainTable.redraw(true); // ve lai sau khi tab hien thi tro lai
   }
+}
+
+// --------------------------------------------------------------------------
+// 11b. Tab Tra cuu Part On/Off (WO_PART_ON_OFF) - tra theo tu khoa chinh xac
+// --------------------------------------------------------------------------
+let partTable = null;       // Tabulator cua tab tra cuu
+let partTotalRows = 0;      // tong so dong ket qua (cho bo dem X/Y)
+
+async function loadPartLookup() {
+  const term = $('#partSearchInput').value.trim();
+  if (!term) { $('#partCount').textContent = 'Nhập giá trị cần tra cứu'; return; }
+  showError('');
+  showLoading(true);
+  try {
+    const res = await fetch(`/api/part-onoff?term=${encodeURIComponent(term)}`);
+    const data = await res.json();
+    if (data.error) throw new Error(data.message || 'Lỗi tra cứu');
+    partTotalRows = data.count;
+    $('#partCount').textContent =
+      `${data.count.toLocaleString('vi')} dòng` +
+      (data.truncated ? ' ⚠ chạm giới hạn MAX_ROWS' : '');
+    if (!partTable) {
+      partTable = new Tabulator('#partTable', {
+        data: data.rows,
+        columns: withHeaderFilters(COLS_PART_ONOFF),
+        layout: 'fitDataFill',
+        pagination: false,     // hien HET cac dong (cuon doc, render ao)
+        placeholder: 'Không có dữ liệu — kiểm tra giá trị nhập (khớp chính xác)',
+        height: '600px',
+      });
+      partTable.on('dataFiltered', (filters, rowsFiltered) => {
+        const n = rowsFiltered.length;
+        $('#partCount').textContent =
+          n === partTotalRows
+            ? `${partTotalRows.toLocaleString('vi')} dòng`
+            : `${n.toLocaleString('vi')}/${partTotalRows.toLocaleString('vi')} dòng`;
+      });
+    } else {
+      partTable.clearFilter(true);
+      $('#partFilter').value = '';
+      partTable.replaceData(data.rows);
+      partTable.redraw(true);
+    }
+  } catch (err) {
+    showError(err.message);
+  } finally {
+    showLoading(false);
+  }
+}
+
+function initPartLookup() {
+  $('#partSearchBtn').addEventListener('click', loadPartLookup);
+  $('#partSearchInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') loadPartLookup(); });
+  $('#partFilter').addEventListener('input', (e) => {
+    if (partTable) partTable.setFilter(matchAny, { value: e.target.value });
+  });
+  $('#partExport').addEventListener('click', () => {
+    if (partTable) partTable.download('xlsx', `PartOnOff_${Date.now()}.xlsx`, { sheetName: 'PartOnOff' });
+  });
 }
 
 // --------------------------------------------------------------------------
@@ -783,6 +865,7 @@ async function init() {
   // Khoi tao
   initTheme();
   initChat();
+  initPartLookup();
   checkHealth();
   await loadFilters(); // doi nap xong option roi moi khoi phuc gia tri da luu
   $('#stationSelect').value = state.station;

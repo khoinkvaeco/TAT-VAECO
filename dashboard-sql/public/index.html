@@ -106,6 +106,7 @@
     <div class="flex gap-1 border-b border-hair">
       <button data-tab="dashboard" class="mainTab">📊 Tổng quan</button>
       <button data-tab="reports" class="mainTab">📋 Các Báo cáo khác </button>
+      <button data-tab="partlookup" class="mainTab">🔎 Tra cứu Part On/Off</button>
     </div>
   </nav>
 
@@ -180,6 +181,29 @@
           </div>
         </div>
         <div id="reportTable"></div>
+      </div>
+    </section>
+
+    <!-- ============ TAB TRA CỨU PART ON/OFF ============ -->
+    <section id="tab-partlookup" class="hidden">
+      <div class="card">
+        <div class="flex items-center justify-between gap-3 flex-wrap mb-3">
+          <div>
+            <h3 class="card-title mb-0">Tra cứu Part On/Off <span class="unit">(WO_PART_ON_OFF)</span></h3>
+            <p class="text-xs text-muted mt-0.5">
+              Nhập <b>chính xác</b> Part No / Serial No / Label / Event Perf / Part No (off) / Serial No (off) rồi bấm
+              <b>Tra cứu</b>. Giờ đã quy đổi sang giờ Việt Nam (+7).
+            </p>
+          </div>
+          <div class="flex items-center gap-2">
+            <input id="partSearchInput" type="text" placeholder="VD: 326975" class="finput min-w-[200px]" />
+            <button id="partSearchBtn" class="btn-accent" title="Tra cứu trong WO_PART_ON_OFF">🔎 Tra cứu</button>
+            <span id="partCount" class="text-xs text-muted"></span>
+            <input id="partFilter" type="text" placeholder="Lọc trong kết quả…" class="finput" />
+            <button id="partExport" class="btn-export">⬇ Excel</button>
+          </div>
+        </div>
+        <div id="partTable"></div>
       </div>
     </section>
   </main>
