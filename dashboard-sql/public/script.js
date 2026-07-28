@@ -745,7 +745,8 @@ const PART_FIELDS = {
 async function loadPartLookup() {
   const qs = new URLSearchParams();
   for (const [id, param] of Object.entries(PART_FIELDS)) {
-    const v = $('#' + id).value.trim();
+    // AMOS chi luu CHU HOA -> upper truoc khi gui (go thuong van khop)
+    const v = $('#' + id).value.trim().toUpperCase();
     if (v) qs.set(param, v);
   }
   if (![...qs.keys()].length) { $('#partCount').textContent = 'Điền ít nhất 1 ô để tra cứu'; return; }
@@ -790,9 +791,11 @@ async function loadPartLookup() {
 
 function initPartLookup() {
   $('#partSearchBtn').addEventListener('click', loadPartLookup);
-  // Enter o bat ky o tim nao -> tra cuu luon
+  // Enter o bat ky o tim nao -> tra cuu luon; hien CHU HOA ngay khi go (chuan AMOS)
   for (const id of Object.keys(PART_FIELDS)) {
-    $('#' + id).addEventListener('keydown', (e) => { if (e.key === 'Enter') loadPartLookup(); });
+    const el = $('#' + id);
+    el.style.textTransform = 'uppercase';
+    el.addEventListener('keydown', (e) => { if (e.key === 'Enter') loadPartLookup(); });
   }
   $('#partClearBtn').addEventListener('click', () => {
     for (const id of Object.keys(PART_FIELDS)) $('#' + id).value = '';

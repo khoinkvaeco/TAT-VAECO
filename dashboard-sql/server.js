@@ -1724,11 +1724,13 @@ async function qPartOnOff(crit) {
   // Truong SO: ep kieu float ca 2 ve (cot Oracle NUMBER; nguoi dung go '43842')
   if (crit.event) { params.event = crit.event; conds.push(`TRY_CONVERT(float, w.[EVENT_PERFNO_I]) = TRY_CONVERT(float, @event)`); }
   if (crit.labelno) { params.labelno = crit.labelno; conds.push(`TRY_CONVERT(float, w.[LABELNO]) = TRY_CONVERT(float, @labelno)`); }
-  // Truong CHU: so sanh = truc tiep (SQL Server bo qua khoang trang cuoi khi =)
-  if (crit.partno) { params.partno = crit.partno; conds.push(`w.[PARTNO] = @partno`); }
-  if (crit.serialno) { params.serialno = crit.serialno; conds.push(`w.[SERIALNO] = @serialno`); }
-  if (crit.partnoOff) { params.partnoOff = crit.partnoOff; conds.push(`w.[PARTNO_OFF] = @partnoOff`); }
-  if (crit.serialnoOff) { params.serialnoOff = crit.serialnoOff; conds.push(`w.[SERIALNO_OFF] = @serialnoOff`); }
+  // Truong CHU: so sanh = truc tiep (SQL Server bo qua khoang trang cuoi khi =).
+  // UPPER gia tri nhap: AMOS chi luu CHU HOA -> go thuong van khop.
+  const up = (s) => String(s).toUpperCase();
+  if (crit.partno) { params.partno = up(crit.partno); conds.push(`w.[PARTNO] = @partno`); }
+  if (crit.serialno) { params.serialno = up(crit.serialno); conds.push(`w.[SERIALNO] = @serialno`); }
+  if (crit.partnoOff) { params.partnoOff = up(crit.partnoOff); conds.push(`w.[PARTNO_OFF] = @partnoOff`); }
+  if (crit.serialnoOff) { params.serialnoOff = up(crit.serialnoOff); conds.push(`w.[SERIALNO_OFF] = @serialnoOff`); }
   if (!conds.length) return [];
 
   // MUTATION (ngay) + MUTATION_TIME (ms) -> datetime VN (nhu amosToVN nhung khac ten cot)
