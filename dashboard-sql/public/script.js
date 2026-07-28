@@ -713,7 +713,7 @@ function switchTab(tab) {
     loadReport(state.currentReport);
   } else if (tab === 'partlookup') {
     if (partTable) partTable.redraw(true); // ve lai sau khi container hien thi
-    $('#partSearchInput').focus();
+    $('#poPartno').focus();
   } else if (mainTable) {
     mainTable.redraw(true); // ve lai sau khi tab hien thi tro lai
   }
@@ -725,13 +725,23 @@ function switchTab(tab) {
 let partTable = null;       // Tabulator cua tab tra cuu
 let partTotalRows = 0;      // tong so dong ket qua (cho bo dem X/Y)
 
+/** 6 o tim rieng: id o nhap -> ten tham so API. */
+const PART_FIELDS = {
+  poEvent: 'event', poPartno: 'partno', poSerialno: 'serialno',
+  poLabelno: 'labelno', poPartnoOff: 'partnoOff', poSerialnoOff: 'serialnoOff',
+};
+
 async function loadPartLookup() {
-  const term = $('#partSearchInput').value.trim();
-  if (!term) { $('#partCount').textContent = 'Nhập giá trị cần tra cứu'; return; }
+  const qs = new URLSearchParams();
+  for (const [id, param] of Object.entries(PART_FIELDS)) {
+    const v = $('#' + id).value.trim();
+    if (v) qs.set(param, v);
+  }
+  if (![...qs.keys()].length) { $('#partCount').textContent = 'Điền ít nhất 1 ô để tra cứu'; return; }
   showError('');
   showLoading(true);
   try {
-    const res = await fetch(`/api/part-onoff?term=${encodeURIComponent(term)}`);
+    const res = await fetch(`/api/part-onoff?${qs.toString()}`);
     const data = await res.json();
     if (data.error) throw new Error(data.message || 'Lỗi tra cứu');
     partTotalRows = data.count;
@@ -769,7 +779,14 @@ async function loadPartLookup() {
 
 function initPartLookup() {
   $('#partSearchBtn').addEventListener('click', loadPartLookup);
-  $('#partSearchInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') loadPartLookup(); });
+  // Enter o bat ky o tim nao -> tra cuu luon
+  for (const id of Object.keys(PART_FIELDS)) {
+    $('#' + id).addEventListener('keydown', (e) => { if (e.key === 'Enter') loadPartLookup(); });
+  }
+  $('#partClearBtn').addEventListener('click', () => {
+    for (const id of Object.keys(PART_FIELDS)) $('#' + id).value = '';
+    $('#poEvent').focus();
+  });
   $('#partFilter').addEventListener('input', (e) => {
     if (partTable) partTable.setFilter(matchAny, { value: e.target.value });
   });

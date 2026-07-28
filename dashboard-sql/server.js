@@ -1710,13 +1710,32 @@ async function getDepartments() {
 
 /**
  * TRA CUU PART ON/OFF (bang WO_PART_ON_OFF - linked server DWH_DB/Oracle).
- * Khop CHINH XAC (=) theo 1 trong 6 truong: EVENT_PERFNO_I, PARTNO, SERIALNO,
- * LABELNO, PARTNO_OFF, SERIALNO_OFF (nguoi dung go 1 gia tri).
- * Dung so sanh = tren cot goc (day dc xuong Oracle - nhanh); RTRIM khi HIEN THI.
- * MUTATION_TIME va CREATED_DATE la datetime UTC -> DATEADD +@tzOffset gio = gio VN.
+ * 6 O TIM RIENG, khop CHINH XAC (=), dieu kien AND (o nao bo trong thi bo qua):
+ *   - SO   : EVENT_PERFNO_I, LABELNO  (so sanh qua TRY_CONVERT(float))
+ *   - CHU  : PARTNO, SERIALNO, PARTNO_OFF, SERIALNO_OFF
+ * Ngay gio: MUTATION = so NGAY AMOS (ke tu @amosEpoch), MUTATION_TIME = so MS
+ * tu 0h (GIONG mutation/mutation_t cua on_off - KHONG phai datetime!) ->
+ * ghep 2 cot + @tzOffset ra gio VN. CREATED_DATE la datetime -> chi + @tzOffset.
  */
-async function qPartOnOff(term) {
-  const params = { term: String(term || '').trim(), top: CONFIG.maxRows, tzOffset: CONFIG.tzOffset };
+async function qPartOnOff(crit) {
+  const params = { top: CONFIG.maxRows };
+  const conds = [];
+  // Truong SO: ep kieu float ca 2 ve (cot Oracle NUMBER; nguoi dung go '43842')
+  if (crit.event) { params.event = crit.event; conds.push(`TRY_CONVERT(float, w.[EVENT_PERFNO_I]) = TRY_CONVERT(float, @event)`); }
+  if (crit.labelno) { params.labelno = crit.labelno; conds.push(`TRY_CONVERT(float, w.[LABELNO]) = TRY_CONVERT(float, @labelno)`); }
+  // Truong CHU: so sanh = truc tiep (SQL Server bo qua khoang trang cuoi khi =)
+  if (crit.partno) { params.partno = crit.partno; conds.push(`w.[PARTNO] = @partno`); }
+  if (crit.serialno) { params.serialno = crit.serialno; conds.push(`w.[SERIALNO] = @serialno`); }
+  if (crit.partnoOff) { params.partnoOff = crit.partnoOff; conds.push(`w.[PARTNO_OFF] = @partnoOff`); }
+  if (crit.serialnoOff) { params.serialnoOff = crit.serialnoOff; conds.push(`w.[SERIALNO_OFF] = @serialnoOff`); }
+  if (!conds.length) return [];
+
+  // MUTATION (ngay) + MUTATION_TIME (ms) -> datetime VN (nhu amosToVN nhung khac ten cot)
+  const mutVN =
+    `DATEADD(HOUR, @tzOffset, DATEADD(MILLISECOND,
+       TRY_CONVERT(int, TRY_CONVERT(bigint, TRY_CONVERT(float, w.[MUTATION_TIME])) % 86400000),
+       DATEADD(DAY, TRY_CONVERT(int, TRY_CONVERT(float, w.[MUTATION])), TRY_CONVERT(datetime, @amosEpoch))))`;
+
   const text = `
     SELECT TOP (@top)
       RTRIM(w.[EVENT_PERFNO_I]) AS event_perfno_i,
@@ -1731,17 +1750,12 @@ async function qPartOnOff(term) {
       w.[MUTATION]              AS mutation,
       RTRIM(w.[MUTATOR])        AS mutator,
       RTRIM(w.[STATUS])         AS status,
-      DATEADD(HOUR, @tzOffset, w.[MUTATION_TIME]) AS mutation_time_vn,
+      ${mutVN}                  AS mutation_time_vn,
       RTRIM(w.[CREATED_BY])     AS created_by,
-      DATEADD(HOUR, @tzOffset, w.[CREATED_DATE]) AS created_date_vn
+      DATEADD(HOUR, @tzOffset, TRY_CONVERT(datetime, w.[CREATED_DATE])) AS created_date_vn
     FROM [DWH_DB]..[STG_AMOS].[WO_PART_ON_OFF] w
-    WHERE w.[PARTNO]         = @term
-       OR w.[SERIALNO]       = @term
-       OR w.[EVENT_PERFNO_I] = @term
-       OR w.[LABELNO]        = @term
-       OR w.[PARTNO_OFF]     = @term
-       OR w.[SERIALNO_OFF]   = @term
-    ORDER BY w.[MUTATION_TIME] DESC`;
+    WHERE ${conds.join('\n      AND ')}
+    ORDER BY TRY_CONVERT(float, w.[MUTATION]) DESC, TRY_CONVERT(float, w.[MUTATION_TIME]) DESC`;
   return query(text, params);
 }
 
@@ -2394,15 +2408,20 @@ app.get(
   })
 );
 
-// --- Tra cuu Part On/Off (WO_PART_ON_OFF): khop chinh xac theo 1 trong 6 truong ---
-//     Yeu cau ?term=... ; khong co term -> tra rong (khong quet ca bang).
+// --- Tra cuu Part On/Off (WO_PART_ON_OFF): 6 o rieng, khop chinh xac, AND ---
+//     ?event=&partno=&serialno=&labelno=&partnoOff=&serialnoOff= (bo trong = bo qua).
+//     Khong dien o nao -> tra rong (khong quet ca bang linked server).
 app.get(
   '/api/part-onoff',
   cached(60 * 1000, async (req, res) => {
-    const term = String(req.query.term || '').trim();
-    if (!term) return res.json({ rows: [], count: 0, term: '' });
-    const rows = CONFIG.demoMode ? DEMO.partOnOff(term) : await qPartOnOff(term);
-    res.json({ rows, count: rows.length, term, truncated: rows.length >= CONFIG.maxRows });
+    const g = (k) => String(req.query[k] || '').trim();
+    const crit = {
+      event: g('event'), partno: g('partno'), serialno: g('serialno'),
+      labelno: g('labelno'), partnoOff: g('partnoOff'), serialnoOff: g('serialnoOff'),
+    };
+    if (!Object.values(crit).some(Boolean)) return res.json({ rows: [], count: 0 });
+    const rows = CONFIG.demoMode ? DEMO.partOnOff(crit) : await qPartOnOff(crit);
+    res.json({ rows, count: rows.length, truncated: rows.length >= CONFIG.maxRows });
   })
 );
 

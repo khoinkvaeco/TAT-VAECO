@@ -187,18 +187,42 @@
     <!-- ============ TAB TRA CỨU PART ON/OFF ============ -->
     <section id="tab-partlookup" class="hidden">
       <div class="card">
-        <div class="flex items-center justify-between gap-3 flex-wrap mb-3">
+        <div class="mb-3">
+          <h3 class="card-title mb-0">Tra cứu Part On/Off <span class="unit">(WO_PART_ON_OFF)</span></h3>
+          <p class="text-xs text-muted mt-0.5">
+            Điền <b>1 hoặc nhiều ô</b> (khớp <b>chính xác</b>, các ô kết hợp AND — ô trống được bỏ qua) rồi bấm
+            <b>Tra cứu</b>. Giờ đã quy đổi sang giờ Việt Nam (+7).
+          </p>
+        </div>
+        <div class="flex items-end gap-3 flex-wrap mb-3">
           <div>
-            <h3 class="card-title mb-0">Tra cứu Part On/Off <span class="unit">(WO_PART_ON_OFF)</span></h3>
-            <p class="text-xs text-muted mt-0.5">
-              Nhập <b>chính xác</b> Part No / Serial No / Label / Event Perf / Part No (off) / Serial No (off) rồi bấm
-              <b>Tra cứu</b>. Giờ đã quy đổi sang giờ Việt Nam (+7).
-            </p>
+            <label class="flabel">Event Perf (số)</label>
+            <input id="poEvent" type="text" inputmode="numeric" placeholder="VD: 1234567" class="finput w-[130px]" />
           </div>
-          <div class="flex items-center gap-2">
-            <input id="partSearchInput" type="text" placeholder="VD: 326975" class="finput min-w-[200px]" />
-            <button id="partSearchBtn" class="btn-accent" title="Tra cứu trong WO_PART_ON_OFF">🔎 Tra cứu</button>
-            <span id="partCount" class="text-xs text-muted"></span>
+          <div>
+            <label class="flabel">Part No</label>
+            <input id="poPartno" type="text" placeholder="VD: 326975" class="finput w-[140px]" />
+          </div>
+          <div>
+            <label class="flabel">Serial No</label>
+            <input id="poSerialno" type="text" placeholder="VD: 43842" class="finput w-[130px]" />
+          </div>
+          <div>
+            <label class="flabel">Label (số)</label>
+            <input id="poLabelno" type="text" inputmode="numeric" placeholder="VD: 201277" class="finput w-[120px]" />
+          </div>
+          <div>
+            <label class="flabel">Part No (off)</label>
+            <input id="poPartnoOff" type="text" class="finput w-[140px]" />
+          </div>
+          <div>
+            <label class="flabel">Serial No (off)</label>
+            <input id="poSerialnoOff" type="text" class="finput w-[130px]" />
+          </div>
+          <button id="partSearchBtn" class="btn-accent" title="Tra cứu trong WO_PART_ON_OFF">🔎 Tra cứu</button>
+          <button id="partClearBtn" class="btn-ghost" title="Xóa các ô tìm kiếm">Xóa</button>
+          <span id="partCount" class="text-xs text-muted"></span>
+          <div class="ml-auto flex items-center gap-2">
             <input id="partFilter" type="text" placeholder="Lọc trong kết quả…" class="finput" />
             <button id="partExport" class="btn-export">⬇ Excel</button>
           </div>
