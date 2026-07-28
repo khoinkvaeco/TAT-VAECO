@@ -168,7 +168,7 @@ CREATE INDEX IX_SIGN_user ON [DWH_DB].[STG_AMOS].[SIGN] ([USER_SIGN]) INCLUDE ([
 | `GET /api/tat/departments` | Bảng chi tiết TAT theo đơn vị |
 | `GET /api/tat/cuvt` | Chi tiết TAT CUVT |
 | `GET /api/reports/:name` | Báo cáo (`issued-not-installed`, `removed-not-returned`, `not-reconciled`, `removed-before-installed`, `other`, `return-store-tat`) |
-| `GET /api/part-onoff` | Tra cứu Part On/Off (`WO_PART_ON_OFF`, linked server DWH_DB). 6 tham số riêng, khớp **chính xác**, kết hợp AND (bỏ trống = bỏ qua): `event`, `labelno` (số) · `partno`, `serialno`, `partnoOff`, `serialnoOff` (chữ). Giờ VN = ghép `MUTATION` (số ngày AMOS) + `MUTATION_TIME` (ms từ 0h) + 7h; `CREATED_DATE` (datetime) + 7h. |
+| `GET /api/part-onoff` | Tra cứu Part On/Off (`WO_PART_ON_OFF`, linked server DWH_DB). 6 tham số riêng, khớp **chính xác**, kết hợp AND (bỏ trống = bỏ qua): `event`, `labelno` (số) · `partno`, `serialno`, `partnoOff`, `serialnoOff` (chữ). Giờ VN = ghép `MUTATION` (số ngày AMOS) + `MUTATION_TIME` (ms từ 0h) + 7h thành 1 cột; `CREATED_DATE` cũng là số ngày AMOS → chỉ có ngày (không giờ). |
 | `POST /api/chat` | Trợ lý TAT. Body JSON `{ message, ...filter }` → `{ reply, intent }`. Số liệu/tra cứu tính bằng SQL nội bộ; câu chưa hiểu mới (tùy chọn) chuyển AI theo `LLM_PROVIDER`. |
 | `POST /api/chat/flag` | Người dùng **👎 Báo sai** một câu trả lời. Body `{ message }` → nhờ AI (nếu bật) trả lời lại + lưu kinh nghiệm; nếu AI tắt thì ghi nhận để admin review. |
 | `GET /api/admin/chat-unknown` | Gộp log câu hỏi chatbot chưa hiểu (gom theo nội dung, đếm số lần). Query `days` (0 = tất cả). Trang xem: `/admin` hoặc `/admin.html`. **Chỉ IP quản trị.** |

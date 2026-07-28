@@ -1715,7 +1715,8 @@ async function getDepartments() {
  *   - CHU  : PARTNO, SERIALNO, PARTNO_OFF, SERIALNO_OFF
  * Ngay gio: MUTATION = so NGAY AMOS (ke tu @amosEpoch), MUTATION_TIME = so MS
  * tu 0h (GIONG mutation/mutation_t cua on_off - KHONG phai datetime!) ->
- * ghep 2 cot + @tzOffset ra gio VN. CREATED_DATE la datetime -> chi + @tzOffset.
+ * ghep 2 cot + @tzOffset ra gio VN thanh 1 cot mutation_time_vn duy nhat.
+ * CREATED_DATE cung la SO NGAY kieu AMOS -> cong vao @amosEpoch (chi co ngay).
  */
 async function qPartOnOff(crit) {
   const params = { top: CONFIG.maxRows };
@@ -1736,9 +1737,18 @@ async function qPartOnOff(crit) {
        TRY_CONVERT(int, TRY_CONVERT(bigint, TRY_CONVERT(float, w.[MUTATION_TIME])) % 86400000),
        DATEADD(DAY, TRY_CONVERT(int, TRY_CONVERT(float, w.[MUTATION])), TRY_CONVERT(datetime, @amosEpoch))))`;
 
+  // CREATED_DATE cung la SO NGAY kieu AMOS (khong phai datetime!) -> cong vao
+  // @amosEpoch; giu phan le (neu co) lam gio trong ngay. Khong cong tzOffset:
+  // gia tri chi co NGAY, cong 7h se hien 07:00 gay hieu lam.
+  const createdF = `TRY_CONVERT(float, w.[CREATED_DATE])`;
+  const createdVN =
+    `DATEADD(SECOND,
+       TRY_CONVERT(int, ROUND((${createdF} - FLOOR(${createdF})) * 86400, 0)),
+       DATEADD(DAY, TRY_CONVERT(int, FLOOR(${createdF})), TRY_CONVERT(datetime, @amosEpoch)))`;
+
   const text = `
     SELECT TOP (@top)
-      RTRIM(w.[EVENT_PERFNO_I]) AS event_perfno_i,
+      TRY_CONVERT(bigint, w.[EVENT_PERFNO_I]) AS event_perfno_i,
       RTRIM(w.[PARTNO])         AS partno,
       RTRIM(w.[SERIALNO])       AS serialno,
       RTRIM(w.[LABELNO])        AS labelno,
@@ -1747,12 +1757,11 @@ async function qPartOnOff(crit) {
       RTRIM(w.[PARTNO_OFF])     AS partno_off,
       RTRIM(w.[SERIALNO_OFF])   AS serialno_off,
       RTRIM(w.[RELEASENO])      AS releaseno,
-      w.[MUTATION]              AS mutation,
       RTRIM(w.[MUTATOR])        AS mutator,
       RTRIM(w.[STATUS])         AS status,
       ${mutVN}                  AS mutation_time_vn,
       RTRIM(w.[CREATED_BY])     AS created_by,
-      DATEADD(HOUR, @tzOffset, TRY_CONVERT(datetime, w.[CREATED_DATE])) AS created_date_vn
+      ${createdVN}              AS created_date_vn
     FROM [DWH_DB]..[STG_AMOS].[WO_PART_ON_OFF] w
     WHERE ${conds.join('\n      AND ')}
     ORDER BY TRY_CONVERT(float, w.[MUTATION]) DESC, TRY_CONVERT(float, w.[MUTATION_TIME]) DESC`;

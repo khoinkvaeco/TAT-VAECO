@@ -329,9 +329,21 @@ const COLS_TAT_DEPT = [
   COL_EXCLUDE, // checkbox "Bỏ qua" — cột cuối
 ];
 
-/** Cột tab Tra cứu Part On/Off (WO_PART_ON_OFF). Giờ đã đổi sang VN ở server. */
+/** So nguyen dang chuoi thuong (khong 8.76e+006, khong dau phan cach nghin). */
+const fmtIntCell = (cell) => {
+  const n = Number(cell.getValue());
+  return isFinite(n) ? String(Math.round(n)) : (cell.getValue() ?? '');
+};
+/** Chi hien NGAY (dd/mm/yyyy) - cho cot chi co ngay, khong co gio. */
+const fmtDateOnlyCell = (cell) => {
+  const s = fmtDateTime(cell.getValue());
+  return s ? s.slice(0, 10) : '';
+};
+
+/** Cột tab Tra cứu Part On/Off (WO_PART_ON_OFF). Giờ đã đổi sang VN ở server:
+ *  Mutation (ngày AMOS) + Mutation Time (ms) đã GHÉP thành 1 cột giờ VN. */
 const COLS_PART_ONOFF = [
-  { title: 'Event Perf', field: 'event_perfno_i', headerFilter: 'input' },
+  { title: 'Event Perf', field: 'event_perfno_i', formatter: fmtIntCell, hozAlign: 'right', sorter: 'number', headerFilter: 'input' },
   { title: 'Part No', field: 'partno', headerFilter: 'input' },
   { title: 'Serial No', field: 'serialno', headerFilter: 'input' },
   { title: 'Label', field: 'labelno', headerFilter: 'input' },
@@ -340,12 +352,11 @@ const COLS_PART_ONOFF = [
   { title: 'Part No (off)', field: 'partno_off', headerFilter: 'input' },
   { title: 'Serial No (off)', field: 'serialno_off', headerFilter: 'input' },
   { title: 'Release No', field: 'releaseno', headerFilter: 'input' },
-  { title: 'Mutation', field: 'mutation', hozAlign: 'right', sorter: 'number' },
   { title: 'Mutator', field: 'mutator', headerFilter: 'input' },
   { title: 'Status', field: 'status', headerFilter: 'input' },
-  { title: 'Mutation Time (VN)', field: 'mutation_time_vn', formatter: fmtDateCell },
+  { title: 'Giờ mutation (VN)', field: 'mutation_time_vn', formatter: fmtDateCell },
   { title: 'Created By', field: 'created_by', headerFilter: 'input' },
-  { title: 'Created Date (VN)', field: 'created_date_vn', formatter: fmtDateCell },
+  { title: 'Created Date (VN)', field: 'created_date_vn', formatter: fmtDateOnlyCell },
 ];
 
 /** Định nghĩa cột cho từng báo cáo. */

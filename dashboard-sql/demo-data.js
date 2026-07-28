@@ -452,7 +452,7 @@ function partOnOff(crit) {
   for (let i = 0; i < n; i++) {
     const t = new Date(now - i * 86400000 * rndInt(1, 30));
     rows.push({
-      event_perfno_i: crit.event || String(rndInt(100000, 999999)),
+      event_perfno_i: Number(crit.event) || rndInt(7000000, 9000000),
       partno: crit.partno || 'PN-' + pad(rndInt(100, 999)),
       serialno: crit.serialno || 'SN' + rndInt(10000, 99999),
       labelno: crit.labelno || String(rndInt(100000, 999999)),
@@ -461,13 +461,13 @@ function partOnOff(crit) {
       partno_off: crit.partnoOff || 'PN-' + pad(rndInt(100, 999)),
       serialno_off: crit.serialnoOff || 'SN' + rndInt(10000, 99999),
       releaseno: 'REL' + rndInt(1000, 9999),
-      mutation: rndInt(19000, 20000),
       mutator: 'USER' + rndInt(10, 99),
       status: rnd(['ON', 'OFF', 'RELEASED']),
       // Gia lap gio VN (server that ghep MUTATION+MUTATION_TIME): tra chuoi ISO-Z
       mutation_time_vn: t.toISOString(),
       created_by: 'USER' + rndInt(10, 99),
-      created_date_vn: new Date(t.getTime() - 3600000).toISOString(),
+      // Chi co NGAY (nhu CREATED_DATE that - so ngay AMOS khong kem gio)
+      created_date_vn: t.toISOString().slice(0, 10) + 'T00:00:00.000Z',
     });
   }
   return rows;
