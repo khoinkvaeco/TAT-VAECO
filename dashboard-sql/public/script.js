@@ -22,15 +22,31 @@ function seriesColors() {
 
 /** Dinh dang ngay gio (VN).
  *  LUU Y: gia tri tu API la gio VN nhung duoc serialize dang UTC ('...Z').
- *  Phai doc bang getUTC* de KHONG bi trinh duyet cong them mui gio lan nua. */
+ *  Phai doc bang getUTC* de KHONG bi trinh duyet cong them mui gio lan nua.
+ *  Chuoi KHONG kem mui gio (vd range.from = '2026-07-01T00:00:00') se bi
+ *  trinh duyet hieu la GIO DIA PHUONG -> lech -7h (hien 17h ngay hom truoc);
+ *  nen them 'Z' de doc dung gio da ghi. */
 function fmtDateTime(v) {
   if (!v) return '';
-  const d = new Date(v);
+  const s = typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?(\.\d+)?$/.test(v)
+    ? v + 'Z'
+    : v;
+  const d = new Date(s);
   if (isNaN(d)) return v;
   // Record trong / gia tri sentinel (1900-01-01, hoac nam <= 1901) -> de trong.
   if (d.getUTCFullYear() <= 1901) return '';
   const p = (n) => String(n).padStart(2, '0');
   return `${p(d.getUTCDate())}/${p(d.getUTCMonth() + 1)}/${d.getUTCFullYear()} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
+}
+
+/** Moc CUOI cua ky la LOAI TRU (vd quy 3 -> to = 01/10 00:00). De nhan ky de
+ *  hieu, hien thi thoi diem CUOI CUNG duoc tinh (to - 1 phut -> 30/09 23:59). */
+function fmtRangeEnd(v) {
+  if (!v) return '';
+  const s = typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?(\.\d+)?$/.test(v) ? v + 'Z' : v;
+  const d = new Date(s);
+  if (isNaN(d)) return fmtDateTime(v);
+  return fmtDateTime(new Date(d.getTime() - 60000).toISOString());
 }
 
 /** Dinh dang so gio TAT. */
@@ -508,7 +524,7 @@ async function loadDashboard() {
   $('#recalcNote').classList.add('hidden');
   try {
     const dash = await api('/api/dashboard');
-    $('#rangeLabel').textContent = `${dash.range.label}: ${fmtDateTime(dash.range.from)} → ${fmtDateTime(dash.range.to)}`;
+    $('#rangeLabel').textContent = `${dash.range.label}: ${fmtDateTime(dash.range.from)} → ${fmtRangeEnd(dash.range.to)}`;
     baseKpiInstall = dash.kpis.tatInstallAvg;
     baseKpiUsret = dash.kpis.tatUsReturnAvg;
     renderKPIs(dash.kpis);
