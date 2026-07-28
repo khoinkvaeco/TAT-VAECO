@@ -47,6 +47,8 @@ const state = {
   periodType: 'month',
   month: '',       // 'YYYY-MM'
   week: '',        // 'YYYY-MM-DD' (ngay tham chieu)
+  quarter: '',     // 'YYYY-Qn' (vd 2026-Q3)
+  year: '',        // 'YYYY'
   station: '',
   store: '',
   department: '',
@@ -65,8 +67,8 @@ const reportCache = new Map();
 // --- Luu / khoi phuc cau hinh filter (localStorage) de lan sau mo lai dung ngay ---
 const FILTER_STORE_KEY = 'tat-filters-v1';
 function saveFilters() {
-  const { periodType, month, week, station, store, department, excludeCC } = state;
-  localStorage.setItem(FILTER_STORE_KEY, JSON.stringify({ periodType, month, week, station, store, department, excludeCC }));
+  const { periodType, month, week, quarter, year, station, store, department, excludeCC } = state;
+  localStorage.setItem(FILTER_STORE_KEY, JSON.stringify({ periodType, month, week, quarter, year, station, store, department, excludeCC }));
 }
 function loadSavedFilters() {
   try {
@@ -85,6 +87,8 @@ function buildQuery() {
   p.set('periodType', state.periodType);
   if (state.periodType === 'month' && state.month) p.set('month', state.month);
   if (state.periodType === 'week' && state.week) p.set('week', state.week);
+  if (state.periodType === 'quarter' && state.quarter) p.set('quarter', state.quarter);
+  if (state.periodType === 'year' && state.year) p.set('year', state.year);
   if (state.station) p.set('station', state.station);
   if (state.store) p.set('store', state.store);
   if (state.department) p.set('department', state.department);
@@ -813,9 +817,29 @@ function initPartLookup() {
 // 12. Gan su kien & khoi tao
 // --------------------------------------------------------------------------
 async function init() {
-  // Mac dinh: thang hien tai
+  // Mac dinh: thang/quy/nam hien tai
   const now = new Date();
   state.month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  state.quarter = `${now.getFullYear()}-Q${Math.floor(now.getMonth() / 3) + 1}`;
+  state.year = String(now.getFullYear());
+
+  // Nap options QUY (4 nam gan nhat x Q1-4, moi nhat truoc) va NAM (6 nam)
+  const qSel = $('#quarterInput');
+  for (let y = now.getFullYear(); y >= now.getFullYear() - 3; y--) {
+    for (let q = 4; q >= 1; q--) {
+      const o = document.createElement('option');
+      o.value = `${y}-Q${q}`;
+      o.textContent = `Quý ${q}/${y}`;
+      qSel.appendChild(o);
+    }
+  }
+  const ySel = $('#yearInput');
+  for (let y = now.getFullYear(); y >= now.getFullYear() - 5; y--) {
+    const o = document.createElement('option');
+    o.value = String(y);
+    o.textContent = String(y);
+    ySel.appendChild(o);
+  }
 
   // Khoi phuc cau hinh filter da luu (neu co)
   const saved = loadSavedFilters();
@@ -823,6 +847,8 @@ async function init() {
     if (saved.periodType) state.periodType = saved.periodType;
     if (saved.month) state.month = saved.month;
     if (saved.week) state.week = saved.week;
+    if (saved.quarter) state.quarter = saved.quarter;
+    if (saved.year) state.year = saved.year;
     state.station = saved.station || '';
     state.store = saved.store || '';
     state.department = saved.department || '';
@@ -831,20 +857,28 @@ async function init() {
   $('#ccToggle').checked = state.excludeCC;
   $('#monthInput').value = state.month;
   $('#weekInput').value = state.week || now.toISOString().slice(0, 10);
+  if ([...qSel.options].some((o) => o.value === state.quarter)) qSel.value = state.quarter;
+  if ([...ySel.options].some((o) => o.value === state.year)) ySel.value = state.year;
 
   // Period buttons: doi ky bao cao -> tu dong tai lai
+  const showPeriodInputs = () => {
+    $('#monthWrap').classList.toggle('hidden', state.periodType !== 'month');
+    $('#weekWrap').classList.toggle('hidden', state.periodType !== 'week');
+    $('#quarterWrap').classList.toggle('hidden', state.periodType !== 'quarter');
+    $('#yearWrap').classList.toggle('hidden', state.periodType !== 'year');
+  };
   $$('.periodBtn').forEach((btn) =>
     btn.addEventListener('click', () => {
       state.periodType = btn.dataset.period;
       $$('.periodBtn').forEach((b) => b.classList.toggle('active', b === btn));
-      $('#monthWrap').classList.toggle('hidden', state.periodType !== 'month');
-      $('#weekWrap').classList.toggle('hidden', state.periodType !== 'week');
+      showPeriodInputs();
       applyFilters(); // khai bao ben duoi; chi chay khi nguoi dung click (sau init)
     })
   );
-  document.querySelector(`.periodBtn[data-period="${state.periodType}"]`).classList.add('active');
-  $('#monthWrap').classList.toggle('hidden', state.periodType !== 'month');
-  $('#weekWrap').classList.toggle('hidden', state.periodType !== 'week');
+  const activePeriodBtn = document.querySelector(`.periodBtn[data-period="${state.periodType}"]`);
+  (activePeriodBtn || document.querySelector('.periodBtn[data-period="month"]')).classList.add('active');
+  if (!activePeriodBtn) state.periodType = 'month'; // gia tri luu cu khong hop le
+  showPeriodInputs();
 
   // TU DONG tai du lieu moi khi doi filter (khong con nut "Ap dung"):
   // luu cau hinh + xoa cache bao cao + tai lai tab dang mo.
@@ -860,6 +894,8 @@ async function init() {
   // Inputs: doi xong la load ngay
   $('#monthInput').addEventListener('change', (e) => { state.month = e.target.value; applyFilters(); });
   $('#weekInput').addEventListener('change', (e) => { state.week = e.target.value; applyFilters(); });
+  $('#quarterInput').addEventListener('change', (e) => { state.quarter = e.target.value; applyFilters(); });
+  $('#yearInput').addEventListener('change', (e) => { state.year = e.target.value; applyFilters(); });
   $('#stationSelect').addEventListener('change', (e) => { state.station = e.target.value; applyFilters(); });
   $('#storeSelect').addEventListener('change', (e) => { state.store = e.target.value; applyFilters(); });
   $('#deptSelect').addEventListener('change', (e) => { state.department = e.target.value; applyFilters(); });
@@ -964,6 +1000,7 @@ async function chatSend(msg) {
       body: JSON.stringify({
         message: text,
         periodType: state.periodType, month: state.month, week: state.week,
+        quarter: state.quarter, year: state.year,
         station: state.station, store: state.store,
         department: state.department, excludeCC: state.excludeCC,
       }),

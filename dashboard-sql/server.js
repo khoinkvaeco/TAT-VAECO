@@ -502,11 +502,45 @@ function weekRange(ref) {
   return { from: toLocalStr(monday), to: toLocalStr(nextMonday) };
 }
 
+/** Quy: period = 'YYYY-Qn' (vd 2026-Q3). Thieu/sai -> quy hien tai. */
+function quarterRange(period) {
+  let year, quarter;
+  const m = /^(\d{4})-Q([1-4])$/i.exec(String(period || '').trim());
+  if (m) {
+    year = Number(m[1]);
+    quarter = Number(m[2]);
+  } else {
+    const now = new Date();
+    year = now.getFullYear();
+    quarter = Math.floor(now.getMonth() / 3) + 1;
+  }
+  const from = new Date(year, (quarter - 1) * 3, 1, 0, 0, 0);
+  const to = new Date(year, quarter * 3, 1, 0, 0, 0); // dau quy sau
+  return { from: toLocalStr(from), to: toLocalStr(to) };
+}
+
+/** Nam: period = 'YYYY'. Thieu/sai -> nam hien tai. */
+function yearRange(period) {
+  let year = Number(String(period || '').trim());
+  if (!Number.isInteger(year) || year < 2000 || year > 2100) year = new Date().getFullYear();
+  const from = new Date(year, 0, 1, 0, 0, 0);
+  const to = new Date(year + 1, 0, 1, 0, 0, 0); // dau nam sau
+  return { from: toLocalStr(from), to: toLocalStr(to) };
+}
+
 /** Tra ve { from, to, label } tu query params. */
 function resolveRange(q) {
   if (q.periodType === 'week') {
     const r = weekRange(q.week);
     return { ...r, label: 'Tuan (T2 dau tuan)' };
+  }
+  if (q.periodType === 'quarter') {
+    const r = quarterRange(q.quarter);
+    return { ...r, label: 'Quy' };
+  }
+  if (q.periodType === 'year') {
+    const r = yearRange(q.year);
+    return { ...r, label: 'Nam' };
   }
   const r = monthRange(q.month);
   return { ...r, label: 'Thang' };
@@ -1872,6 +1906,8 @@ async function chatAnswerKpi(intent, ctx) {
     periodType: (intent.period && intent.period.periodType) || ctx.periodType || 'month',
     month: (intent.period && intent.period.month) || ctx.month || '',
     week: (intent.period && intent.period.week) || ctx.week || '',
+    quarter: ctx.quarter || '',
+    year: ctx.year || '',
     station: ctx.station || '',
     store: ctx.store || '',
     department: intent.department || ctx.department || '',

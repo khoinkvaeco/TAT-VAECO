@@ -47,6 +47,8 @@
         <div class="inline-flex rounded-lg overflow-hidden border border-hair">
           <button data-period="month" class="periodBtn px-3 py-1.5 text-sm">Tháng</button>
           <button data-period="week" class="periodBtn px-3 py-1.5 text-sm border-l border-hair">Tuần (từ T2)</button>
+          <button data-period="quarter" class="periodBtn px-3 py-1.5 text-sm border-l border-hair">Quý</button>
+          <button data-period="year" class="periodBtn px-3 py-1.5 text-sm border-l border-hair">Năm</button>
         </div>
       </div>
 
@@ -58,6 +60,16 @@
       <div id="weekWrap" class="hidden">
         <label class="flabel">Ngày tham chiếu (tuần)</label>
         <input type="date" id="weekInput" class="finput" />
+      </div>
+
+      <div id="quarterWrap" class="hidden">
+        <label class="flabel">Quý</label>
+        <select id="quarterInput" class="finput min-w-[130px]"></select>
+      </div>
+
+      <div id="yearWrap" class="hidden">
+        <label class="flabel">Năm</label>
+        <select id="yearInput" class="finput min-w-[100px]"></select>
       </div>
 
       <div>
