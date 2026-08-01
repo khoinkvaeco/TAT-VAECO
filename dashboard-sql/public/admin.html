@@ -82,6 +82,21 @@
       <div id="llmTestOut" style="font-size:13px;margin-top:8px"></div>
     </div>
 
+    <!-- ===== Bao cao dinh ky Teams / SharePoint ===== -->
+    <div class="panel" style="margin-bottom:14px">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <b style="font-size:14px">📤 Báo cáo định kỳ (Teams / SharePoint)</b>
+        <span id="rptStatus" style="font-size:13px;color:var(--muted)">Đang kiểm tra…</span>
+        <button id="rptNow" class="act" style="margin-left:auto">📨 Gửi báo cáo ngay</button>
+      </div>
+      <div class="note" style="margin-top:8px">
+        Cấu hình trong <code>.env</code>: <code>TEAMS_WEBHOOK_URL</code> (webhook của Teams Workflows),
+        <code>REPORT_EXPORT_DIR</code> (thư mục SharePoint/OneDrive sync), <code>REPORT_SCHEDULE</code> (vd <code>T2 06:30</code>),
+        <code>REPORT_PERIOD</code> (<code>week</code>/<code>month</code>). ⚠️ Gửi = số liệu <b>tổng hợp</b> lên cloud M365.
+      </div>
+      <div id="rptOut" style="font-size:13px;margin-top:8px"></div>
+    </div>
+
     <div class="tabs">
       <button data-tab="unknown" class="active">Câu hỏi chưa hiểu</button>
       <button data-tab="all">Tất cả câu hỏi</button>
@@ -343,6 +358,36 @@
     $('#llmTestBtn').addEventListener('click', testLlm);
     $('#llmTestMsg').addEventListener('keydown', (e) => { if (e.key === 'Enter') testLlm(); });
     loadLlmStatus();
+
+    // ---- Bao cao dinh ky ----
+    async function loadRptStatus() {
+      const el = $('#rptStatus');
+      try {
+        const d = await getJSON('/api/admin/report-status');
+        if (!d.enabled) {
+          el.innerHTML = '<span style="color:#b45309">● TẮT</span> — chưa cấu hình webhook/thư mục xuất.';
+        } else {
+          el.innerHTML = `<span style="color:#16a34a">● BẬT</span> — lịch: <b>${esc(d.schedule)}</b>${d.scheduleValid ? '' : ' <span style="color:#dc2626">(sai định dạng!)</span>'} · kỳ: <b>${esc(d.period)}</b>` +
+            `${d.teamsConfigured ? ' · Teams ✔' : ''}${d.exportDir ? ' · CSV → ' + esc(d.exportDir) : ''}`;
+        }
+      } catch (e) { el.textContent = 'Không lấy được trạng thái: ' + e.message; }
+    }
+    $('#rptNow').addEventListener('click', async () => {
+      const out = $('#rptOut');
+      out.innerHTML = '<span style="color:var(--muted)">Đang gửi…</span>';
+      try {
+        const r = await fetch('/api/admin/report-now', { method: 'POST' });
+        const d = await r.json();
+        if (d.ok) {
+          out.innerHTML = `<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:10px;color:#166534">` +
+            `<b>✔ Đã chạy</b> — ${esc(d.label)} · Teams: ${esc(String(d.teams ?? 'không bật'))} · Files: ${d.files && d.files.length ? esc(d.files.join(', ')) : 'không bật'}` +
+            `${d.csvError ? ' · <span style="color:#b91c1c">CSV lỗi: ' + esc(d.csvError) + '</span>' : ''}</div>`;
+        } else {
+          out.innerHTML = `<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:10px;color:#991b1b"><b>✖</b> ${esc(d.message || 'Lỗi')}</div>`;
+        }
+      } catch (e) { out.innerHTML = `<div style="color:#991b1b">Lỗi: ${esc(e.message)}</div>`; }
+    });
+    loadRptStatus();
 
     load();
   </script>

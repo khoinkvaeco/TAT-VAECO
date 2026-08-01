@@ -44,6 +44,17 @@ const CONFIG = {
   // de moi query khong phai keo qua linked server (cham). Tu lam moi dinh ky.
   signCache: String(process.env.SIGN_CACHE || 'true').toLowerCase() !== 'false',
   signCacheMinutes: parseInt(process.env.SIGN_CACHE_MINUTES || '360', 10), // mac dinh 6h
+  // --- Bao cao dinh ky day len Teams / SharePoint (phuong an 3) - MAC DINH TAT ---
+  // URL webhook cua Teams Workflows ("Post to a channel when a webhook request
+  // is received"). De trong = khong gui. LUU Y: gui = so lieu TONG HOP len cloud M365.
+  teamsWebhookUrl: (process.env.TEAMS_WEBHOOK_URL || '').trim(),
+  // Thu muc xuat file bao cao (tro vao thu muc SharePoint/OneDrive dang sync
+  // tren server -> file tu dong len thu vien SharePoint). De trong = khong xuat.
+  reportExportDir: (process.env.REPORT_EXPORT_DIR || '').trim(),
+  // Lich gui: "T2 06:30" | "T2,T5 06:30" | "MON 06:30" | "CN 18:00"
+  reportSchedule: (process.env.REPORT_SCHEDULE || 'T2 06:30').trim(),
+  // Ky bao cao: 'week' = tuan VUA KET THUC, 'month' = thang VUA KET THUC
+  reportPeriod: (process.env.REPORT_PERIOD || 'week').trim().toLowerCase(),
 };
 
 // Cau hinh ket noi mssql - LAY TU BIEN MOI TRUONG, khong hardcode password.
@@ -2160,6 +2171,220 @@ async function chatRespond(message, ctx) {
 }
 
 // ---------------------------------------------------------------------------
+// 7d. BAO CAO DINH KY -> TEAMS (Adaptive Card qua Workflows webhook) +
+//     FILE CSV vao thu muc SharePoint sync. MAC DINH TAT (chua cau hinh .env).
+//     Du lieu gui di: CHI SO TONG HOP (KPI) + bang chi tiet TAT (CSV, neu bat
+//     REPORT_EXPORT_DIR). Moi lan gui ghi audit logs/report-YYYY-MM-DD.log.
+// ---------------------------------------------------------------------------
+const REPORT_STATE_FILE = path.join(DATA_DIR, 'report-state.json');
+
+/** Parse "T2 06:30" / "T2,T5 06:30" / "MON 6:30" / "CN 18:00" -> {days:Set, hh, mm}. */
+function parseReportSchedule(str) {
+  const m = /^\s*([A-Za-z0-9,]+)\s+(\d{1,2}):(\d{2})\s*$/.exec(String(str || ''));
+  if (!m) return null;
+  const MAP = { CN: 0, T2: 1, T3: 2, T4: 3, T5: 4, T6: 5, T7: 6,
+    SUN: 0, MON: 1, TUE: 2, WED: 3, THU: 4, FRI: 5, SAT: 6 };
+  const days = new Set();
+  for (const tok of m[1].toUpperCase().split(',')) {
+    if (!(tok in MAP)) return null;
+    days.add(MAP[tok]);
+  }
+  const hh = parseInt(m[2], 10), mm = parseInt(m[3], 10);
+  if (hh > 23 || mm > 59) return null;
+  return { days, hh, mm };
+}
+
+/** Ky bao cao VUA KET THUC + ky lien truoc (de tinh delta). */
+function reportRanges() {
+  const now = new Date();
+  if (CONFIG.reportPeriod === 'month') {
+    const cur = new Date(now.getFullYear(), now.getMonth() - 1, 1); // thang truoc
+    const prv = new Date(now.getFullYear(), now.getMonth() - 2, 1);
+    const s = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    return {
+      label: `Tháng ${cur.getMonth() + 1}/${cur.getFullYear()}`,
+      fileTag: `thang_${s(cur)}`,
+      range: { ...monthRange(s(cur)), label: 'Thang' },
+      prevRange: { ...monthRange(s(prv)), label: 'Thang' },
+    };
+  }
+  // week (mac dinh): tuan VUA KET THUC = tuan chua (now - 7 ngay)
+  const ref = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7);
+  const prevRef = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 14);
+  const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const r = weekRange(iso(ref));
+  // Moc "to" la LOAI TRU (T2 tuan sau 00:00) -> ngay cuoi hien thi = to - 1 ngay (CN)
+  const toD = new Date(r.to.slice(0, 10) + 'T00:00:00');
+  const endD = new Date(toD.getFullYear(), toD.getMonth(), toD.getDate() - 1);
+  const dd = (d) => `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`;
+  return {
+    label: `Tuần ${r.from.slice(8, 10)}/${r.from.slice(5, 7)}–${dd(endD)}/${endD.getFullYear()}`,
+    fileTag: `tuan_${r.from.slice(0, 10)}`,
+    range: { ...r, label: 'Tuan' },
+    prevRange: { ...weekRange(iso(prevRef)), label: 'Tuan' },
+  };
+}
+
+/** Dong delta "▲ x% / ▼ x%" so ky truoc (downGood: giam la tot). */
+function deltaTxt(cur, prev, downGood) {
+  const c = Number(cur), p = Number(prev);
+  if (!isFinite(c) || !isFinite(p) || p === 0) return '';
+  const pct = Math.round(((c - p) / Math.abs(p)) * 1000) / 10;
+  if (pct === 0) return ' (= kỳ trước)';
+  const good = downGood ? pct < 0 : pct > 0;
+  return ` (${pct > 0 ? '▲' : '▼'} ${Math.abs(pct)}% ${good ? 'tốt hơn' : 'xấu hơn'} kỳ trước)`;
+}
+
+/** Adaptive Card KPI cho Teams Workflows. */
+function buildTeamsCard(label, k, p) {
+  const facts = [
+    { title: 'TAT install', value: `${k.tatInstallAvg} ngày${deltaTxt(k.tatInstallAvg, p.tatInstallAvg, true)}` },
+    { title: 'TAT US return', value: `${k.tatUsReturnAvg} ngày${deltaTxt(k.tatUsReturnAvg, p.tatUsReturnAvg, true)}` },
+    { title: 'TAT hoàn kho', value: `${k.tatReturnStoreAvg} ngày${deltaTxt(k.tatReturnStoreAvg, p.tatReturnStoreAvg, true)}` },
+    { title: 'Thiết bị xuất kho', value: `${k.countIssued}` },
+    { title: 'Chưa đối ứng', value: `${k.countNotReconciled}${deltaTxt(k.countNotReconciled, p.countNotReconciled, true)}` },
+    { title: 'Tỷ lệ đối ứng', value: `${k.reconcileRate}%${deltaTxt(k.reconcileRate, p.reconcileRate, false)}` },
+  ];
+  return {
+    type: 'message',
+    attachments: [{
+      contentType: 'application/vnd.microsoft.card.adaptive',
+      contentUrl: null,
+      content: {
+        $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',
+        type: 'AdaptiveCard',
+        version: '1.4',
+        body: [
+          { type: 'TextBlock', size: 'Large', weight: 'Bolder', text: '📊 Báo cáo TAT — VAECO' },
+          { type: 'TextBlock', spacing: 'None', isSubtle: true, text: label },
+          { type: 'FactSet', facts },
+          { type: 'TextBlock', size: 'Small', isSubtle: true, wrap: true,
+            text: 'Số liệu tổng hợp tự động từ Dashboard TAT (chi tiết xem trên dashboard trong mạng công ty).' },
+        ],
+      },
+    }],
+  };
+}
+
+/** Ghi audit moi lan gui bao cao ra ngoai. */
+function logReport(line) {
+  try {
+    const day = new Date().toISOString().slice(0, 10);
+    const vn = new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh', hour12: false });
+    fs.appendFile(path.join(LOG_DIR, `report-${day}.log`), `${vn}\t${line}\n`, () => {});
+  } catch (_) { /* khong vo app vi log */ }
+}
+
+/** Escape 1 o CSV. */
+function csvCell(v) {
+  const s = v == null ? '' : String(v);
+  return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+
+/** Xuat CSV (co BOM de Excel doc tieng Viet) vao REPORT_EXPORT_DIR. */
+function writeReportCsv(fileTag, kpis, prevKpis, rows) {
+  const dir = CONFIG.reportExportDir;
+  fs.mkdirSync(dir, { recursive: true });
+  const files = [];
+  // 1) KPI tong hop
+  const kpiLines = [
+    ['Chi so', 'Ky nay', 'Ky truoc'],
+    ['TAT install (ngay)', kpis.tatInstallAvg, prevKpis.tatInstallAvg],
+    ['TAT US return (ngay)', kpis.tatUsReturnAvg, prevKpis.tatUsReturnAvg],
+    ['TAT CUVT (ngay)', kpis.tatCuvtAvg, prevKpis.tatCuvtAvg],
+    ['TAT hoan kho (ngay)', kpis.tatReturnStoreAvg, prevKpis.tatReturnStoreAvg],
+    ['Thiet bi xuat kho', kpis.countIssued, prevKpis.countIssued],
+    ['Chua doi ung', kpis.countNotReconciled, prevKpis.countNotReconciled],
+    ['Ty le doi ung (%)', kpis.reconcileRate, prevKpis.reconcileRate],
+    ['SL nhan (CUVT)', kpis.cntReci, prevKpis.cntReci],
+    ['SL giao (CUVT)', kpis.cntDel, prevKpis.cntDel],
+  ].map((r) => r.map(csvCell).join(',')).join('\r\n');
+  const f1 = path.join(dir, `TAT-KPI_${fileTag}.csv`);
+  fs.writeFileSync(f1, '\uFEFF' + kpiLines, 'utf8');
+  files.push(f1);
+  // 2) Chi tiet TAT theo thiet bi (neu co dong)
+  if (rows && rows.length) {
+    const cols = Object.keys(rows[0]);
+    const body = [cols.join(',')]
+      .concat(rows.map((r) => cols.map((c) => csvCell(r[c])).join(',')))
+      .join('\r\n');
+    const f2 = path.join(dir, `TAT-chitiet_${fileTag}.csv`);
+    fs.writeFileSync(f2, '\uFEFF' + body, 'utf8');
+    files.push(f2);
+  }
+  return files;
+}
+
+/** CHAY 1 LAN bao cao: tinh KPI ky vua ket thuc -> gui Teams + xuat CSV. */
+async function runScheduledReport(reason) {
+  const enabled = CONFIG.teamsWebhookUrl || CONFIG.reportExportDir;
+  if (!enabled) return { ok: false, message: 'Chua cau hinh TEAMS_WEBHOOK_URL / REPORT_EXPORT_DIR.' };
+  const { label, fileTag, range, prevRange } = reportRanges();
+  const f = {};
+  const dash = CONFIG.demoMode
+    ? DEMO.dashboard(range, f)
+    : buildDashboardFromAgg(range, await qDashboardAgg(range, f));
+  const prev = CONFIG.demoMode
+    ? DEMO.dashboard(prevRange, f)
+    : buildDashboardFromAgg(prevRange, await qDashboardAgg(prevRange, f));
+  const out = { ok: true, label, teams: null, files: [] };
+
+  if (CONFIG.teamsWebhookUrl) {
+    try {
+      const res = await fetch(CONFIG.teamsWebhookUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(buildTeamsCard(label, dash.kpis, prev.kpis)),
+      });
+      out.teams = res.ok || res.status === 202 ? 'ok' : `HTTP ${res.status}`;
+      logReport(`teams\t${reason}\t${label}\t${out.teams}`);
+    } catch (e) {
+      out.teams = 'loi: ' + e.message;
+      logReport(`teams\t${reason}\t${label}\tERROR ${e.message}`);
+    }
+  }
+  if (CONFIG.reportExportDir) {
+    try {
+      const rows = CONFIG.demoMode ? DEMO.tatDepartments(range, f) : await qTatDepartments(range, f);
+      out.files = writeReportCsv(fileTag, dash.kpis, prev.kpis, rows);
+      logReport(`csv\t${reason}\t${label}\t${out.files.join(' | ')}`);
+    } catch (e) {
+      out.files = [];
+      out.csvError = e.message;
+      logReport(`csv\t${reason}\t${label}\tERROR ${e.message}`);
+    }
+  }
+  return out;
+}
+
+/** Vong lap lich: moi 30s kiem tra den gio chua (chong gui trung theo ngay). */
+function startReportScheduler() {
+  const sched = parseReportSchedule(CONFIG.reportSchedule);
+  if (!sched) {
+    console.warn(`[REPORT] REPORT_SCHEDULE khong hop le: "${CONFIG.reportSchedule}" -> tat lich (van gui tay duoc qua admin).`);
+    return;
+  }
+  const timer = setInterval(async () => {
+    const now = new Date();
+    if (!sched.days.has(now.getDay())) return;
+    if (now.getHours() !== sched.hh || now.getMinutes() !== sched.mm) return;
+    const todayKey = now.toISOString().slice(0, 10);
+    let st = {};
+    try { st = JSON.parse(fs.readFileSync(REPORT_STATE_FILE, 'utf8')); } catch (_) { /* chua co */ }
+    if (st.lastRun === todayKey) return; // da gui hom nay roi
+    try {
+      if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+      fs.writeFileSync(REPORT_STATE_FILE, JSON.stringify({ lastRun: todayKey }), 'utf8');
+      const r = await runScheduledReport('lich');
+      console.log(`[REPORT] Da gui bao cao dinh ky (${r.label}): teams=${r.teams}, files=${r.files.length}`);
+    } catch (e) {
+      console.error('[REPORT] Loi gui bao cao dinh ky:', e.message);
+    }
+  }, 30 * 1000);
+  if (timer.unref) timer.unref();
+}
+
+// ---------------------------------------------------------------------------
 // 8. EXPRESS APP + ROUTES
 // ---------------------------------------------------------------------------
 const app = express();
@@ -2749,6 +2974,24 @@ app.post('/api/admin/kb-learn-delete', h(async (req, res) => {
   res.json({ ok: true, count: arr.length });
 }));
 
+// --- ADMIN: BAO CAO DINH KY - trang thai + gui thu ngay ---
+app.get('/api/admin/report-status', h(async (req, res) => {
+  const sched = parseReportSchedule(CONFIG.reportSchedule);
+  res.json({
+    teamsConfigured: !!CONFIG.teamsWebhookUrl,
+    exportDir: CONFIG.reportExportDir || null,
+    schedule: CONFIG.reportSchedule,
+    scheduleValid: !!sched,
+    period: CONFIG.reportPeriod,
+    enabled: !!(CONFIG.teamsWebhookUrl || CONFIG.reportExportDir),
+  });
+}));
+
+app.post('/api/admin/report-now', h(async (req, res) => {
+  const r = await runScheduledReport('tay');
+  res.json(r);
+}));
+
 // --- ADMIN: TRANG THAI LLM (de kiem tra cau hinh da dung chua) ---
 app.get('/api/admin/llm-status', h(async (req, res) => {
   res.json({
@@ -2818,6 +3061,15 @@ app.listen(CONFIG.port, () => {
     console.log('  ⚠️  LLM dam may GUI DU LIEU RA NGOAI cong ty. Tat bang cach xoa LLM_PROVIDER trong .env.');
   } else {
     console.log(`  Chatbot: rule/intent + LLM noi bo (${llm.CFG.url}, model ${llm.modelName()})`);
+  }
+  // Bao cao dinh ky Teams/SharePoint
+  if (CONFIG.teamsWebhookUrl || CONFIG.reportExportDir) {
+    console.log(`  Bao cao dinh ky: ${CONFIG.reportSchedule} (ky: ${CONFIG.reportPeriod})` +
+      `${CONFIG.teamsWebhookUrl ? ' -> Teams' : ''}${CONFIG.reportExportDir ? ' -> CSV: ' + CONFIG.reportExportDir : ''}`);
+    console.log('  ⚠️  Bao cao gui SO LIEU TONG HOP len cloud M365 (Teams/SharePoint).');
+    startReportScheduler();
+  } else {
+    console.log('  Bao cao dinh ky Teams/SharePoint: TAT (chua cau hinh)');
   }
   console.log('====================================================');
   if (!CONFIG.demoMode) {
