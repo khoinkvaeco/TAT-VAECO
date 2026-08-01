@@ -73,6 +73,8 @@ Mở trình duyệt: **http://localhost:3000**
 ### Chạy nền như Windows Service
 
 Để dashboard tự chạy khi bật máy (không phải mở CMD thủ công), cài thành Windows
+Triển khai báo cáo lên **SharePoint Online / Teams** (thẻ KPI + file CSV định kỳ, cho người chưa dùng SharePoint bao giờ) — xem **[`docs/DEPLOY-SHAREPOINT-TEAMS.md`](docs/DEPLOY-SHAREPOINT-TEAMS.md)**.
+
 Service — xem hướng dẫn đầy đủ ở **[`docs/DEPLOY-SERVICE.md`](docs/DEPLOY-SERVICE.md)**. Tóm tắt (CMD/PowerShell **Run as Administrator**):
 
 ```cmd
