@@ -138,16 +138,34 @@ function showError(msg) {
 // --------------------------------------------------------------------------
 // 3. KPI Cards
 // --------------------------------------------------------------------------
-function renderKPIs(kpis) {
+/** Chip ▲▼ so voi ky truoc.
+ *  dir: 'down' = giam la TOT (cac chi so TAT), 'up' = tang la TOT (ty le doi ung),
+ *  'neutral' = chi thong tin (so luong). prev 0/thieu -> khong hien. */
+function kpiDelta(cur, prev, dir) {
+  const c = Number(cur), p = Number(prev);
+  if (!isFinite(c) || !isFinite(p) || p === 0) return '';
+  const pct = ((c - p) / Math.abs(p)) * 100;
+  if (!isFinite(pct)) return '';
+  const rounded = Math.round(pct * 10) / 10;
+  if (rounded === 0) return `<span class="kpi-delta neutral" title="Bằng kỳ trước (kỳ trước: ${p})">= kỳ trước</span>`;
+  const upArrow = rounded > 0;
+  let cls = 'neutral';
+  if (dir === 'down') cls = upArrow ? 'bad' : 'good';   // TAT: tang = xau
+  if (dir === 'up') cls = upArrow ? 'good' : 'bad';     // ty le doi ung: tang = tot
+  return `<span class="kpi-delta ${cls}" title="Kỳ trước: ${p}">${upArrow ? '▲' : '▼'} ${Math.abs(rounded)}%</span>`;
+}
+
+function renderKPIs(kpis, prev) {
+  prev = prev || {};
   const cards = [
-    { label: 'TAT install', value: kpis.tatInstallAvg, unit: 'ngày', accent: '--series-1' },
-    { label: 'TAT US return', value: kpis.tatUsReturnAvg, unit: 'ngày', accent: '--series-8' },
-    { label: 'TAT CUVT', value: kpis.tatCuvtAvg, unit: 'ngày', accent: '--series-2' },
-    { label: 'TAT hoàn kho', value: kpis.tatReturnStoreAvg, unit: 'ngày', accent: '--series-5' },
-    { label: 'Thiết bị xuất kho', value: kpis.countIssued, unit: 'thiết bị', accent: '--series-3' },
-    { label: 'Chưa đối ứng', value: kpis.countNotReconciled, unit: 'thiết bị', accent: '--series-6' },
-    { label: 'Tỷ lệ đối ứng', value: kpis.reconcileRate, unit: '%', accent: '--series-4' },
-    // SL da NHAN (reci) / SL da GIAO (del) cua CUVT trong ky
+    { label: 'TAT install', value: kpis.tatInstallAvg, prev: prev.tatInstallAvg, dir: 'down', unit: 'ngày', accent: '--series-1' },
+    { label: 'TAT US return', value: kpis.tatUsReturnAvg, prev: prev.tatUsReturnAvg, dir: 'down', unit: 'ngày', accent: '--series-8' },
+    { label: 'TAT CUVT', value: kpis.tatCuvtAvg, prev: prev.tatCuvtAvg, dir: 'down', unit: 'ngày', accent: '--series-2' },
+    { label: 'TAT hoàn kho', value: kpis.tatReturnStoreAvg, prev: prev.tatReturnStoreAvg, dir: 'down', unit: 'ngày', accent: '--series-5' },
+    { label: 'Thiết bị xuất kho', value: kpis.countIssued, prev: prev.countIssued, dir: 'neutral', unit: 'thiết bị', accent: '--series-3' },
+    { label: 'Chưa đối ứng', value: kpis.countNotReconciled, prev: prev.countNotReconciled, dir: 'down', unit: 'thiết bị', accent: '--series-6' },
+    { label: 'Tỷ lệ đối ứng', value: kpis.reconcileRate, prev: prev.reconcileRate, dir: 'up', unit: '%', accent: '--series-4' },
+    // SL da NHAN (reci) / SL da GIAO (del) cua CUVT trong ky (2 so -> khong tinh delta)
     { label: 'SL nhận / SL giao (CUVT)', value: `${kpis.cntReci ?? 0}/${kpis.cntDel ?? 0}`, unit: '', accent: '--series-7' },
   ];
   $('#kpiGrid').innerHTML = cards
@@ -156,6 +174,7 @@ function renderKPIs(kpis) {
       <div class="kpi" style="--accent:${cssVar(c.accent)}" title="${c.label}: ${c.value ?? 0} ${c.unit}">
         <div class="kpi-label">${c.label}</div>
         <div class="kpi-value">${c.value ?? 0} <span class="kpi-unit">${c.unit}</span></div>
+        ${c.dir ? kpiDelta(c.value, c.prev, c.dir) : ''}
       </div>`
     )
     .join('');
@@ -192,6 +211,22 @@ function destroyChart(key) {
   }
 }
 
+/** DRILL-DOWN: click 1 cot/mieng bieu do -> loc dashboard theo gia tri do.
+ *  Click lan nua (cung gia tri) -> bo loc. filterKey: 'department' | 'station'. */
+function chartDrill(labels, filterKey) {
+  return (evt, elements) => {
+    if (!elements || !elements.length) return;
+    const label = labels[elements[0].index];
+    if (!label) return;
+    const sel = filterKey === 'station' ? '#stationSelect' : '#deptSelect';
+    const next = state[filterKey] === label ? '' : label; // toggle
+    state[filterKey] = next;
+    const el = $(sel);
+    if ([...el.options].some((o) => o.value === next)) el.value = next;
+    if (typeof window.__applyFilters === 'function') window.__applyFilters();
+  };
+}
+
 function renderCharts(c) {
   const d = chartDefaults();
   const colors = seriesColors();
@@ -207,7 +242,7 @@ function renderCharts(c) {
         { label: 'TAT US return', data: c.barDept.usret, backgroundColor: cssVar('--series-8'), borderRadius: 4 },
       ],
     },
-    options: d.common,
+    options: { ...d.common, onClick: chartDrill(c.barDept.labels, 'department') },
   });
 
   // 4.2 Bieu do tron - phan bo theo station (categorical theo thu tu)
@@ -218,7 +253,11 @@ function renderCharts(c) {
       labels: c.pieStation.labels,
       datasets: [{ data: c.pieStation.values, backgroundColor: colors, borderColor: cssVar('--surface-1'), borderWidth: 2 }],
     },
-    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'right', labels: { color: cssVar('--text-secondary') } } } },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { position: 'right', labels: { color: cssVar('--text-secondary') } } },
+      onClick: chartDrill(c.pieStation.labels, 'station'),
+    },
   });
 
   // 4.3 Bieu do cot nhom - So luong xuat kho & tra unservice theo Trung tam
@@ -233,7 +272,7 @@ function renderCharts(c) {
         { label: 'Trả unservice', data: c.deptVolume.returned, backgroundColor: cssVar('--series-2'), borderRadius: 4 },
       ],
     },
-    options: d.common,
+    options: { ...d.common, onClick: chartDrill(c.deptVolume.labels, 'department') },
   });
 
   // 4.4 TAT hoan kho trung binh theo Trung tam (1 series -> series-5)
@@ -244,7 +283,11 @@ function renderCharts(c) {
       labels: c.retStoreDept.labels,
       datasets: [{ label: 'TAT hoàn kho (ngày)', data: c.retStoreDept.values, backgroundColor: cssVar('--series-5'), borderRadius: 4 }],
     },
-    options: { ...d.common, plugins: { ...d.common.plugins, legend: { display: false } } },
+    options: {
+      ...d.common,
+      plugins: { ...d.common.plugins, legend: { display: false } },
+      onClick: chartDrill(c.retStoreDept.labels, 'department'),
+    },
   });
 }
 
@@ -518,16 +561,20 @@ let baseKpiUsret = 0;   // TAT US return goc
 let mainTotalRows = 0;  // tong so dong bang chi tiet (cho bo dem X/Y)
 let reportTotalRows = 0; // tong so dong bang bao cao (cho bo dem X/Y)
 
+let dashLoadSeq = 0; // chong race: doi filter nhanh -> chi render response MOI nhat
+
 async function loadDashboard() {
+  const seq = ++dashLoadSeq;
   showError('');
   showLoading(true);
   $('#recalcNote').classList.add('hidden');
   try {
     const dash = await api('/api/dashboard');
+    if (seq !== dashLoadSeq) return; // da co request moi hon -> bo response cu
     $('#rangeLabel').textContent = `${dash.range.label}: ${fmtDateTime(dash.range.from)} → ${fmtRangeEnd(dash.range.to)}`;
     baseKpiInstall = dash.kpis.tatInstallAvg;
     baseKpiUsret = dash.kpis.tatUsReturnAvg;
-    renderKPIs(dash.kpis);
+    renderKPIs(dash.kpis, dash.prevKpis);
     renderCharts(dash.charts);
 
     // Bang chi tiet: dung "rows" tra kem trong /api/dashboard (tranh query 2 lan).
@@ -614,7 +661,10 @@ function resetRecalc() {
 // --------------------------------------------------------------------------
 // 7. Tai & render Bao cao
 // --------------------------------------------------------------------------
+let reportLoadSeq = 0; // chong race: doi bao cao/filter nhanh -> chi render cai moi nhat
+
 async function loadReport(name) {
+  const seq = ++reportLoadSeq;
   state.currentReport = name;
   const def = REPORT_DEFS[name];
   $('#reportTitle').textContent = def.title;
@@ -631,6 +681,7 @@ async function loadReport(name) {
       data = await api(`/api/reports/${name}`);
       reportCache.set(cacheKey, data);
     }
+    if (seq !== reportLoadSeq) return; // da co request moi hon -> bo qua
     reportTotalRows = data.count;
     $('#reportCount').textContent =
       `${data.count.toLocaleString('vi')} dòng` +
@@ -870,6 +921,19 @@ async function init() {
     state.department = saved.department || '';
     state.excludeCC = !!saved.excludeCC;
   }
+  // URL co tham so (link duoc chia se) -> UU TIEN hon cau hinh da luu
+  const urlQ = new URLSearchParams(location.search);
+  if ([...urlQ.keys()].length) {
+    if (urlQ.get('periodType')) state.periodType = urlQ.get('periodType');
+    if (urlQ.get('month')) state.month = urlQ.get('month');
+    if (urlQ.get('week')) state.week = urlQ.get('week');
+    if (urlQ.get('quarter')) state.quarter = urlQ.get('quarter');
+    if (urlQ.get('year')) state.year = urlQ.get('year');
+    if (urlQ.has('station')) state.station = urlQ.get('station');
+    if (urlQ.has('store')) state.store = urlQ.get('store');
+    if (urlQ.has('department')) state.department = urlQ.get('department');
+    state.excludeCC = urlQ.get('excludeCC') === '1';
+  }
   $('#ccToggle').checked = state.excludeCC;
   $('#monthInput').value = state.month;
   $('#weekInput').value = state.week || now.toISOString().slice(0, 10);
@@ -902,10 +966,13 @@ async function init() {
   // khi mo lai tab, switchTab() se tu load voi filter moi.
   const applyFilters = () => {
     saveFilters();
+    // Dua filter len URL -> copy link gui dong nghiep la ho thay dung man hinh nay
+    history.replaceState(null, '', `${location.pathname}?${buildQuery()}`);
     reportCache.clear();
     loadDashboard();
     if (!$('#tab-reports').classList.contains('hidden')) loadReport(state.currentReport);
   };
+  window.__applyFilters = applyFilters; // cho drill-down tu bieu do (chartDrill)
 
   // Inputs: doi xong la load ngay
   $('#monthInput').addEventListener('change', (e) => { state.month = e.target.value; applyFilters(); });

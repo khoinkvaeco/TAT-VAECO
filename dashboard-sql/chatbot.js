@@ -196,10 +196,34 @@ function findDepartment(n, departments) {
   return '';
 }
 
-/** Nhan dien ky bao cao tu cau hoi. Tra { periodType, month?, week? } hoac null. */
+/** Nhan dien ky bao cao tu cau hoi.
+ *  Tra { periodType, month? | week? | quarter? | year? } hoac null. */
 function findPeriod(n) {
   const now = new Date();
-  // Ky tuong doi
+  const curQ = Math.floor(now.getMonth() / 3) + 1;
+  // --- QUY: "quy nay/truoc", "quy 3", "quy 3/2026", "quy 3 nam 2026" ---
+  if (/quy truoc/.test(n)) {
+    const y = curQ === 1 ? now.getFullYear() - 1 : now.getFullYear();
+    const q = curQ === 1 ? 4 : curQ - 1;
+    return { periodType: 'quarter', quarter: `${y}-Q${q}` };
+  }
+  if (/quy nay/.test(n)) {
+    return { periodType: 'quarter', quarter: `${now.getFullYear()}-Q${curQ}` };
+  }
+  const mq = n.match(/quy\s*([1-4])(?:\s*(?:[/\-]|nam)?\s*(\d{4}))?/);
+  if (mq) {
+    return { periodType: 'quarter', quarter: `${mq[2] || now.getFullYear()}-Q${mq[1]}` };
+  }
+  // --- NAM: "nam nay", "nam truoc/ngoai", "nam 2025" ---
+  if (/nam (truoc|ngoai)/.test(n)) {
+    return { periodType: 'year', year: String(now.getFullYear() - 1) };
+  }
+  if (/nam nay|ca nam/.test(n)) {
+    return { periodType: 'year', year: String(now.getFullYear()) };
+  }
+  const my = n.match(/nam\s*(\d{4})/);
+  if (my) return { periodType: 'year', year: my[1] };
+  // --- THANG ---
   if (/thang truoc/.test(n)) {
     const d = new Date(now.getFullYear(), now.getMonth() - 1, 1);
     return { periodType: 'month', month: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}` };

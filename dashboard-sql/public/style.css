@@ -150,6 +150,11 @@ body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
              color: var(--text-primary); font-variant-numeric: tabular-nums;
              white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .kpi-unit  { font-size: 10.5px; color: var(--text-muted); font-weight: 600; }
+/* Chip so sanh voi ky truoc tren KPI card */
+.kpi-delta { display: inline-block; font-size: 10px; font-weight: 700; margin-top: 3px; padding: 1px 6px; border-radius: 999px; }
+.kpi-delta.good    { color: var(--good); background: color-mix(in srgb, var(--good) 12%, transparent); }
+.kpi-delta.bad     { color: var(--critical); background: color-mix(in srgb, var(--critical) 12%, transparent); }
+.kpi-delta.neutral { color: var(--text-muted); background: var(--hover); }
 
 .chart-box { position: relative; height: 300px; }
 

@@ -104,7 +104,9 @@ Sau khi sửa code: `git pull` (hoặc copy) rồi `sc stop DashboardTAT & sc st
 
 ## 6. Tính năng
 
-- **Dashboard:** 6 KPI cards, 4 biểu đồ (cột / tròn / đường / top 10), bảng chi tiết có phân trang + tìm kiếm + filter theo cột.
+- **Dashboard:** 8 KPI cards (kèm chip **▲▼ % so với kỳ liền trước** — TAT giảm hiện xanh, tăng hiện đỏ), 4 biểu đồ, bảng chi tiết + tìm kiếm + filter theo cột.
+- **Drill-down:** click 1 cột/miếng trên biểu đồ → lọc toàn dashboard theo Trung tâm/Station đó; click lại lần nữa để bỏ lọc.
+- **Chia sẻ link:** bộ lọc hiện hành nằm trên URL (`?periodType=…&month=…&department=…`) — copy link gửi đồng nghiệp là họ mở ra đúng màn hình đang xem.
 - **Báo cáo đơn vị:** 6 tab (xuất kho chưa lắp, tháo chưa trả US, chưa đối ứng, tháo trước lắp sau, other, TAT hoàn kho) — mỗi tab **export Excel**.
 - **Tra cứu Part On/Off:** tab riêng đọc `WO_PART_ON_OFF` (DWH_DB, Oracle). **6 ô tìm riêng** (Event Perf, Part No, Serial No, Label, Part No off, Serial No off) — khớp **chính xác**, các ô kết hợp AND, ô trống bỏ qua; EVENT_PERFNO_I/LABELNO so sánh kiểu **số**, còn lại kiểu chữ. Giờ VN ghép từ `MUTATION` (ngày AMOS) + `MUTATION_TIME` (ms); lọc trong kết quả + export Excel. Không phụ thuộc kỳ báo cáo (tra toàn bộ lịch sử, giới hạn MAX_ROWS).
 - **Bộ lọc:** Station, Store, Department, kỳ **tháng** / **tuần** (từ Thứ 2) / **quý** (Q1–Q4) / **năm** — mọi KPI, biểu đồ, bảng chi tiết và báo cáo đều tính theo kỳ đã chọn.
@@ -125,7 +127,10 @@ Sau khi sửa code: `git pull` (hoặc copy) rồi `sc stop DashboardTAT & sc st
 - Mọi query dùng **tham số hóa** (`@param`) — tránh SQL injection.
 - Giới hạn `TOP (@MAX_ROWS)` mỗi query để không tải quá nhiều dữ liệu một lúc.
 - Bật `compression` (gzip) cho response.
-- **Cache bộ nhớ (TTL)**: dashboard/báo cáo 60 giây, danh mục filter 10 phút — đổi tab hoặc nhiều người cùng xem không query lại DB.
+- **Cache bộ nhớ (TTL)**: dashboard/báo cáo 60 giây, danh mục filter 10 phút — đổi tab hoặc nhiều người cùng xem không query lại DB. Cache giới hạn theo **dung lượng** (tổng 150 MB, entry > 30 MB không cache) để kỳ NĂM không làm phình RAM.
+- **Không bật CORS**: API chỉ phục vụ cùng origin với trang — web khác trong LAN không đọc trộm được số liệu qua trình duyệt người dùng.
+- **Chi tiết lỗi SQL chỉ trả cho máy quản trị** (localhost + `ADMIN_IPS`); người dùng thường nhận thông báo chung, chi tiết ghi ở log server.
+- **Rate-limit "Báo sai"** 5 lần/phút/IP — chặn spam gọi LLM đám mây tốn phí; câu đã có trong KB học không gọi LLM lại mà đánh dấu 🚩 chờ admin kiểm tra.
 - **Lọc thô sargable**: điều kiện `mutation BETWEEN @fromDay AND @toDay` cho phép SQL dùng index trên cột `mutation` trước, rồi mới tính biểu thức đổi giờ chính xác trên số ít dòng còn lại.
 - `/api/dashboard` trả kèm `rows` chi tiết — frontend không phải gọi thêm `/api/tat/departments` (tránh chạy query nặng 2 lần).
 

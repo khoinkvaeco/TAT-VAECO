@@ -19,7 +19,6 @@
 require('dotenv').config();
 const express = require('express');
 const compression = require('compression');
-const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
 const dns = require('dns');
@@ -526,6 +525,35 @@ function yearRange(period) {
   const from = new Date(year, 0, 1, 0, 0, 0);
   const to = new Date(year + 1, 0, 1, 0, 0, 0); // dau nam sau
   return { from: toLocalStr(from), to: toLocalStr(to) };
+}
+
+/** Query params cua KY LIEN TRUOC (de tinh delta KPI so voi ky truoc). */
+function prevPeriodQuery(q) {
+  const now = new Date();
+  if (q.periodType === 'week') {
+    const ref = q.week ? new Date(q.week) : now;
+    const prev = new Date(ref.getFullYear(), ref.getMonth(), ref.getDate() - 7);
+    return { ...q, week: `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, '0')}-${String(prev.getDate()).padStart(2, '0')}` };
+  }
+  if (q.periodType === 'quarter') {
+    const m = /^(\d{4})-Q([1-4])$/i.exec(String(q.quarter || '').trim());
+    let y = m ? Number(m[1]) : now.getFullYear();
+    let qq = m ? Number(m[2]) : Math.floor(now.getMonth() / 3) + 1;
+    qq -= 1;
+    if (qq < 1) { qq = 4; y -= 1; }
+    return { ...q, quarter: `${y}-Q${qq}` };
+  }
+  if (q.periodType === 'year') {
+    const y = Number(String(q.year || '').trim()) || now.getFullYear();
+    return { ...q, year: String(y - 1) };
+  }
+  // month (mac dinh)
+  let [y, mm] = /^\d{4}-\d{2}$/.test(q.month || '')
+    ? q.month.split('-').map(Number)
+    : [now.getFullYear(), now.getMonth() + 1];
+  mm -= 1;
+  if (mm < 1) { mm = 12; y -= 1; }
+  return { ...q, month: `${y}-${String(mm).padStart(2, '0')}` };
 }
 
 /** Tra ve { from, to, label } tu query params. */
@@ -1906,8 +1934,8 @@ async function chatAnswerKpi(intent, ctx) {
     periodType: (intent.period && intent.period.periodType) || ctx.periodType || 'month',
     month: (intent.period && intent.period.month) || ctx.month || '',
     week: (intent.period && intent.period.week) || ctx.week || '',
-    quarter: ctx.quarter || '',
-    year: ctx.year || '',
+    quarter: (intent.period && intent.period.quarter) || ctx.quarter || '',
+    year: (intent.period && intent.period.year) || ctx.year || '',
     station: ctx.station || '',
     store: ctx.store || '',
     department: intent.department || ctx.department || '',
@@ -1919,8 +1947,13 @@ async function chatAnswerKpi(intent, ctx) {
     ? DEMO.dashboard(range, f)
     : buildDashboardFromAgg(range, await qDashboardAgg(range, f));
   const k = dash.kpis;
+  const perLbl =
+    q.periodType === 'month' ? (q.month ? ' ' + q.month : '')
+    : q.periodType === 'quarter' ? (q.quarter ? ' ' + q.quarter : '')
+    : q.periodType === 'year' ? (q.year ? ' ' + q.year : '')
+    : '';
   const ctxLine =
-    `Kỳ: ${range.label}${q.periodType === 'month' && q.month ? ' ' + q.month : ''}` +
+    `Kỳ: ${range.label}${perLbl}` +
     (q.department ? ` · Trung tâm: ${q.department}` : '') +
     (q.station ? ` · Station: ${q.station}` : '');
 
@@ -2131,25 +2164,32 @@ async function chatRespond(message, ctx) {
 // ---------------------------------------------------------------------------
 const app = express();
 app.use(compression());
-app.use(cors());
+// KHONG bat CORS: trang va API cung origin; mo CORS nghia la trang web BAT KY
+// nhan vien mo trong LAN cung doc duoc so lieu qua trinh duyet cua ho.
 app.use(express.json());
 app.use(accessLogger); // ghi log IP + ten may cho MOI request (truoc static/API)
 app.use(adminGuard);   // chan truy cap admin tu IP la (truoc static de chan /admin.html)
 app.use(express.static(path.join(__dirname, 'public')));
 
-/** Boc route async + xu ly loi tap trung. */
+/** Boc route async + xu ly loi tap trung.
+ *  Chi tiet loi SQL (co the lo ten bang/cau truc) chi tra cho may QUAN TRI
+ *  (localhost + ADMIN_IPS) de debug; nguoi dung thuong nhan thong bao chung. */
 function h(fn) {
   return async (req, res) => {
     try {
       await fn(req, res);
     } catch (err) {
       console.error('[API ERROR]', req.path, '-', err.message);
+      const ip = String(req.socket.remoteAddress || '').replace(/^::ffff:/, '');
+      const detail = isAdminAllowed(ip);
       res.status(500).json({
         error: true,
-        message: 'Loi truy van du lieu: ' + err.message,
+        message: detail
+          ? 'Loi truy van du lieu: ' + err.message
+          : 'Lỗi truy vấn dữ liệu. Vui lòng thử lại; nếu lặp lại hãy báo quản trị viên (chi tiết đã ghi ở log server).',
         hint: CONFIG.demoMode
           ? 'Dang o DEMO_MODE.'
-          : 'Kiem tra cau hinh .env va ket noi SQL Server.',
+          : (detail ? 'Kiem tra cau hinh .env va ket noi SQL Server.' : undefined),
       });
     }
   };
@@ -2158,8 +2198,22 @@ function h(fn) {
 // --- CACHE bo nho (TTL) cho response API ---
 //     Muc dich: doi tab / bam Ap dung lai / nhieu nguoi cung xem -> khong query lai DB.
 //     Chi cache o che do LIVE; du lieu demo re nen khong can.
-const apiCache = new Map(); // url -> { t: timestamp, data }
+const apiCache = new Map(); // url -> { t: timestamp, data, bytes }
 const CACHE_MAX_ENTRIES = 300;
+// GIOI HAN THEO DUNG LUONG: /api/dashboard ky NAM co the tra 10-20MB/entry
+// (kem rows) -> chi dem so entry se phinh RAM den chet service. Tong ngan sach
+// 150MB; entry qua lon (>30MB) khong cache (tra thang, query lai khi can).
+const CACHE_MAX_BYTES = 150 * 1024 * 1024;
+const CACHE_ENTRY_MAX_BYTES = 30 * 1024 * 1024;
+let cacheTotalBytes = 0;
+
+function cacheEvictUntilFits(needBytes) {
+  for (const [k, v] of apiCache) {
+    if (apiCache.size < CACHE_MAX_ENTRIES && cacheTotalBytes + needBytes <= CACHE_MAX_BYTES) break;
+    apiCache.delete(k); // Map giu thu tu chen -> xoa tu entry CU nhat
+    cacheTotalBytes -= v.bytes;
+  }
+}
 
 /**
  * Boc route co cache theo URL day du (path + query string).
@@ -2178,10 +2232,16 @@ function cached(ttlMs, fn) {
     const origJson = res.json.bind(res);
     res.json = (data) => {
       if (!data || data.error !== true) {
-        if (apiCache.size >= CACHE_MAX_ENTRIES) {
-          apiCache.delete(apiCache.keys().next().value); // xoa entry cu nhat
+        // Do dung luong 1 lan luc luu (res.json dang nao cung stringify sau do)
+        let bytes = 0;
+        try { bytes = Buffer.byteLength(JSON.stringify(data)); } catch (_) { bytes = CACHE_ENTRY_MAX_BYTES + 1; }
+        if (bytes <= CACHE_ENTRY_MAX_BYTES) {
+          const old = apiCache.get(key);
+          if (old) { apiCache.delete(key); cacheTotalBytes -= old.bytes; }
+          cacheEvictUntilFits(bytes);
+          apiCache.set(key, { t: Date.now(), data, bytes });
+          cacheTotalBytes += bytes;
         }
-        apiCache.set(key, { t: Date.now(), data });
       }
       return origJson(data);
     };
@@ -2226,6 +2286,19 @@ app.post(
   })
 );
 
+// --- RATE LIMIT don gian theo IP cho cac endpoint TON TIEN (goi LLM dam may).
+//     Trong cua so 60s, moi IP toi da N lan; qua nguong -> 429. Bo nho tu don.
+const rateBuckets = new Map(); // key -> [timestamps]
+function rateLimited(key, maxPerMinute) {
+  const now = Date.now();
+  const arr = (rateBuckets.get(key) || []).filter((t) => now - t < 60000);
+  if (arr.length >= maxPerMinute) { rateBuckets.set(key, arr); return true; }
+  arr.push(now);
+  rateBuckets.set(key, arr);
+  if (rateBuckets.size > 5000) rateBuckets.clear(); // chan phinh bo nho
+  return false;
+}
+
 // --- Chatbot: nguoi dung "Bao sai" cau tra loi -> nho LLM (neu bat) tra loi lai,
 //     luu lai kinh nghiem de lan sau tot hon. Neu LLM chua bat -> ghi log de admin
 //     review va bao nguoi dung. KHONG bao gio tu tra "dung" ma khong co can cu. ---
@@ -2235,8 +2308,28 @@ app.post(
     const body = req.body || {};
     const message = String(body.message || '').slice(0, 500).trim();
     if (!message) return res.json({ ok: false, reply: 'Không có câu hỏi để xử lý.' });
+    // Chan spam "Bao sai" (moi lan co the la 1 luot goi LLM ton phi): 5 lan/phut/IP
+    const ip = String(req.socket.remoteAddress || '').replace(/^::ffff:/, '');
+    if (rateLimited('flag:' + ip, 5)) {
+      return res.status(429).json({ ok: false, reply: 'Bạn thao tác quá nhanh. Vui lòng chờ một phút rồi thử lại.' });
+    }
     logChatQuestion(message, 'flagged', clientIp(req)); // danh dau bi bao sai
     logChatGap(message); // luon ghi vao hang doi review cua admin
+    // Cau tra loi sai den tu KB DA HOC -> danh dau muc do can kiem tra lai
+    // (khong goi LLM lai - de tra loi giong het, chi ton phi; admin se sua/xoa).
+    const key = chatbot.norm(message);
+    const arr = loadLearnedKB();
+    const known = arr.find((x) => (x.keys[0] || '') === key);
+    if (known) {
+      known.reviewed = false;
+      known.flagged = true;
+      known.flaggedAt = new Date().toISOString();
+      saveLearnedKB(arr);
+      return res.json({
+        ok: false,
+        reply: 'Cảm ơn phản hồi. Câu trả lời này đã được đánh dấu để quản trị viên kiểm tra và sửa lại.',
+      });
+    }
     const llmOut = await chatTryLLM(message);
     if (llmOut) {
       rememberFromLLM(message, llmOut.reply, llmOut.provider === 'anthropic' ? 'cloud' : 'llm');
@@ -2364,18 +2457,26 @@ app.get(
   '/api/dashboard',
   cached(60 * 1000, async (req, res) => {
     const range = resolveRange(req.query);
+    const prevRange = resolveRange(prevPeriodQuery(req.query));
     const f = readFilters(req.query);
     if (CONFIG.demoMode) {
       const d = DEMO.dashboard(range, f);
       d.rows = DEMO.tatDepartments(range, f);
+      d.prevKpis = DEMO.dashboard(prevRange, f).kpis; // so voi ky truoc
       return res.json(d);
     }
 
     // KPI/bieu do: SQL aggregate tren TOAN BO du lieu (khong bi cat boi TOP);
-    // rows: chi de hien bang chi tiet (co the bi gioi han @maxRows).
-    const [agg, rows] = await Promise.all([qDashboardAgg(range, f), qTatDepartments(range, f)]);
+    // rows: chi de hien bang chi tiet (co the bi gioi han @maxRows);
+    // prevAgg: KPI ky LIEN TRUOC de hien delta tren cac card.
+    const [agg, rows, prevAgg] = await Promise.all([
+      qDashboardAgg(range, f),
+      qTatDepartments(range, f),
+      qDashboardAgg(prevRange, f),
+    ]);
     const out = buildDashboardFromAgg(range, agg);
     out.rows = rows;
+    out.prevKpis = buildDashboardFromAgg(prevRange, prevAgg).kpis;
     res.json(out);
   })
 );
@@ -2391,22 +2492,26 @@ app.get(
       ? req.query.month
       : (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; })();
     const [ay, am] = anchor.split('-').map(Number);
-    const series = [];
+    const monthStrs = [];
     for (let i = months - 1; i >= 0; i--) {
       const d = new Date(ay, am - 1 - i, 1);
-      const mstr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      monthStrs.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+    }
+    // Chay SONG SONG cac thang (pool max 10 chiu duoc) -> nhanh gap ~N lan
+    // so voi cho tung thang noi duoi nhau nhu truoc.
+    const series = await Promise.all(monthStrs.map(async (mstr) => {
       const range = { ...monthRange(mstr), label: 'Thang' };
       const dash = CONFIG.demoMode
         ? DEMO.dashboard(range, f)
         : buildDashboardFromAgg(range, await qDashboardAgg(range, f));
       const k = dash.kpis;
-      series.push({
+      return {
         month: mstr,
         tatInstall: k.tatInstallAvg, tatUsReturn: k.tatUsReturnAvg, tatReturnStore: k.tatReturnStoreAvg,
         issued: k.countIssued, notReconciled: k.countNotReconciled, reconcileRate: k.reconcileRate,
         cntReci: k.cntReci, cntDel: k.cntDel,
-      });
-    }
+      };
+    }));
     res.json({ series, months });
   })
 );
@@ -2631,6 +2736,7 @@ app.post('/api/admin/kb-review', h(async (req, res) => {
   if (!it) return res.status(404).json({ error: true, message: 'Khong tim thay muc.' });
   it.reviewed = true;
   it.reviewedAt = new Date().toISOString();
+  it.flagged = false; // da kiem tra -> xoa co "bi bao sai"
   saveLearnedKB(arr);
   res.json({ ok: true });
 }));

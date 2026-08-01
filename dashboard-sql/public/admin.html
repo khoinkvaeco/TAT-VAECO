@@ -245,12 +245,13 @@
       $('#learnedCount').textContent = items.length;
       $('#learnedList').innerHTML = items.length ? items.map((it) => {
         const isCloud = it.source === 'cloud' || it.source === 'llm';
-        const needReview = isCloud && !it.reviewed;
-        const badge = it.source === 'cloud'
+        const needReview = !it.reviewed && (isCloud || it.flagged);
+        const flagBadge = it.flagged && !it.reviewed ? ' <span class="src-badge cloud" style="background:#fef2f2;color:#b91c1c;border-color:#fecaca">🚩 Bị báo sai</span>' : '';
+        const badge = (it.source === 'cloud'
           ? `<span class="src-badge cloud">☁ AI đám mây${it.reviewed ? ' · đã kiểm tra' : ' · CẦN KIỂM TRA'}</span>`
           : (it.source === 'llm'
             ? `<span class="src-badge cloud">🤖 AI nội bộ${it.reviewed ? ' · đã kiểm tra' : ' · CẦN KIỂM TRA'}</span>`
-            : '<span class="src-badge admin">🛠 Quản trị</span>');
+            : '<span class="src-badge admin">🛠 Quản trị</span>')) + flagBadge;
         const key = esc((it.keys && it.keys[0]) || '');
         const reviewBtn = needReview
           ? `<button class="ghost" data-review="${key}" title="Xác nhận câu trả lời này đúng">✔ Xác nhận</button>` : '';
