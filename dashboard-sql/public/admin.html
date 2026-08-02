@@ -381,7 +381,7 @@
         if (d.ok) {
           out.innerHTML = `<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:10px;color:#166534">` +
             `<b>✔ Đã chạy</b> — ${esc(d.label)} · Teams: ${esc(String(d.teams ?? 'không bật'))} · Files: ${d.files && d.files.length ? esc(d.files.join(', ')) : 'không bật'}` +
-            `${d.csvError ? ' · <span style="color:#b91c1c">CSV lỗi: ' + esc(d.csvError) + '</span>' : ''}</div>`;
+            `${d.xlsxError ? ' · <span style="color:#b91c1c">Excel lỗi: ' + esc(d.xlsxError) + '</span>' : ''}</div>`;
         } else {
           out.innerHTML = `<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:10px;color:#991b1b"><b>✖</b> ${esc(d.message || 'Lỗi')}</div>`;
         }

@@ -23,11 +23,12 @@
   "dependencies": {
     "compression": "^1.7.4",
     "dotenv": "^16.4.5",
+    "exceljs": "^4.4.0",
     "express": "^4.19.2",
     "mssql": "^11.0.1"
   },
   "optionalDependencies": {
-    "node-windows": "1.0.0-beta.8",
-    "@anthropic-ai/sdk": "^0.114.0"
+    "@anthropic-ai/sdk": "^0.114.0",
+    "node-windows": "1.0.0-beta.8"
   }
 }

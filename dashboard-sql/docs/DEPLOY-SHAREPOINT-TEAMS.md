@@ -12,15 +12,15 @@
 │                                                    │      │                                    │
 │  SQL Server (NQT/AMOS)                             │      │  Kênh Teams  ◄── thẻ KPI mỗi sáng │
 │        ▲                                           │      │                                    │
-│  Dashboard TAT (Node.js, Windows service)  ────────┼──────┼─► Thư viện SharePoint ◄── file CSV │
+│  Dashboard TAT (Node.js, Windows service)  ────────┼──────┼─► Thư viện SharePoint ◄─ file Excel│
 │  http://<ip-server>:3000                           │      │   (qua thư mục OneDrive sync)      │
 │                                                    │      │                                    │
 └────────────────────────────────────────────────────┘      └────────────────────────────────────┘
 ```
 
 - **Dashboard đầy đủ** (biểu đồ, tra cứu, chatbox) chỉ xem được **trong mạng công ty** — dữ liệu thô không bao giờ rời LAN.
-- Thứ được đẩy lên cloud M365 là **báo cáo tổng hợp**: 1 thẻ KPI vào kênh Teams + 2 file CSV vào SharePoint, theo lịch (mặc định 6h30 sáng thứ 2, cho tuần vừa kết thúc).
-- Người ở **ngoài công ty** (đi công tác, ở nhà) xem thẻ KPI trên app Teams điện thoại hoặc mở file CSV trong SharePoint — không cần VPN.
+- Thứ được đẩy lên cloud M365 là **báo cáo tổng hợp**: thẻ KPI vào kênh Teams + file **Excel (.xlsx)** vào SharePoint. Mặc định 6h30 sáng thứ 2: gửi báo cáo **tuần** vừa kết thúc; đầu mỗi tháng gửi thêm báo cáo **tháng** vừa kết thúc.
+- Người ở **ngoài công ty** (đi công tác, ở nhà) xem thẻ KPI trên app Teams điện thoại hoặc mở file Excel trong SharePoint — không cần VPN.
 
 **Điều kiện cần trước khi bắt đầu:**
 
@@ -28,7 +28,7 @@
 |---|-----------|---------|
 | 1 | Tài khoản Microsoft 365 công ty (đăng nhập được Teams + SharePoint) | Hỏi IT nếu chưa có |
 | 2 | Dashboard TAT đang chạy trên server (Windows service) | Đã làm ở `DEPLOY-SERVICE.md` |
-| 3 | Server có ra được Internet (để gọi webhook Teams) | Nếu server bị chặn Internet → chỉ dùng được kênh CSV/OneDrive |
+| 3 | Server có ra được Internet (để gọi webhook Teams) | Nếu server bị chặn Internet → chỉ dùng được kênh Excel/OneDrive |
 | 4 | Quyền sửa file `.env` trên server + restart service | |
 
 ---
@@ -67,12 +67,15 @@ Trên **server chạy dashboard**, mở file `.env` (cùng thư mục `server.js
 ```ini
 TEAMS_WEBHOOK_URL=https://prod-xx.southeastasia.logic.azure.com/workflows/... (dán nguyên vẹn link đã copy)
 REPORT_SCHEDULE=T2 06:30
-REPORT_PERIOD=week
+REPORT_PERIOD=week,month
 ```
 
 Ý nghĩa:
 - `REPORT_SCHEDULE` — lịch gửi. `T2 06:30` = 6h30 sáng thứ Hai. Có thể ghi `T2,T5 06:30` (thứ 2 + thứ 5), `CN 18:00` (chủ nhật 18h). Chấp nhận `T2..T7`, `CN` hoặc `MON..SUN`.
-- `REPORT_PERIOD` — `week` = báo cáo **tuần vừa kết thúc** (T2→CN tuần trước); `month` = **tháng vừa kết thúc** (khi đó nên đặt lịch ngày đầu tháng).
+- `REPORT_PERIOD` — danh sách kỳ, cách nhau dấu phẩy:
+  - `week` = báo cáo **tuần vừa kết thúc** (T2→CN tuần trước) — gửi **mỗi lần** đến lịch.
+  - `month` = báo cáo **tháng vừa kết thúc** — tự gửi **1 lần/tháng** (lần chạy đầu tiên của tháng mới), không cần đặt lịch riêng.
+  - `week,month` (khuyến nghị) = có cả hai: mỗi thứ 2 một thẻ tuần, riêng thứ 2 đầu tiên của tháng có thêm thẻ tháng.
 
 **Restart service** để nhận cấu hình mới (PowerShell, quyền Administrator):
 
@@ -84,7 +87,7 @@ Restart-Service DashboardTAT
 ### A4. Test ngay — không chờ đến thứ 2
 
 1. Từ **máy quản trị** (máy 10.99.89.120 hoặc ngay trên server), mở trang **Admin**: `http://<ip-server>:3000/admin`.
-2. Panel **📤 Báo cáo định kỳ** phải hiện `● BẬT — lịch: T2 06:30 · kỳ: week · Teams ✔`.
+2. Panel **📤 Báo cáo định kỳ** phải hiện `● BẬT — lịch: T2 06:30 · kỳ: week,month · Teams ✔`.
 3. Bấm nút **📨 Gửi báo cáo ngay**.
 4. Mở kênh Teams **Báo cáo TAT** → trong vòng ~10 giây phải thấy thẻ:
 
@@ -96,7 +99,7 @@ Không thấy thẻ? → [Xử lý sự cố](#phần-e--xử-lý-sự-cố), l�
 
 ---
 
-## PHẦN B — Đẩy file CSV lên thư viện SharePoint (15 phút)
+## PHẦN B — Đẩy file Excel lên thư viện SharePoint / OneDrive (15 phút)
 
 Cơ chế: server ghi file vào một **thư mục đang được OneDrive đồng bộ** với thư viện
 SharePoint → OneDrive tự upload → mọi người mở SharePoint (hoặc Teams) là thấy file.
@@ -132,11 +135,15 @@ Restart service (`Restart-Service DashboardTAT`).
 
 ### B4. Test
 
-1. Trang Admin → **📨 Gửi báo cáo ngay**. Kết quả phải hiện `Files: ...TAT-KPI_tuan_....csv, ...TAT-chitiet_tuan_....csv`.
-2. Mở File Explorer trên server: 2 file CSV nằm trong thư mục, biểu tượng chuyển thành **✓ xanh** khi đã upload xong.
-3. Mở SharePoint (hoặc Teams → kênh → Files) từ **máy khác / điện thoại**: thấy 2 file. Bấm mở `TAT-KPI_...csv` — SharePoint hiển thị ngay dạng bảng; muốn xem đẹp hơn thì **Open in Excel**.
+1. Trang Admin → **📨 Gửi báo cáo ngay**. Kết quả phải hiện `Files: TAT_tuan_....xlsx, TAT_thang_....xlsx`.
+2. Mở File Explorer trên server: các file `.xlsx` nằm trong thư mục, biểu tượng chuyển thành **✓ xanh** khi OneDrive đã upload xong.
+3. Mở SharePoint (hoặc Teams → kênh → Files) từ **máy khác / điện thoại**: bấm vào file → mở thẳng bằng **Excel Online**, không cần cài Excel.
 
-> File CSV đã có sẵn BOM UTF-8 nên mở bằng Excel **không bị lỗi font tiếng Việt**.
+Mỗi file Excel có **2 sheet**:
+- **KPI** — bảng chỉ số kỳ này / kỳ trước / chênh lệch %.
+- **Chi tiet TAT** — chi tiết từng thiết bị, đã bật sẵn **AutoFilter** và **khóa dòng tiêu đề** để lọc/cuộn cho tiện.
+
+> Tên file có sẵn mốc kỳ (`TAT_tuan_2026-07-20.xlsx`, `TAT_thang_2026-07.xlsx`) nên các kỳ **không ghi đè lên nhau** — thư viện SharePoint tự thành kho lưu trữ theo thời gian.
 
 ### B5. Phân quyền ai được xem
 
@@ -155,7 +162,7 @@ Restart service (`Restart-Service DashboardTAT`).
 
 **Trong SharePoint:** site → **Edit** menu trái (hoặc Settings ⚙ → Site contents → Navigation) → **+ Add link** → dán `http://<ip-server>:3000`, tên `Dashboard TAT (mở trong mạng công ty)`.
 
-> Nhớ ghi chú cho người dùng: link này **chỉ mở được khi máy đang ở mạng công ty**. Ở ngoài thì xem thẻ KPI Teams / file CSV.
+> Nhớ ghi chú cho người dùng: link này **chỉ mở được khi máy đang ở mạng công ty**. Ở ngoài thì xem thẻ KPI Teams / file Excel.
 
 ---
 
@@ -164,7 +171,7 @@ Restart service (`Restart-Service DashboardTAT`).
 | Việc | Ai làm | Ở đâu |
 |------|--------|-------|
 | Xem thẻ KPI tuần | Mọi người | Kênh Teams `Báo cáo TAT` (điện thoại/máy tính, mọi nơi) |
-| Xem chi tiết từng thiết bị của kỳ đã chốt | Mọi người | SharePoint → `Bao cao TAT` → file `TAT-chitiet_...csv` |
+| Xem chi tiết từng thiết bị của kỳ đã chốt | Mọi người | SharePoint → `Bao cao TAT` → file `TAT_tuan_....xlsx` / `TAT_thang_....xlsx` (sheet *Chi tiet TAT*) |
 | Phân tích tương tác (lọc, drill-down, tra cứu, chatbox) | Mọi người **trong mạng công ty** | `http://<ip-server>:3000` |
 | Gửi lại báo cáo / test | Quản trị | `http://<ip-server>:3000/admin` → 📨 Gửi báo cáo ngay |
 | Kiểm tra lịch sử đã gửi gì | Quản trị | File `logs/report-YYYY-MM-DD.log` trên server |
@@ -181,16 +188,17 @@ Lịch tự động: đến giờ trong `REPORT_SCHEDULE`, service tự gửi �
 | E1 | Kênh Teams không có mục **Workflows** | IT đang tắt Power Automate cho tổ chức, hoặc bản Teams cũ. → Nhờ IT bật *Power Automate / Workflows app* trong Teams admin center; hoặc tạo workflow tại `https://make.powerautomate.com` → Create → *Post to a channel when a webhook request is received*. |
 | E2 | Bấm **Gửi ngay**, admin báo `Teams: HTTP 401/403` | URL webhook dán thiếu/thừa ký tự, hoặc workflow bị tắt. → Copy lại URL (Teams → ⋯ kênh → Workflows → workflow → Edit → bước trigger có nút xem URL), dán lại `.env`, restart. |
 | E3 | `Teams: loi: fetch failed / ETIMEDOUT` | Server không ra được Internet (proxy/firewall). → Nhờ IT mở cho server gọi HTTPS ra `*.logic.azure.com`; nếu công ty bắt buộc proxy thì báo tôi để bổ sung cấu hình proxy cho service. |
-| E4 | Thẻ hiện trong Teams nhưng **không có file CSV** | `REPORT_EXPORT_DIR` sai đường dẫn, hoặc tài khoản chạy service không ghi được vào thư mục. → Kiểm tra kết quả nút Gửi ngay (có dòng `CSV lỗi: ...`); sửa đường dẫn cho khớp File Explorer; đảm bảo service chạy bằng đúng user đã đăng nhập OneDrive. |
-| E5 | File CSV nằm trong thư mục trên server nhưng **không lên SharePoint** | OneDrive chưa chạy/chưa đăng nhập trên server. → Mở OneDrive (icon đám mây cạnh đồng hồ), đăng nhập lại; icon file phải chuyển ✓ xanh. OneDrive phải luôn chạy cùng Windows (Settings → Start OneDrive automatically). |
+| E4 | Thẻ hiện trong Teams nhưng **không có file Excel** | `REPORT_EXPORT_DIR` sai đường dẫn, hoặc tài khoản chạy service không ghi được vào thư mục, hoặc chưa `npm install` (thiếu thư viện `exceljs`). → Xem kết quả nút Gửi ngay (dòng `Excel lỗi: ...`); sửa đường dẫn cho khớp File Explorer; đảm bảo service chạy bằng đúng user đã đăng nhập OneDrive. |
+| E5 | File Excel nằm trong thư mục trên server nhưng **không lên SharePoint** | OneDrive chưa chạy/chưa đăng nhập trên server. → Mở OneDrive (icon đám mây cạnh đồng hồ), đăng nhập lại; icon file phải chuyển ✓ xanh. OneDrive phải luôn chạy cùng Windows (Settings → Start OneDrive automatically). |
 | E6 | Thứ 2 không thấy báo cáo tự động (bấm tay thì được) | Xem `REPORT_SCHEDULE` có đúng định dạng không (log khởi động sẽ cảnh báo nếu sai); giờ trên server có đúng múi giờ VN không; service có đang chạy lúc 6h30 không. |
 | E7 | Muốn đổi giờ/kỳ gửi | Sửa `REPORT_SCHEDULE` / `REPORT_PERIOD` trong `.env` → restart service. |
+| E8 | Muốn **chỉ** báo cáo tháng, bỏ tuần | Đặt `REPORT_PERIOD=month` (giữ nguyên `REPORT_SCHEDULE`; hệ thống tự gửi 1 lần vào lần chạy đầu tiên của tháng mới). |
 
 ---
 
 ## PHẦN F — An toàn dữ liệu (đọc 1 lần)
 
-- Thứ rời khỏi mạng công ty: **chỉ số tổng hợp KPI** (thẻ Teams) và **bảng chi tiết TAT của kỳ báo cáo** (CSV). **Không** có mật khẩu, không mở cổng nào vào SQL Server, không ai từ Internet truy cập ngược được vào dashboard.
+- Thứ rời khỏi mạng công ty: **chỉ số tổng hợp KPI** (thẻ Teams) và **bảng chi tiết TAT của kỳ báo cáo** (file Excel). **Không** có mật khẩu, không mở cổng nào vào SQL Server, không ai từ Internet truy cập ngược được vào dashboard.
 - Mọi lần gửi được ghi vết tại `logs/report-YYYY-MM-DD.log` (giờ, kênh, kỳ, kết quả).
 - URL webhook = "chìa khóa đăng bài vào kênh": chỉ lưu trong `.env` (file này không commit git). Nếu nghi lộ → vào Workflows xóa workflow cũ, tạo cái mới, thay URL.
 - Muốn dừng chia sẻ ra cloud bất cứ lúc nào: xóa 2 dòng cấu hình trong `.env`, restart — dashboard nội bộ vẫn chạy bình thường.

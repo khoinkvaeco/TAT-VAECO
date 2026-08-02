@@ -53,9 +53,13 @@ const CONFIG = {
   reportExportDir: (process.env.REPORT_EXPORT_DIR || '').trim(),
   // Lich gui: "T2 06:30" | "T2,T5 06:30" | "MON 06:30" | "CN 18:00"
   reportSchedule: (process.env.REPORT_SCHEDULE || 'T2 06:30').trim(),
-  // Ky bao cao: 'week' = tuan VUA KET THUC, 'month' = thang VUA KET THUC
-  reportPeriod: (process.env.REPORT_PERIOD || 'week').trim().toLowerCase(),
+  // Ky bao cao (danh sach, phay): 'week' = tuan VUA ket thuc, 'month' = thang
+  // VUA ket thuc. "week,month": moi lan chay gui the TUAN; the THANG chi gui
+  // 1 lan/thang (lan chay dau tien cua thang moi).
+  reportPeriods: (process.env.REPORT_PERIOD || 'week')
+    .split(',').map((s) => s.trim().toLowerCase()).filter((s) => s === 'week' || s === 'month'),
 };
+if (!CONFIG.reportPeriods.length) CONFIG.reportPeriods = ['week'];
 
 // Cau hinh ket noi mssql - LAY TU BIEN MOI TRUONG, khong hardcode password.
 const dbConfig = {
@@ -2194,10 +2198,11 @@ function parseReportSchedule(str) {
   return { days, hh, mm };
 }
 
-/** Ky bao cao VUA KET THUC + ky lien truoc (de tinh delta). */
-function reportRanges() {
+/** Ky bao cao VUA KET THUC + ky lien truoc (de tinh delta).
+ *  @param {string} period 'week' | 'month' */
+function reportRanges(period) {
   const now = new Date();
-  if (CONFIG.reportPeriod === 'month') {
+  if (period === 'month') {
     const cur = new Date(now.getFullYear(), now.getMonth() - 1, 1); // thang truoc
     const prv = new Date(now.getFullYear(), now.getMonth() - 2, 1);
     const s = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
@@ -2275,51 +2280,77 @@ function logReport(line) {
   } catch (_) { /* khong vo app vi log */ }
 }
 
-/** Escape 1 o CSV. */
-function csvCell(v) {
-  const s = v == null ? '' : String(v);
-  return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
-}
-
-/** Xuat CSV (co BOM de Excel doc tieng Viet) vao REPORT_EXPORT_DIR. */
-function writeReportCsv(fileTag, kpis, prevKpis, rows) {
+/** Xuat file EXCEL (.xlsx) vao REPORT_EXPORT_DIR (thu muc OneDrive sync):
+ *  Sheet "KPI" (ky nay / ky truoc / chenh lech %) + Sheet "Chi tiet TAT".
+ *  Dung exceljs (lazy-require de app van chay neu chua npm install). */
+async function writeReportXlsx(fileTag, label, kpis, prevKpis, rows) {
+  let ExcelJS;
+  try {
+    ExcelJS = require('exceljs');
+  } catch (_) {
+    throw new Error("chua cai 'exceljs' (chay: npm install)");
+  }
   const dir = CONFIG.reportExportDir;
   fs.mkdirSync(dir, { recursive: true });
-  const files = [];
-  // 1) KPI tong hop
-  const kpiLines = [
-    ['Chi so', 'Ky nay', 'Ky truoc'],
-    ['TAT install (ngay)', kpis.tatInstallAvg, prevKpis.tatInstallAvg],
-    ['TAT US return (ngay)', kpis.tatUsReturnAvg, prevKpis.tatUsReturnAvg],
-    ['TAT CUVT (ngay)', kpis.tatCuvtAvg, prevKpis.tatCuvtAvg],
-    ['TAT hoan kho (ngay)', kpis.tatReturnStoreAvg, prevKpis.tatReturnStoreAvg],
-    ['Thiet bi xuat kho', kpis.countIssued, prevKpis.countIssued],
-    ['Chua doi ung', kpis.countNotReconciled, prevKpis.countNotReconciled],
-    ['Ty le doi ung (%)', kpis.reconcileRate, prevKpis.reconcileRate],
-    ['SL nhan (CUVT)', kpis.cntReci, prevKpis.cntReci],
+
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'Dashboard TAT - VAECO';
+  wb.created = new Date();
+
+  // --- Sheet 1: KPI tong hop ---
+  const ws = wb.addWorksheet('KPI');
+  ws.addRow([`B\u00C1O C\u00C1O TAT \u2014 ${label}`]);
+  ws.getRow(1).font = { bold: true, size: 14 };
+  ws.mergeCells('A1:D1');
+  ws.addRow([]);
+  const head = ws.addRow(['Ch\u1EC9 s\u1ED1', 'K\u1EF3 n\u00E0y', 'K\u1EF3 tr\u01B0\u1EDBc', 'Ch\u00EAnh l\u1EC7ch (%)']);
+  head.font = { bold: true };
+  head.eachCell((c) => {
+    c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F4E5F' } };
+    c.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+  });
+  const pct = (cur, prev) => {
+    const c = Number(cur), p = Number(prev);
+    if (!isFinite(c) || !isFinite(p) || p === 0) return '';
+    return Math.round(((c - p) / Math.abs(p)) * 1000) / 10;
+  };
+  const KPI_ROWS = [
+    ['TAT install (ng\u00E0y)', kpis.tatInstallAvg, prevKpis.tatInstallAvg],
+    ['TAT US return (ng\u00E0y)', kpis.tatUsReturnAvg, prevKpis.tatUsReturnAvg],
+    ['TAT CUVT (ng\u00E0y)', kpis.tatCuvtAvg, prevKpis.tatCuvtAvg],
+    ['TAT ho\u00E0n kho (ng\u00E0y)', kpis.tatReturnStoreAvg, prevKpis.tatReturnStoreAvg],
+    ['Thi\u1EBFt b\u1ECB xu\u1EA5t kho', kpis.countIssued, prevKpis.countIssued],
+    ['Ch\u01B0a \u0111\u1ED1i \u1EE9ng', kpis.countNotReconciled, prevKpis.countNotReconciled],
+    ['T\u1EF7 l\u1EC7 \u0111\u1ED1i \u1EE9ng (%)', kpis.reconcileRate, prevKpis.reconcileRate],
+    ['SL nh\u1EADn (CUVT)', kpis.cntReci, prevKpis.cntReci],
     ['SL giao (CUVT)', kpis.cntDel, prevKpis.cntDel],
-  ].map((r) => r.map(csvCell).join(',')).join('\r\n');
-  const f1 = path.join(dir, `TAT-KPI_${fileTag}.csv`);
-  fs.writeFileSync(f1, '\uFEFF' + kpiLines, 'utf8');
-  files.push(f1);
-  // 2) Chi tiet TAT theo thiet bi (neu co dong)
+  ];
+  for (const [name, cur, prev] of KPI_ROWS) ws.addRow([name, cur, prev, pct(cur, prev)]);
+  ws.columns = [{ width: 26 }, { width: 12 }, { width: 12 }, { width: 16 }];
+
+  // --- Sheet 2: Chi tiet TAT theo thiet bi ---
   if (rows && rows.length) {
+    const ws2 = wb.addWorksheet('Chi tiet TAT');
     const cols = Object.keys(rows[0]);
-    const body = [cols.join(',')]
-      .concat(rows.map((r) => cols.map((c) => csvCell(r[c])).join(',')))
-      .join('\r\n');
-    const f2 = path.join(dir, `TAT-chitiet_${fileTag}.csv`);
-    fs.writeFileSync(f2, '\uFEFF' + body, 'utf8');
-    files.push(f2);
+    ws2.columns = cols.map((c) => ({ header: c, key: c, width: Math.min(28, Math.max(12, c.length + 2)) }));
+    ws2.getRow(1).font = { bold: true };
+    ws2.getRow(1).eachCell((c) => {
+      c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F4E5F' } };
+      c.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    });
+    for (const r of rows) ws2.addRow(r);
+    ws2.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: cols.length } };
+    ws2.views = [{ state: 'frozen', ySplit: 1 }];
   }
-  return files;
+
+  const file = path.join(dir, `TAT_${fileTag}.xlsx`);
+  await wb.xlsx.writeFile(file);
+  return [file];
 }
 
-/** CHAY 1 LAN bao cao: tinh KPI ky vua ket thuc -> gui Teams + xuat CSV. */
-async function runScheduledReport(reason) {
-  const enabled = CONFIG.teamsWebhookUrl || CONFIG.reportExportDir;
-  if (!enabled) return { ok: false, message: 'Chua cau hinh TEAMS_WEBHOOK_URL / REPORT_EXPORT_DIR.' };
-  const { label, fileTag, range, prevRange } = reportRanges();
+/** CHAY bao cao cho 1 KY (week|month): the Teams + file Excel. */
+async function runReportForPeriod(period, reason) {
+  const { label, fileTag, range, prevRange } = reportRanges(period);
   const f = {};
   const dash = CONFIG.demoMode
     ? DEMO.dashboard(range, f)
@@ -2327,7 +2358,7 @@ async function runScheduledReport(reason) {
   const prev = CONFIG.demoMode
     ? DEMO.dashboard(prevRange, f)
     : buildDashboardFromAgg(prevRange, await qDashboardAgg(prevRange, f));
-  const out = { ok: true, label, teams: null, files: [] };
+  const out = { period, label, teams: null, files: [] };
 
   if (CONFIG.teamsWebhookUrl) {
     try {
@@ -2346,15 +2377,32 @@ async function runScheduledReport(reason) {
   if (CONFIG.reportExportDir) {
     try {
       const rows = CONFIG.demoMode ? DEMO.tatDepartments(range, f) : await qTatDepartments(range, f);
-      out.files = writeReportCsv(fileTag, dash.kpis, prev.kpis, rows);
-      logReport(`csv\t${reason}\t${label}\t${out.files.join(' | ')}`);
+      out.files = await writeReportXlsx(fileTag, label, dash.kpis, prev.kpis, rows);
+      logReport(`xlsx\t${reason}\t${label}\t${out.files.join(' | ')}`);
     } catch (e) {
       out.files = [];
-      out.csvError = e.message;
-      logReport(`csv\t${reason}\t${label}\tERROR ${e.message}`);
+      out.xlsxError = e.message;
+      logReport(`xlsx\t${reason}\t${label}\tERROR ${e.message}`);
     }
   }
   return out;
+}
+
+/** CHAY 1 LAN bao cao cho danh sach ky (mac dinh: tat ca ky da cau hinh). */
+async function runScheduledReport(reason, periods) {
+  const enabled = CONFIG.teamsWebhookUrl || CONFIG.reportExportDir;
+  if (!enabled) return { ok: false, message: 'Chua cau hinh TEAMS_WEBHOOK_URL / REPORT_EXPORT_DIR.' };
+  const list = (periods && periods.length ? periods : CONFIG.reportPeriods);
+  const results = [];
+  for (const p of list) results.push(await runReportForPeriod(p, reason));
+  return {
+    ok: true,
+    label: results.map((r) => r.label).join(' + '),
+    teams: results.map((r) => r.teams).filter((x) => x != null).join(', ') || null,
+    files: results.flatMap((r) => r.files),
+    xlsxError: results.map((r) => r.xlsxError).filter(Boolean).join('; ') || undefined,
+    results,
+  };
 }
 
 /** Vong lap lich: moi 30s kiem tra den gio chua (chong gui trung theo ngay). */
@@ -2369,13 +2417,23 @@ function startReportScheduler() {
     if (!sched.days.has(now.getDay())) return;
     if (now.getHours() !== sched.hh || now.getMinutes() !== sched.mm) return;
     const todayKey = now.toISOString().slice(0, 10);
+    const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
     let st = {};
     try { st = JSON.parse(fs.readFileSync(REPORT_STATE_FILE, 'utf8')); } catch (_) { /* chua co */ }
     if (st.lastRun === todayKey) return; // da gui hom nay roi
     try {
+      // Ky TUAN: gui moi lan chay theo lich. Ky THANG: chi gui 1 lan/thang
+      // (lan chay dau tien trong thang moi - bao cao cho thang vua ket thuc).
+      const periods = [];
+      if (CONFIG.reportPeriods.includes('week')) periods.push('week');
+      if (CONFIG.reportPeriods.includes('month') && st.lastMonthSent !== monthKey) periods.push('month');
+      if (!periods.length) return;
       if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-      fs.writeFileSync(REPORT_STATE_FILE, JSON.stringify({ lastRun: todayKey }), 'utf8');
-      const r = await runScheduledReport('lich');
+      fs.writeFileSync(REPORT_STATE_FILE, JSON.stringify({
+        lastRun: todayKey,
+        lastMonthSent: periods.includes('month') ? monthKey : (st.lastMonthSent || ''),
+      }), 'utf8');
+      const r = await runScheduledReport('lich', periods);
       console.log(`[REPORT] Da gui bao cao dinh ky (${r.label}): teams=${r.teams}, files=${r.files.length}`);
     } catch (e) {
       console.error('[REPORT] Loi gui bao cao dinh ky:', e.message);
@@ -2982,7 +3040,7 @@ app.get('/api/admin/report-status', h(async (req, res) => {
     exportDir: CONFIG.reportExportDir || null,
     schedule: CONFIG.reportSchedule,
     scheduleValid: !!sched,
-    period: CONFIG.reportPeriod,
+    period: CONFIG.reportPeriods.join(','),
     enabled: !!(CONFIG.teamsWebhookUrl || CONFIG.reportExportDir),
   });
 }));
@@ -3064,7 +3122,7 @@ app.listen(CONFIG.port, () => {
   }
   // Bao cao dinh ky Teams/SharePoint
   if (CONFIG.teamsWebhookUrl || CONFIG.reportExportDir) {
-    console.log(`  Bao cao dinh ky: ${CONFIG.reportSchedule} (ky: ${CONFIG.reportPeriod})` +
+    console.log(`  Bao cao dinh ky: ${CONFIG.reportSchedule} (ky: ${CONFIG.reportPeriods.join(',')})` +
       `${CONFIG.teamsWebhookUrl ? ' -> Teams' : ''}${CONFIG.reportExportDir ? ' -> CSV: ' + CONFIG.reportExportDir : ''}`);
     console.log('  ⚠️  Bao cao gui SO LIEU TONG HOP len cloud M365 (Teams/SharePoint).');
     startReportScheduler();
