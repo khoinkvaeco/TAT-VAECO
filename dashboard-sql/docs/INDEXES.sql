@@ -102,6 +102,22 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes
 GO
 
 ------------------------------------------------------------------------------
+-- Doi ung THU CONG (tab "Doi ung thu cong - label lech")
+-- Nhanh nguon [4] doc cac ban ghi real_us1 co ghi chu on_ac (tab Other) va loc
+-- theo del_time; nhanh phu tra cuu theo serialno_o. 2 index nay giup bao cao
+-- ghep cap chay nhanh tren du lieu that.
+------------------------------------------------------------------------------
+CREATE INDEX IX_real_us1_onac_deltime ON [NQT].[dbo].[real_us1] ([del_time])
+  INCLUDE ([on_ac], [partno_off], [serialno_o], [labelno], [voucher_s], [ac_registr]);
+GO
+CREATE INDEX IX_real_us1_serialoff ON [NQT].[dbo].[real_us1] ([serialno_o])
+  INCLUDE ([del_time], [labelno], [voucher_s]);
+GO
+-- Ghep theo EVENT (WO): cot [event_perf] cua kho_ser1
+CREATE INDEX IX_kho_ser1_eventperf ON [NQT].[dbo].[kho_ser1] ([event_perf]);
+GO
+
+------------------------------------------------------------------------------
 -- Kiem tra: liet ke cac index vua tao
 ------------------------------------------------------------------------------
 SELECT OBJECT_NAME(i.object_id) AS bang, i.name AS ten_index, i.type_desc

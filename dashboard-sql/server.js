@@ -526,11 +526,28 @@ async function getColumns(table) {
   return set;
 }
 
-/** Tim cot "event / work order" trong 1 bang (ten khac nhau tuy he thong). */
+/**
+ * Cot EVENT (work order) = [event_perf] (nghiep vu VAECO xac nhan).
+ * CHI chap nhan DUNG ten nay - KHONG fallback sang orderno/eventno... vi
+ * ghep nham 2 cot khac y nghia se cho ra cap doi ung SAI (nguy hiem hon la
+ * khong ghep duoc). Bang nao khong co cot -> dieu kien event tu tat.
+ */
 async function findEventColumn(table) {
   const cols = await getColumns(table);
-  return ['event_perf', 'event_perfno', 'event_perfno_i', 'eventno', 'event', 'orderno']
-    .find((c) => cols.has(c)) || null;
+  return cols.has('event_perf') ? 'event_perf' : null;
+}
+
+/**
+ * KHOA SO SANH event: chuan hoa ve CHUOI de khop duoc ca khi cot luu kieu SO
+ * lan kieu CHU (vd 8767380 vs '8767380' vs 'E8767380').
+ * Dung 1 khoa duy nhat -> join khong bi NHAN BAN dong nhu khi dung OR.
+ */
+function eventKeyExpr(expr) {
+  return `CASE
+      WHEN TRY_CONVERT(bigint, ${expr}) IS NOT NULL
+        THEN CONVERT(varchar(50), TRY_CONVERT(bigint, ${expr}))
+      ELSE NULLIF(UPPER(LTRIM(RTRIM(CONVERT(varchar(50), ${expr})))), '')
+    END`;
 }
 
 /** Khoa duy nhat cua 1 cap = (labelno phieu xuat, voucherno phieu xuat). */
@@ -558,12 +575,30 @@ const countManualPairsInRange = (range, f) => manualPairsInRange(range, f).lengt
  * Manh SQL loai cac phieu xuat DA duoc doi ung THU CONG ra khoi "chua doi ung".
  * Nhung cap da xac nhan duoc truyen vao bang THAM SO (@mpL0/@mpV0...) - khong
  * noi chuoi truc tiep de tranh SQL injection. Khong co cap nao -> chuoi rong.
+ * CHI dua vao cac cap THUOC KY dang truy van (cap ngoai ky khong the trung
+ * dong nao trong ket qua) -> danh sach tham so luon nho, khong cham gioi han
+ * 2100 tham so cua SQL Server du sau nay xac nhan hang nghin cap.
+ * Cap thieu issueTimeVn (ban ghi cu) -> LUON giu de khong bi tinh nham lai.
  * @param {string} kAlias alias bang kho_ser1
  * @param {Object} params doi tuong tham so cua query (duoc them @mpL_i, @mpV_i)
+ * @param {Object} [range] { from, to } - de gioi han danh sach theo ky
  */
-function manualPairExclude(kAlias, params) {
-  const pairs = loadManualPairs();
+const MANUAL_PAIR_SQL_LIMIT = 900; // 900 cap = 1800 tham so, con xa moc 2100
+function manualPairExclude(kAlias, params, range) {
+  let pairs = loadManualPairs();
+  if (range) {
+    const from = new Date(String(range.from) + 'Z').getTime();
+    const to = new Date(String(range.to) + 'Z').getTime();
+    pairs = pairs.filter((p) => {
+      const t = new Date(String(p.issueTimeVn || '').replace(/Z?$/, 'Z')).getTime();
+      return !isFinite(t) || (t >= from && t < to); // thieu gio -> giu lai
+    });
+  }
   if (!pairs.length) return '';
+  if (pairs.length > MANUAL_PAIR_SQL_LIMIT) {
+    console.warn(`[PAIR] ${pairs.length} cap trong ky - cat con ${MANUAL_PAIR_SQL_LIMIT} de khong vuot gioi han tham so SQL.`);
+    pairs = pairs.slice(-MANUAL_PAIR_SQL_LIMIT); // uu tien cap moi xac nhan
+  }
   const values = pairs.map((p, i) => {
     params[`mpL${i}`] = String(p.issueLabel ?? '');
     params[`mpV${i}`] = String(p.issueVoucher ?? '');
@@ -1086,7 +1121,7 @@ async function qNotReconciled(range, f) {
       )
       -- Bo qua neu da doi ung kieu TRA SERVICE (thao YA -> recertify CI @SHOPLOC)
       AND NOT ${recertExists('k')}
-      ${manualPairExclude('k', params)}
+      ${manualPairExclude('k', params, range)}
       AND k.[mutation] BETWEEN @fromDay AND @toDay  -- loc tho theo index (sargable)
       AND ${amosToVN('k')} >= @from AND ${amosToVN('k')} < @to
       ${where}
@@ -1122,12 +1157,15 @@ async function qManualPairCandidates(range, f) {
   // Cot EVENT (work order) co the khac ten tuy he thong -> do schema, khong doan.
   const kEvCol = await findEventColumn('kho_ser1');
   const rEvCol = await findEventColumn('real_us1');
-  const kEv = kEvCol ? `TRY_CONVERT(float, k.[${kEvCol}])` : 'NULL';
-  const rEv = rEvCol ? `TRY_CONVERT(float, r4.[${rEvCol}])` : 'NULL';
-  // Khop EVENT chi tinh khi CA HAI ben co cot va co gia tri
-  const sameEvent = (kEvCol && rEvCol) ? `(${rEv} IS NOT NULL AND ${kEv} IS NOT NULL AND ${rEv} = ${kEv})` : '(1 = 0)';
-  const sameAc = `(RTRIM(ISNULL(r4.[ac_registr], '')) <> '' AND RTRIM(ISNULL(r4.[ac_registr], '')) = RTRIM(ISNULL(k.[ac_registr], '')))`;
-  const samePn = `(RTRIM(r4.[partno_off]) = RTRIM(k.[partno]))`;
+  const kEvKey = kEvCol ? eventKeyExpr(`k.[${kEvCol}]`) : 'NULL';
+  // Khoa event cua ban ghi "Other" da tinh san khi do vao bang tam #other
+  const sameEvent = (kEvCol && rEvCol)
+    ? `((${kEvKey}) IS NOT NULL AND oa.event_key IS NOT NULL AND oa.event_key = (${kEvKey}))`
+    : '(1 = 0)';
+  const sameAc = `(oa.ac_registr <> '' AND oa.ac_registr = RTRIM(ISNULL(k.[ac_registr], '')))`;
+  const samePn = `(oa.partno_off = RTRIM(k.[partno]))`;
+  // Cot event cua real_us1 (neu co) - tinh khoa NGAY khi do vao bang tam
+  const oaEvKey = rEvCol ? eventKeyExpr(`r0.[${rEvCol}]`) : 'NULL';
 
   const text = `
     -- Don bang tam con sot tu lan chay loi truoc (connection pool dung lai
@@ -1135,12 +1173,33 @@ async function qManualPairCandidates(range, f) {
     IF OBJECT_ID('tempdb..#wo')    IS NOT NULL DROP TABLE #wo;
     IF OBJECT_ID('tempdb..#wo_ps') IS NOT NULL DROP TABLE #wo_ps;
     IF OBJECT_ID('tempdb..#wo_ev') IS NOT NULL DROP TABLE #wo_ev;
+    IF OBJECT_ID('tempdb..#other') IS NOT NULL DROP TABLE #other;
+
+    -- Tap "Other" (real_us1 co on_ac) trong cua so cua CA KY -> quet real_us1
+    -- DUNG MOT LAN roi APPLY tren bang tam nho (truoc day quet lai theo TUNG
+    -- dong ung vien -> rat cham tren du lieu that).
+    SELECT RTRIM(r0.[partno_off]) AS partno_off,
+           RTRIM(r0.[serialno_o]) AS serialno_off,
+           r0.[labelno]   AS ret_labelno,
+           r0.[voucher_s] AS ret_voucher,
+           r0.[del_time]  AS ret_del_time,
+           RTRIM(r0.[on_ac]) AS on_ac,
+           RTRIM(ISNULL(r0.[ac_registr], '')) AS ac_registr,
+           ${oaEvKey} AS event_key
+    INTO #other
+    FROM [NQT].[dbo].[real_us1] r0
+    WHERE r0.[on_ac] IS NOT NULL AND LTRIM(RTRIM(r0.[on_ac])) <> ''
+      AND r0.[del_time] IS NOT NULL AND r0.[del_time] >= '1902-01-01'
+      -- Bao ham moi cua so cua tung dong: [gio xuat - 30, gio xuat + 60]
+      AND r0.[del_time] >= DATEADD(DAY, -30, @from)
+      AND r0.[del_time] <  DATEADD(DAY,  60, @to);
+    CREATE INDEX IX_other_pn ON #other (partno_off);
 
     -- Keo WO_PART_ON_OFF (linked server Oracle) ve bang tam MOT LAN, roi join
     -- nhieu lan tren bang tam -> khong hoi linked server theo tung dong.
     SELECT RTRIM(x.[PARTNO]) AS partno_on, RTRIM(x.[SERIALNO]) AS serialno_on,
            RTRIM(x.[PARTNO_OFF]) AS part_off, RTRIM(x.[SERIALNO_OFF]) AS serial_off,
-           TRY_CONVERT(float, x.[EVENT_PERFNO_I]) AS event_no,
+           ${eventKeyExpr('x.[EVENT_PERFNO_I]')} AS event_key,
            TRY_CONVERT(float, x.[MUTATION]) AS mut
     INTO #wo
     FROM [DWH_DB]..[STG_AMOS].[WO_PART_ON_OFF] x
@@ -1154,11 +1213,12 @@ async function qManualPairCandidates(range, f) {
                                          ORDER BY z.mut DESC) AS rn FROM #wo z) a
     WHERE a.rn = 1;
 
-    -- Ban ghi MOI NHAT theo EVENT (work order)
-    SELECT event_no, part_off, serial_off
+    -- Ban ghi MOI NHAT theo EVENT (work order). PARTITION theo khoa chuan hoa
+    -- -> moi event chi 1 dong -> LEFT JOIN ben duoi khong the nhan ban dong.
+    SELECT event_key, part_off, serial_off
     INTO #wo_ev
-    FROM (SELECT z.*, ROW_NUMBER() OVER (PARTITION BY z.event_no ORDER BY z.mut DESC) AS rn
-          FROM #wo z WHERE z.event_no IS NOT NULL) a
+    FROM (SELECT z.*, ROW_NUMBER() OVER (PARTITION BY z.event_key ORDER BY z.mut DESC) AS rn
+          FROM #wo z WHERE z.event_key IS NOT NULL) a
     WHERE a.rn = 1;
 
     SELECT TOP (@top)
@@ -1215,28 +1275,25 @@ async function qManualPairCandidates(range, f) {
     --     Cham diem: cung EVENT (WO) = 3 > cung PART + cung TAU = 2 > cung PART = 1.
     OUTER APPLY (
       SELECT TOP 1
-             RTRIM(r4.[partno_off]) AS partno_off, RTRIM(r4.[serialno_o]) AS serialno_off,
-             r4.[labelno] AS ret_labelno, r4.[voucher_s] AS ret_voucher,
-             r4.[del_time] AS ret_del_time, RTRIM(r4.[on_ac]) AS on_ac,
+             oa.partno_off, oa.serialno_off,
+             oa.ret_labelno, oa.ret_voucher, oa.ret_del_time, oa.on_ac,
              CASE WHEN ${sameEvent} THEN 3
                   WHEN ${samePn} AND ${sameAc} THEN 2
                   ELSE 1 END AS score,
              CASE WHEN ${sameEvent} THEN N'Khớp event (WO)'
                   WHEN ${samePn} AND ${sameAc} THEN N'Khớp part no + số tàu'
                   ELSE N'Khớp part no' END AS match_note
-      FROM [NQT].[dbo].[real_us1] r4
-      WHERE r4.[on_ac] IS NOT NULL AND LTRIM(RTRIM(r4.[on_ac])) <> ''
-        AND r4.[del_time] IS NOT NULL AND r4.[del_time] >= '1902-01-01'
-        -- Cua so +/- : ROB co the tra TRUOC ngay lam phieu xuat
-        AND r4.[del_time] >= DATEADD(DAY, -30, ${amosToVN('k')})
-        AND r4.[del_time] <  DATEADD(DAY, 60, ${amosToVN('k')})
+      FROM #other oa
+      -- Cua so +/- : ROB co the tra TRUOC ngay lam phieu xuat
+      WHERE oa.ret_del_time >= DATEADD(DAY, -30, ${amosToVN('k')})
+        AND oa.ret_del_time <  DATEADD(DAY,  60, ${amosToVN('k')})
         AND (${sameEvent} OR ${samePn})
-      ORDER BY score DESC, ABS(DATEDIFF(MINUTE, ${amosToVN('k')}, r4.[del_time])) ASC
+      ORDER BY score DESC, ABS(DATEDIFF(MINUTE, ${amosToVN('k')}, oa.ret_del_time)) ASC
     ) o4
     -- [1] WO_PART_ON_OFF theo (part, serial) da lap len tau
     LEFT JOIN #wo_ps w  ON w.partno_on = RTRIM(k.[partno]) AND w.serialno_on = RTRIM(k.[serialno])
     -- [1b] WO_PART_ON_OFF theo EVENT (work order) cua phieu xuat
-    LEFT JOIN #wo_ev we ON we.event_no = ${kEv}
+    LEFT JOIN #wo_ev we ON we.event_key = (${kEvKey})
     -- [2] Cung ORDERNO/PSN: YE lap thiet bi vua xuat <-> YA thao
     OUTER APPLY (
       SELECT TOP 1 ya.[partno] AS partno_off, ya.[serialno] AS serialno_off
@@ -1285,18 +1342,25 @@ async function qManualPairCandidates(range, f) {
           AND tc.[partno] = k.[partno] AND tc.[serialno] = k.[serialno]
           AND tc.[labelno] = k.[labelno])
       AND NOT ${recertExists('k')}                 -- chua doi ung kieu tra service
-      ${manualPairExclude('k', params)}            -- chua duoc doi ung THU CONG
+      ${manualPairExclude('k', params, range)}            -- chua duoc doi ung THU CONG
       AND k.[mutation] BETWEEN @fromDay AND @toDay
       AND ${amosToVN('k')} >= @from AND ${amosToVN('k')} < @to
       ${where}
     ORDER BY issue_time_vn DESC;
 
-    DROP TABLE #wo; DROP TABLE #wo_ps; DROP TABLE #wo_ev;`;
+    DROP TABLE #wo; DROP TABLE #wo_ps; DROP TABLE #wo_ev; DROP TABLE #other;`;
 
-  // Batch nhieu lenh -> lay recordset CUOI CUNG co du lieu (SELECT ... INTO
-  // khong tra recordset nen ket qua that la SELECT cuoi).
+  // Batch nhieu lenh: SELECT...INTO / DROP TABLE khong tra recordset, nhung
+  // KHONG phu thuoc vao gia dinh do - chon dung recordset cua SELECT chinh
+  // bang cach kiem tra co cot 'voucher_issue'. Khong co dong nao -> [].
   const sets = await queryMulti(text, params);
-  const rows = (sets && sets.length) ? (sets[sets.length - 1] || []) : [];
+  let rows = [];
+  for (const rs of sets || []) {
+    if (Array.isArray(rs) && rs.length && rs[0] &&
+        Object.prototype.hasOwnProperty.call(rs[0], 'voucher_issue')) {
+      rows = rs;
+    }
+  }
   // Ghep tu tab "Other" -> ghi ro MA LY DO + tieu chi da khop trong ten phuong phap
   return rows.map((r) => {
     if (r.match_method !== 'Other (on_ac)') return r;
@@ -1640,7 +1704,7 @@ async function qDashboardAgg(range, f) {
           AND tc.[partno] = k.[partno] AND tc.[serialno] = k.[serialno] AND tc.[labelno] = k.[labelno])
       -- Bo qua neu da doi ung kieu TRA SERVICE (recertify)
       AND NOT ${recertExists('k')}
-      ${manualPairExclude('k', params)}
+      ${manualPairExclude('k', params, range)}
       AND k.[mutation] BETWEEN @fromDay AND @toDay
       AND ${amosToVN('k')} >= @from AND ${amosToVN('k')} < @to
       ${wNotRec}
@@ -3536,6 +3600,54 @@ app.post('/api/admin/manual-pair/delete', h(async (req, res) => {
   apiCache.clear();
   cacheTotalBytes = 0;
   res.json({ ok: true, count: arr.length });
+}));
+
+// --- ADMIN: TU KIEM TRA truy van ghep cap (chay THU truoc khi dung that) ---
+//     Cho biet: co tim thay cot [event_perf] o tung bang khong, truy van chay
+//     duoc khong, mat bao lau, va phan bo cac cach ghep. Neu loi -> tra ve
+//     dung thong bao loi SQL de sua, khong lam vo trang bao cao.
+app.get('/api/admin/diag/pairing', h(async (req, res) => {
+  if (CONFIG.demoMode) return res.json({ note: 'Dang o DEMO_MODE, khong co du lieu that.' });
+  const out = {};
+  // 1) Do schema: bang nao co cot event_perf
+  for (const t of ['kho_ser1', 'real_us1']) {
+    const cols = await getColumns(t);
+    out[t] = {
+      docDuocSchema: cols.size > 0,
+      soCot: cols.size,
+      coEventPerf: cols.has('event_perf'),
+      coAcRegistr: cols.has('ac_registr'),
+      coOnAc: cols.has('on_ac'),
+    };
+  }
+  out.khopEventDuoc = !!(out.kho_ser1.coEventPerf && out.real_us1.coEventPerf);
+  if (!out.khopEventDuoc) {
+    out.canhBao = 'Thiếu [event_perf] ở một trong hai bảng -> tiêu chí "Khớp event (WO)" TỰ TẮT, ' +
+      'các cách ghép khác vẫn chạy bình thường.';
+  }
+  // 2) Chay THU truy van ghep cap tren ky dang chon
+  const range = resolveRange(req.query);
+  const f = readFilters(req.query);
+  const t0 = Date.now();
+  try {
+    const rows = await qManualPairCandidates(range, f);
+    const byMethod = {};
+    let coGoiY = 0;
+    for (const r of rows) {
+      const k = r.match_method || '(không ghép được)';
+      byMethod[k] = (byMethod[k] || 0) + 1;
+      if (r.sug_serialno_off) coGoiY++;
+    }
+    out.truyVan = {
+      ok: true, ms: Date.now() - t0, range,
+      soDong: rows.length, coCapGoiY: coGoiY,
+      khongGhepDuoc: rows.length - coGoiY,
+      theoCachGhep: byMethod,
+    };
+  } catch (e) {
+    out.truyVan = { ok: false, ms: Date.now() - t0, range, loi: e.message };
+  }
+  res.json(out);
 }));
 
 // --- ADMIN: CHAN DOAN bao cao "Thao truoc lap sau" (vi sao khong co du lieu) ---
