@@ -206,6 +206,31 @@ function chartDefaults() {
   };
 }
 
+/** Plugin nho: ve so TONG ngay TREN DINH moi cot xep chong (khong can thu vien
+ *  ngoai). Chi cong cac series DANG HIEN (bam tat legend -> tong tu tinh lai). */
+const stackTotalLabel = {
+  id: 'stackTotalLabel',
+  afterDatasetsDraw(chart) {
+    const x = chart.scales.x, y = chart.scales.y;
+    if (!x || !y) return;
+    const ctx = chart.ctx;
+    ctx.save();
+    ctx.font = '700 11px system-ui, -apple-system, sans-serif';
+    ctx.fillStyle = cssVar('--text-secondary') || '#666';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'bottom';
+    chart.data.labels.forEach((_, i) => {
+      let total = 0;
+      chart.data.datasets.forEach((ds, di) => {
+        if (chart.isDatasetVisible(di)) total += Number(ds.data[i]) || 0;
+      });
+      if (!total) return;
+      ctx.fillText(String(Math.round(total * 10) / 10), x.getPixelForValue(i), y.getPixelForValue(total) - 4);
+    });
+    ctx.restore();
+  },
+};
+
 function destroyChart(key) {
   if (charts[key]) {
     charts[key].destroy();
@@ -249,13 +274,19 @@ function renderCharts(c) {
     },
     options: {
       ...d.common,
+      // mode 'index': tooltip gom CA 3 lop tai cot dang tro (mac dinh chi lay
+      // dung lop duoi con tro -> dong "TAT tong" se thieu cac lop con lai).
+      interaction: { mode: 'index', intersect: false },
       scales: {
         x: { ...d.common.scales.x, stacked: true },
-        y: { ...d.common.scales.y, stacked: true },
+        // grace: chua khoang trong tren dinh de so TONG khong bi cat
+        y: { ...d.common.scales.y, stacked: true, grace: '8%' },
       },
       plugins: {
         ...d.common.plugins,
         tooltip: {
+          mode: 'index',
+          intersect: false,
           callbacks: {
             // Them dong TONG 3 chang o cuoi tooltip cho de doi chieu
             footer: (items) => {
@@ -267,6 +298,7 @@ function renderCharts(c) {
       },
       onClick: chartDrill(c.barDept.labels, 'department'),
     },
+    plugins: [stackTotalLabel], // ve so tong tren dinh moi cot
   });
 
   // 4.2 Bieu do tron - phan bo theo station (categorical theo thu tu)
