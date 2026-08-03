@@ -3129,6 +3129,67 @@ app.post('/api/admin/report-now', h(async (req, res) => {
   res.json(r);
 }));
 
+// --- ADMIN: CHAN DOAN bao cao "Thao truoc lap sau" (vi sao khong co du lieu) ---
+//     Dem theo tung DIEU KIEN noi long dan -> biet dieu kien nao lam mat het dong.
+app.get('/api/admin/diag/rbi', h(async (req, res) => {
+  if (CONFIG.demoMode) return res.json({ note: 'Dang o DEMO_MODE, khong co du lieu that.' });
+  const range = resolveRange(req.query);
+  const params = { from: range.from, to: range.to, ...amosDayParams(range) };
+  const safe = async (label, sql) => {
+    try { return { [label]: (await query(sql, { ...params }))[0] }; }
+    catch (e) { return { [label]: { error: e.message } }; }
+  };
+  // Cac dieu kien loc "co dinh" cua bao cao (khong ke ye/period)
+  const baseFilters = `
+      AND LTRIM(RTRIM(ISNULL(k.[costcenter], ''))) <> 'VN-SPL'
+      AND UPPER(LTRIM(RTRIM(ISNULL(k.[store], '')))) NOT IN ('MAIN','3RD')
+      AND UPPER(LTRIM(RTRIM(ISNULL(k.[condition], '')))) <> 'US'`;
+  const inPeriod = `
+      AND k.[mutation] BETWEEN @fromDay AND @toDay
+      AND ${amosToVN('k')} >= @from AND ${amosToVN('k')} < @to`;
+  const yeBefore = `
+      EXISTS (SELECT 1 FROM [NQT].[dbo].[on_off] o
+              WHERE o.[labelno] = k.[labelno] AND o.[vm] = 'YE'
+                AND ${amosToVN('o')} < ${amosToVN('k')})`;
+
+  const parts = await Promise.all([
+    // 1. Tong phieu xuat trong ky (sau cac bo loc co dinh)
+    safe('b1_phieu_xuat_trong_ky', `
+      SELECT COUNT(*) AS cnt FROM [NQT].[dbo].[kho_ser1] k
+      WHERE k.[vm]='T' AND k.[voucherno] LIKE 'P-%' ${baseFilters} ${inPeriod}`),
+    // 2. ... co BAT KY su kien lap (YE) cung labelno
+    safe('b2_co_YE_cung_label', `
+      SELECT COUNT(*) AS cnt FROM [NQT].[dbo].[kho_ser1] k
+      WHERE k.[vm]='T' AND k.[voucherno] LIKE 'P-%' ${baseFilters} ${inPeriod}
+        AND EXISTS (SELECT 1 FROM [NQT].[dbo].[on_off] o
+                    WHERE o.[labelno] = k.[labelno] AND o.[vm]='YE')`),
+    // 3. ... co YE TRUOC gio xuat  <-- DIEU KIEN CUA BAO CAO
+    safe('b3_co_YE_TRUOC_gio_xuat_TRONG_KY', `
+      SELECT COUNT(*) AS cnt FROM [NQT].[dbo].[kho_ser1] k
+      WHERE k.[vm]='T' AND k.[voucherno] LIKE 'P-%' ${baseFilters} ${inPeriod}
+        AND ${yeBefore}`),
+    // 4. Nhu (3) nhung KHONG gioi han ky -> xem co phai do ky bao cao khong
+    safe('b4_co_YE_TRUOC_gio_xuat_TOAN_LICH_SU', `
+      SELECT COUNT(*) AS cnt FROM [NQT].[dbo].[kho_ser1] k
+      WHERE k.[vm]='T' AND k.[voucherno] LIKE 'P-%' ${baseFilters}
+        AND ${yeBefore}`),
+    // 5. Nhu (4) nhung BO cac bo loc co dinh -> xem bo loc co giet het khong
+    safe('b5_khong_bo_loc_costcenter_store_condition', `
+      SELECT COUNT(*) AS cnt FROM [NQT].[dbo].[kho_ser1] k
+      WHERE k.[vm]='T' AND k.[voucherno] LIKE 'P-%'
+        AND ${yeBefore}`),
+    // 6. Phieu xuat trong ky KHONG co YE nao SAU gio xuat (TAT install = NULL)
+    //    -> nhom "kha nghi" cua nghiep vu lap truoc/xuat sau
+    safe('b6_trong_ky_khong_co_YE_SAU_gio_xuat', `
+      SELECT COUNT(*) AS cnt FROM [NQT].[dbo].[kho_ser1] k
+      WHERE k.[vm]='T' AND k.[voucherno] LIKE 'P-%' ${baseFilters} ${inPeriod}
+        AND NOT EXISTS (SELECT 1 FROM [NQT].[dbo].[on_off] o
+                        WHERE o.[labelno] = k.[labelno] AND o.[vm]='YE'
+                          AND ${amosToVN('o')} > ${amosToVN('k')})`),
+  ]);
+  res.json(Object.assign({ range }, ...parts));
+}));
+
 // --- ADMIN: TRANG THAI LLM (de kiem tra cau hinh da dung chua) ---
 app.get('/api/admin/llm-status', h(async (req, res) => {
   res.json({
