@@ -2280,18 +2280,68 @@ function logReport(line) {
   } catch (_) { /* khong vo app vi log */ }
 }
 
+/** Bang KPI (dung chung cho Excel va CSV du phong). */
+function kpiTable(kpis, prevKpis) {
+  const pct = (cur, prev) => {
+    const c = Number(cur), p = Number(prev);
+    if (!isFinite(c) || !isFinite(p) || p === 0) return '';
+    return Math.round(((c - p) / Math.abs(p)) * 1000) / 10;
+  };
+  return [
+    ['TAT install (ngày)', kpis.tatInstallAvg, prevKpis.tatInstallAvg],
+    ['TAT US return (ngày)', kpis.tatUsReturnAvg, prevKpis.tatUsReturnAvg],
+    ['TAT CUVT (ngày)', kpis.tatCuvtAvg, prevKpis.tatCuvtAvg],
+    ['TAT hoàn kho (ngày)', kpis.tatReturnStoreAvg, prevKpis.tatReturnStoreAvg],
+    ['Thiết bị xuất kho', kpis.countIssued, prevKpis.countIssued],
+    ['Chưa đối ứng', kpis.countNotReconciled, prevKpis.countNotReconciled],
+    ['Tỷ lệ đối ứng (%)', kpis.reconcileRate, prevKpis.reconcileRate],
+    ['SL nhận (CUVT)', kpis.cntReci, prevKpis.cntReci],
+    ['SL giao (CUVT)', kpis.cntDel, prevKpis.cntDel],
+  ].map((r) => [...r, pct(r[1], r[2])]);
+}
+
+/** DU PHONG khi server chua cai duoc 'exceljs' (vd bi chan npm registry):
+ *  xuat CSV co BOM UTF-8 - Excel/SharePoint van mo duoc, chi khong co
+ *  2 sheet/dinh dang. Tra ve danh sach file da ghi. */
+function writeReportCsvFallback(dir, fileTag, kpis, prevKpis, rows) {
+  const cell = (v) => {
+    const s = v == null ? '' : String(v);
+    return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+  const files = [];
+  const kpiCsv = [['Chỉ số', 'Kỳ này', 'Kỳ trước', 'Chênh lệch (%)'], ...kpiTable(kpis, prevKpis)]
+    .map((r) => r.map(cell).join(',')).join('\r\n');
+  const f1 = path.join(dir, `TAT-KPI_${fileTag}.csv`);
+  fs.writeFileSync(f1, '﻿' + kpiCsv, 'utf8');
+  files.push(f1);
+  if (rows && rows.length) {
+    const cols = Object.keys(rows[0]);
+    const body = [cols.join(',')]
+      .concat(rows.map((r) => cols.map((c) => cell(r[c])).join(',')))
+      .join('\r\n');
+    const f2 = path.join(dir, `TAT-chitiet_${fileTag}.csv`);
+    fs.writeFileSync(f2, '﻿' + body, 'utf8');
+    files.push(f2);
+  }
+  return files;
+}
+
 /** Xuat file EXCEL (.xlsx) vao REPORT_EXPORT_DIR (thu muc OneDrive sync):
  *  Sheet "KPI" (ky nay / ky truoc / chenh lech %) + Sheet "Chi tiet TAT".
- *  Dung exceljs (lazy-require de app van chay neu chua npm install). */
+ *  Dung exceljs (lazy-require); THIEU goi -> tu dong lui ve CSV de van co file.
+ *  @returns {{files: string[], fallback: boolean}} */
 async function writeReportXlsx(fileTag, label, kpis, prevKpis, rows) {
-  let ExcelJS;
+  let ExcelJS = null;
   try {
     ExcelJS = require('exceljs');
   } catch (_) {
-    throw new Error("chua cai 'exceljs' (chay: npm install)");
+    ExcelJS = null; // chua npm install -> dung CSV du phong ben duoi
   }
   const dir = CONFIG.reportExportDir;
   fs.mkdirSync(dir, { recursive: true });
+  if (!ExcelJS) {
+    return { files: writeReportCsvFallback(dir, fileTag, kpis, prevKpis, rows), fallback: true };
+  }
 
   const wb = new ExcelJS.Workbook();
   wb.creator = 'Dashboard TAT - VAECO';
@@ -2309,23 +2359,7 @@ async function writeReportXlsx(fileTag, label, kpis, prevKpis, rows) {
     c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F4E5F' } };
     c.font = { bold: true, color: { argb: 'FFFFFFFF' } };
   });
-  const pct = (cur, prev) => {
-    const c = Number(cur), p = Number(prev);
-    if (!isFinite(c) || !isFinite(p) || p === 0) return '';
-    return Math.round(((c - p) / Math.abs(p)) * 1000) / 10;
-  };
-  const KPI_ROWS = [
-    ['TAT install (ng\u00E0y)', kpis.tatInstallAvg, prevKpis.tatInstallAvg],
-    ['TAT US return (ng\u00E0y)', kpis.tatUsReturnAvg, prevKpis.tatUsReturnAvg],
-    ['TAT CUVT (ng\u00E0y)', kpis.tatCuvtAvg, prevKpis.tatCuvtAvg],
-    ['TAT ho\u00E0n kho (ng\u00E0y)', kpis.tatReturnStoreAvg, prevKpis.tatReturnStoreAvg],
-    ['Thi\u1EBFt b\u1ECB xu\u1EA5t kho', kpis.countIssued, prevKpis.countIssued],
-    ['Ch\u01B0a \u0111\u1ED1i \u1EE9ng', kpis.countNotReconciled, prevKpis.countNotReconciled],
-    ['T\u1EF7 l\u1EC7 \u0111\u1ED1i \u1EE9ng (%)', kpis.reconcileRate, prevKpis.reconcileRate],
-    ['SL nh\u1EADn (CUVT)', kpis.cntReci, prevKpis.cntReci],
-    ['SL giao (CUVT)', kpis.cntDel, prevKpis.cntDel],
-  ];
-  for (const [name, cur, prev] of KPI_ROWS) ws.addRow([name, cur, prev, pct(cur, prev)]);
+  for (const r of kpiTable(kpis, prevKpis)) ws.addRow(r);
   ws.columns = [{ width: 26 }, { width: 12 }, { width: 12 }, { width: 16 }];
 
   // --- Sheet 2: Chi tiet TAT theo thiet bi ---
@@ -2345,7 +2379,7 @@ async function writeReportXlsx(fileTag, label, kpis, prevKpis, rows) {
 
   const file = path.join(dir, `TAT_${fileTag}.xlsx`);
   await wb.xlsx.writeFile(file);
-  return [file];
+  return { files: [file], fallback: false };
 }
 
 /** CHAY bao cao cho 1 KY (week|month): the Teams + file Excel. */
@@ -2377,8 +2411,12 @@ async function runReportForPeriod(period, reason) {
   if (CONFIG.reportExportDir) {
     try {
       const rows = CONFIG.demoMode ? DEMO.tatDepartments(range, f) : await qTatDepartments(range, f);
-      out.files = await writeReportXlsx(fileTag, label, dash.kpis, prev.kpis, rows);
-      logReport(`xlsx\t${reason}\t${label}\t${out.files.join(' | ')}`);
+      const w = await writeReportXlsx(fileTag, label, dash.kpis, prev.kpis, rows);
+      out.files = w.files;
+      if (w.fallback) {
+        out.xlsxWarn = "chua cai 'exceljs' -> da xuat CSV thay cho Excel (chay: npm install de co .xlsx)";
+      }
+      logReport(`${w.fallback ? 'csv-fallback' : 'xlsx'}\t${reason}\t${label}\t${out.files.join(' | ')}`);
     } catch (e) {
       out.files = [];
       out.xlsxError = e.message;
@@ -2400,7 +2438,9 @@ async function runScheduledReport(reason, periods) {
     label: results.map((r) => r.label).join(' + '),
     teams: results.map((r) => r.teams).filter((x) => x != null).join(', ') || null,
     files: results.flatMap((r) => r.files),
+    exportConfigured: !!CONFIG.reportExportDir,
     xlsxError: results.map((r) => r.xlsxError).filter(Boolean).join('; ') || undefined,
+    xlsxWarn: [...new Set(results.map((r) => r.xlsxWarn).filter(Boolean))].join('; ') || undefined,
     results,
   };
 }

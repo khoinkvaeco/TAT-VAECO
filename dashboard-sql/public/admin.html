@@ -379,9 +379,13 @@
         const r = await fetch('/api/admin/report-now', { method: 'POST' });
         const d = await r.json();
         if (d.ok) {
+          const filesTxt = d.files && d.files.length
+            ? esc(d.files.map((f) => f.split(/[\\/]/).pop()).join(', '))
+            : (d.exportConfigured ? '<span style="color:#b91c1c">không ghi được file</span>' : 'không bật');
           out.innerHTML = `<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:10px;color:#166534">` +
-            `<b>✔ Đã chạy</b> — ${esc(d.label)} · Teams: ${esc(String(d.teams ?? 'không bật'))} · Files: ${d.files && d.files.length ? esc(d.files.join(', ')) : 'không bật'}` +
-            `${d.xlsxError ? ' · <span style="color:#b91c1c">Excel lỗi: ' + esc(d.xlsxError) + '</span>' : ''}</div>`;
+            `<b>✔ Đã chạy</b> — ${esc(d.label)} · Teams: ${esc(String(d.teams ?? 'không bật'))} · Files: ${filesTxt}` +
+            `${d.xlsxWarn ? '<div style="color:#b45309;margin-top:6px">⚠ ' + esc(d.xlsxWarn) + '</div>' : ''}` +
+            `${d.xlsxError ? '<div style="color:#b91c1c;margin-top:6px">✖ Lỗi xuất file: ' + esc(d.xlsxError) + '</div>' : ''}</div>`;
         } else {
           out.innerHTML = `<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:10px;color:#991b1b"><b>✖</b> ${esc(d.message || 'Lỗi')}</div>`;
         }
