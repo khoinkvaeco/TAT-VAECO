@@ -88,7 +88,7 @@ Restart-Service DashboardTAT
 
 1. Từ **máy quản trị** (máy 10.99.89.120 hoặc ngay trên server), mở trang **Admin**: `http://<ip-server>:3000/admin`.
 2. Panel **📤 Báo cáo định kỳ** phải hiện `● BẬT — lịch: T2 06:30 · kỳ: week,month · Teams ✔`.
-3. Bấm nút **📨 Gửi báo cáo ngay**.
+3. Bấm **📨 Gửi tuần** (nhanh). Muốn thử luôn báo cáo tháng thì bấm **📨 Gửi tháng** — kỳ tháng quét nhiều dữ liệu nên có thể mất vài phút.
 4. Mở kênh Teams **Báo cáo TAT** → trong vòng ~10 giây phải thấy thẻ:
 
    > **📊 Báo cáo TAT — VAECO**
@@ -135,7 +135,7 @@ Restart service (`Restart-Service DashboardTAT`).
 
 ### B4. Test
 
-1. Trang Admin → **📨 Gửi báo cáo ngay**. Kết quả phải hiện `Files: TAT_tuan_....xlsx, TAT_thang_....xlsx`.
+1. Trang Admin → **📨 Gửi tuần** / **📨 Gửi tháng**. Kết quả hiện theo TỪNG KỲ, vd `✔ Tuần 20/07–26/07/2026 — Teams: ok · Files: TAT_tuan_2026-07-20.xlsx (12s)`.
 2. Mở File Explorer trên server: các file `.xlsx` nằm trong thư mục, biểu tượng chuyển thành **✓ xanh** khi OneDrive đã upload xong.
 3. Mở SharePoint (hoặc Teams → kênh → Files) từ **máy khác / điện thoại**: bấm vào file → mở thẳng bằng **Excel Online**, không cần cài Excel.
 
@@ -192,6 +192,7 @@ Lịch tự động: đến giờ trong `REPORT_SCHEDULE`, service tự gửi �
 | E4b | Ra file **.csv** thay vì **.xlsx**, kèm cảnh báo `chua cai 'exceljs'` | Server chưa cài thư viện Excel. → Vào thư mục `dashboard-sql` chạy **`npm install`** rồi `Restart-Service DashboardTAT`. (Không cài được vì mạng chặn npm? Vẫn dùng được file CSV — Excel mở bình thường, chỉ không có 2 sheet/định dạng.) |
 | E5 | File Excel nằm trong thư mục trên server nhưng **không lên SharePoint** | OneDrive chưa chạy/chưa đăng nhập trên server. → Mở OneDrive (icon đám mây cạnh đồng hồ), đăng nhập lại; icon file phải chuyển ✓ xanh. OneDrive phải luôn chạy cùng Windows (Settings → Start OneDrive automatically). |
 | E6 | Thứ 2 không thấy báo cáo tự động (bấm tay thì được) | Xem `REPORT_SCHEDULE` có đúng định dạng không (log khởi động sẽ cảnh báo nếu sai); giờ trên server có đúng múi giờ VN không; service có đang chạy lúc 6h30 không. |
+| E6b | Bấm gửi báo cáo bị **`Lỗi: Failed to fetch`** | Kết nối đứt giữa chừng vì kỳ **tháng** quét nhiều dữ liệu, chạy lâu. → Bấm riêng **Gửi tuần** và **Gửi tháng** thay vì "Gửi cả hai"; nếu kỳ tháng vẫn đứt, chạy `docs/INDEXES.sql` để tăng tốc truy vấn. Kết quả thật vẫn được ghi ở `logs/report-*.log` kể cả khi trình duyệt mất kết nối. Một kỳ lỗi **không** làm hỏng kỳ còn lại. |
 | E7 | Muốn đổi giờ/kỳ gửi | Sửa `REPORT_SCHEDULE` / `REPORT_PERIOD` trong `.env` → restart service. |
 | E8 | Muốn **chỉ** báo cáo tháng, bỏ tuần | Đặt `REPORT_PERIOD=month` (giữ nguyên `REPORT_SCHEDULE`; hệ thống tự gửi 1 lần vào lần chạy đầu tiên của tháng mới). |
 

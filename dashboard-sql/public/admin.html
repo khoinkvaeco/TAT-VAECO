@@ -87,7 +87,11 @@
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <b style="font-size:14px">📤 Báo cáo định kỳ (Teams / SharePoint)</b>
         <span id="rptStatus" style="font-size:13px;color:var(--muted)">Đang kiểm tra…</span>
-        <button id="rptNow" class="act" style="margin-left:auto">📨 Gửi báo cáo ngay</button>
+        <span style="margin-left:auto;display:flex;gap:6px">
+          <button id="rptWeek" class="act" title="Chỉ gửi báo cáo TUẦN vừa kết thúc">📨 Gửi tuần</button>
+          <button id="rptMonth" class="act" title="Chỉ gửi báo cáo THÁNG vừa kết thúc (chạy lâu hơn)">📨 Gửi tháng</button>
+          <button id="rptNow" class="ghost" title="Gửi tất cả kỳ đã cấu hình">Gửi cả hai</button>
+        </span>
       </div>
       <div class="note" style="margin-top:8px">
         Cấu hình trong <code>.env</code>: <code>TEAMS_WEBHOOK_URL</code> (webhook của Teams Workflows),
@@ -368,29 +372,48 @@
           el.innerHTML = '<span style="color:#b45309">● TẮT</span> — chưa cấu hình webhook/thư mục xuất.';
         } else {
           el.innerHTML = `<span style="color:#16a34a">● BẬT</span> — lịch: <b>${esc(d.schedule)}</b>${d.scheduleValid ? '' : ' <span style="color:#dc2626">(sai định dạng!)</span>'} · kỳ: <b>${esc(d.period)}</b>` +
-            `${d.teamsConfigured ? ' · Teams ✔' : ''}${d.exportDir ? ' · CSV → ' + esc(d.exportDir) : ''}`;
+            `${d.teamsConfigured ? ' · Teams ✔' : ''}${d.exportDir ? ' · Excel → ' + esc(d.exportDir) : ''}`;
         }
       } catch (e) { el.textContent = 'Không lấy được trạng thái: ' + e.message; }
     }
-    $('#rptNow').addEventListener('click', async () => {
+    async function sendReport(period, btn) {
       const out = $('#rptOut');
-      out.innerHTML = '<span style="color:var(--muted)">Đang gửi…</span>';
+      const btns = [$('#rptWeek'), $('#rptMonth'), $('#rptNow')];
+      btns.forEach((b) => (b.disabled = true));
+      out.innerHTML = `<span style="color:var(--muted)">Đang gửi${period ? ' báo cáo ' + (period === 'month' ? 'THÁNG' : 'TUẦN') : ''}… (kỳ tháng có thể mất vài phút)</span>`;
       try {
-        const r = await fetch('/api/admin/report-now', { method: 'POST' });
+        const url = '/api/admin/report-now' + (period ? '?period=' + period : '');
+        const r = await fetch(url, { method: 'POST' });
         const d = await r.json();
-        if (d.ok) {
-          const filesTxt = d.files && d.files.length
-            ? esc(d.files.map((f) => f.split(/[\\/]/).pop()).join(', '))
-            : (d.exportConfigured ? '<span style="color:#b91c1c">không ghi được file</span>' : 'không bật');
-          out.innerHTML = `<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:10px;color:#166534">` +
-            `<b>✔ Đã chạy</b> — ${esc(d.label)} · Teams: ${esc(String(d.teams ?? 'không bật'))} · Files: ${filesTxt}` +
-            `${d.xlsxWarn ? '<div style="color:#b45309;margin-top:6px">⚠ ' + esc(d.xlsxWarn) + '</div>' : ''}` +
-            `${d.xlsxError ? '<div style="color:#b91c1c;margin-top:6px">✖ Lỗi xuất file: ' + esc(d.xlsxError) + '</div>' : ''}</div>`;
-        } else {
-          out.innerHTML = `<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:10px;color:#991b1b"><b>✖</b> ${esc(d.message || 'Lỗi')}</div>`;
+        if (d.message && !d.results) {
+          out.innerHTML = `<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:10px;color:#991b1b"><b>✖</b> ${esc(d.message)}</div>`;
+          return;
         }
-      } catch (e) { out.innerHTML = `<div style="color:#991b1b">Lỗi: ${esc(e.message)}</div>`; }
-    });
+        // Hien ket qua TUNG KY (ky nay loi khong anh huong ky kia)
+        const rows = (d.results || []).map((x) => {
+          if (x.periodError) {
+            return `<div style="color:#b91c1c">✖ <b>${esc(x.label)}</b> — thất bại: ${esc(x.periodError)} (${Math.round((x.ms || 0) / 1000)}s)</div>`;
+          }
+          const f = x.files && x.files.length
+            ? esc(x.files.map((p) => p.split(/[\\/]/).pop()).join(', '))
+            : (d.exportConfigured ? '<span style="color:#b91c1c">không ghi được file</span>' : 'không bật');
+          return `<div style="color:#166534">✔ <b>${esc(x.label)}</b> — Teams: ${esc(String(x.teams ?? 'không bật'))} · Files: ${f} <span style="color:var(--muted)">(${Math.round((x.ms || 0) / 1000)}s)</span>` +
+            `${x.xlsxWarn ? '<div style="color:#b45309">⚠ ' + esc(x.xlsxWarn) + '</div>' : ''}` +
+            `${x.xlsxError ? '<div style="color:#b91c1c">✖ Lỗi xuất file: ' + esc(x.xlsxError) + '</div>' : ''}</div>`;
+        }).join('');
+        const anyErr = (d.results || []).some((x) => x.periodError);
+        out.innerHTML = `<div style="background:${anyErr ? '#fffbeb' : '#f0fdf4'};border:1px solid ${anyErr ? '#fde68a' : '#bbf7d0'};border-radius:8px;padding:10px">${rows}</div>`;
+      } catch (e) {
+        out.innerHTML = `<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:10px;color:#991b1b">` +
+          `<b>✖ Mất kết nối khi đang gửi:</b> ${esc(e.message)}<br>` +
+          `<span style="font-size:12px">Kỳ tháng quét nhiều dữ liệu nên có thể lâu. Hãy thử bấm riêng <b>Gửi tuần</b> và <b>Gửi tháng</b>; nếu vẫn lỗi, xem <code>logs/report-*.log</code> trên server.</span></div>`;
+      } finally {
+        btns.forEach((b) => (b.disabled = false));
+      }
+    }
+    $('#rptWeek').addEventListener('click', () => sendReport('week'));
+    $('#rptMonth').addEventListener('click', () => sendReport('month'));
+    $('#rptNow').addEventListener('click', () => sendReport(''));
     loadRptStatus();
 
     load();

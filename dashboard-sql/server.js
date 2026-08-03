@@ -2447,21 +2447,35 @@ async function runReportForPeriod(period, reason) {
   return out;
 }
 
-/** CHAY 1 LAN bao cao cho danh sach ky (mac dinh: tat ca ky da cau hinh). */
+/** CHAY 1 LAN bao cao cho danh sach ky (mac dinh: tat ca ky da cau hinh).
+ *  MOI KY chay trong try/catch RIENG: ky nay loi/timeout khong lam hong ky kia
+ *  (truoc day ky "month" nang hon nen hay ngat -> mat luon ca bao cao tuan). */
 async function runScheduledReport(reason, periods) {
   const enabled = CONFIG.teamsWebhookUrl || CONFIG.reportExportDir;
   if (!enabled) return { ok: false, message: 'Chua cau hinh TEAMS_WEBHOOK_URL / REPORT_EXPORT_DIR.' };
   const list = (periods && periods.length ? periods : CONFIG.reportPeriods);
   const results = [];
-  for (const p of list) results.push(await runReportForPeriod(p, reason));
+  for (const p of list) {
+    const t0 = Date.now();
+    try {
+      const r = await runReportForPeriod(p, reason);
+      results.push({ ...r, ms: Date.now() - t0 });
+    } catch (e) {
+      logReport(`period\t${reason}\t${p}\tERROR ${e.message}`);
+      console.error(`[REPORT] Ky "${p}" that bai:`, e.message);
+      results.push({ period: p, label: p === 'month' ? 'Tháng' : 'Tuần', teams: null, files: [], periodError: e.message, ms: Date.now() - t0 });
+    }
+  }
+  const okAny = results.some((r) => !r.periodError);
   return {
-    ok: true,
+    ok: okAny,
     label: results.map((r) => r.label).join(' + '),
     teams: results.map((r) => r.teams).filter((x) => x != null).join(', ') || null,
     files: results.flatMap((r) => r.files),
     exportConfigured: !!CONFIG.reportExportDir,
     xlsxError: results.map((r) => r.xlsxError).filter(Boolean).join('; ') || undefined,
     xlsxWarn: [...new Set(results.map((r) => r.xlsxWarn).filter(Boolean))].join('; ') || undefined,
+    periodError: results.map((r) => r.periodError).filter(Boolean).join('; ') || undefined,
     results,
   };
 }
@@ -3106,8 +3120,12 @@ app.get('/api/admin/report-status', h(async (req, res) => {
   });
 }));
 
+// ?period=week|month  -> chi chay 1 ky (request ngan, tranh dut ket noi vi
+// ky "month" quet du lieu nang). Khong truyen -> chay tat ca ky da cau hinh.
 app.post('/api/admin/report-now', h(async (req, res) => {
-  const r = await runScheduledReport('tay');
+  const p = String(req.query.period || '').trim().toLowerCase();
+  const periods = (p === 'week' || p === 'month') ? [p] : null;
+  const r = await runScheduledReport('tay', periods);
   res.json(r);
 }));
 
