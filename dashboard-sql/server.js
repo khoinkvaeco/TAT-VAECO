@@ -1314,6 +1314,27 @@ async function qReturnedUnservice(range, f) {
  * BAO CAO 5: OTHER - lay note trong cot on_ac cua real_us1.
  * Cot: partno_off, serialno_o, batchno_of, qty_off, station, department, del_staff, del_time.
  */
+/**
+ * MA LY DO trong ghi chu [on_ac] cua real_us1 (nghiep vu VAECO cung cap).
+ * Y nghia bao cao "Other": thiet bi DA TRA UNSERVICE nhung CHUA tim duoc phieu
+ * xuat service doi ung -> ghi chu on_ac giai thich VI SAO khong co doi ung.
+ */
+const ON_AC_REASONS = [
+  { code: 'NOI', name: 'Không có phiếu xuất', desc: 'NOI = no issue pickslip: thiết bị trả về nhưng không có phiếu xuất kho tương ứng.' },
+  { code: 'ROB', name: 'Robbery (tháo xuống trước)', desc: 'ROB = robbery: tháo thiết bị xuống trước (lấy từ tàu/thiết bị khác) nên không phát sinh phiếu xuất kho.' },
+  { code: 'DIR', name: 'Lắp thẳng từ kho', desc: 'DIR = direct: lắp thẳng lên tàu vật tư đang có trong kho, không qua phiếu xuất service.' },
+  { code: 'CRO', name: 'Repairable / consumable', desc: 'CRO: tháo vật tư loại repairable / consumable.' },
+];
+
+/** Doc ma ly do tu ghi chu on_ac (khop nguyen tu, khong dinh vao chu khac). */
+function decodeOnAc(note) {
+  const s = String(note || '').toUpperCase();
+  for (const r of ON_AC_REASONS) {
+    if (new RegExp(`(^|[^A-Z])${r.code}([^A-Z]|$)`).test(s)) return r;
+  }
+  return null;
+}
+
 async function qOther(range, f) {
   const params = { from: range.from, to: range.to, top: CONFIG.maxRows };
   const dept = deptFromReal('r', 'sm');
@@ -1333,6 +1354,8 @@ async function qOther(range, f) {
       ${dept} AS department,
       r.[del_staff]   AS del_staff,
       r.[del_time]    AS del_time,
+      r.[labelno]     AS labelno,
+      r.[voucher_s]   AS voucher_issue,
       r.[on_ac]       AS note
     FROM [NQT].[dbo].[real_us1] r
     ${signJoin('r.[action_per]', 'sm')}
@@ -1342,7 +1365,12 @@ async function qOther(range, f) {
            OR (r.[del_time] >= @from AND r.[del_time] < @to))
       ${where}
     ORDER BY r.[del_time] DESC`;
-  return query(text, params);
+  const rows = await query(text, params);
+  // Giai ma ma ly do -> them cot rieng de LOC / DEM / xuat Excel duoc
+  return rows.map((r) => {
+    const d = decodeOnAc(r.note);
+    return { ...r, reason_code: d ? d.code : '', reason_name: d ? d.name : 'Khác / chưa phân loại' };
+  });
 }
 
 /**

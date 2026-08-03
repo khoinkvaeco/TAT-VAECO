@@ -618,13 +618,27 @@ const REPORT_DEFS = {
     ],
   },
   other: {
-    title: 'Other',
-    desc: 'Lấy ghi chú on_ac cho các thiết bị tháo.',
+    title: 'Other (on_ac) — đã trả unservice nhưng CHƯA có phiếu xuất đối ứng',
+    desc: 'Thiết bị đã trả US nhưng không tìm được phiếu xuất service tương ứng; ghi chú on_ac cho biết LÝ DO. Mã: NOI = không có phiếu xuất (no issue pickslip) · ROB = robbery, tháo xuống trước · DIR = lắp thẳng lên tàu vật tư trong kho · CRO = tháo vật tư repairable/consumable.',
     columns: [
+      {
+        title: 'Lý do', field: 'reason_code', hozAlign: 'center', width: 90,
+        headerFilter: 'list',
+        headerFilterParams: { values: { '': 'Tất cả', NOI: 'NOI', ROB: 'ROB', DIR: 'DIR', CRO: 'CRO' } },
+        formatter: (cell) => {
+          const v = cell.getValue();
+          if (!v) return '<span style="color:var(--text-muted)">—</span>';
+          const COLORS = { NOI: '--series-6', ROB: '--series-2', DIR: '--series-1', CRO: '--series-5' };
+          return `<span style="font-weight:700;color:${cssVar(COLORS[v] || '--text-secondary')}">${v}</span>`;
+        },
+      },
+      { title: 'Diễn giải', field: 'reason_name', headerFilter: 'input', widthGrow: 2 },
       { title: 'Part No (off)', field: 'partno_off', headerFilter: 'input' },
       { title: 'Serial No (off)', field: 'serialno_off', headerFilter: 'input' },
       { title: 'Batch No (off)', field: 'batchno_off', headerFilter: 'input'  },
       { title: 'Qty', field: 'qty_off', hozAlign: 'right' },
+      { title: 'Label', field: 'labelno', headerFilter: 'input' },
+      { title: 'Phiếu xuất (voucher_s)', field: 'voucher_issue', headerFilter: 'input' },
       { title: 'Station', field: 'station', headerFilter: 'input' },
       { title: 'Center', field: 'department', headerFilter: 'input' },
       { title: 'Staff', field: 'staff', headerFilter: 'input' },
@@ -796,6 +810,18 @@ async function loadReport(name) {
     $('#reportCount').textContent =
       `${data.count.toLocaleString('vi')} dòng` +
       (data.truncated ? ' ⚠ chạm giới hạn MAX_ROWS' : '');
+
+    // Bao cao "Other": thong ke nhanh theo MA LY DO (NOI/ROB/DIR/CRO)
+    if (name === 'other') {
+      const cnt = new Map();
+      (data.rows || []).forEach((r) => {
+        const k = r.reason_code || '—';
+        cnt.set(k, (cnt.get(k) || 0) + 1);
+      });
+      const order = ['NOI', 'ROB', 'DIR', 'CRO', '—'];
+      const parts = order.filter((k) => cnt.has(k)).map((k) => `${k}: ${cnt.get(k)}`);
+      if (parts.length) $('#reportDesc').textContent = def.desc + '  ▸ Thống kê kỳ này — ' + parts.join(' · ');
+    }
     if (!reportTable) {
       reportTable = new Tabulator('#reportTable', {
         data: data.rows,

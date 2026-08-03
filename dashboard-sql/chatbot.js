@@ -56,6 +56,16 @@ const DEFINITIONS = [
       'TAT tổng = TAT install + TAT US return + TAT CUVT. Đây là 3 chặng LIÊN TIẾP của cùng một vòng đời khí tài nên cộng lại được: (1) xuất kho → lắp lên tàu; (2) tháo khỏi tàu → trả unservice; (3) trả unservice → CUVT nhận. Trên biểu đồ "TAT tổng theo Trung tâm", 3 chặng được XẾP CHỒNG nên chiều cao cả cột chính là TAT tổng của trung tâm đó. Đơn vị: ngày.',
   },
   {
+    keys: ['other', 'on_ac', 'onac', 'noi', 'rob', 'dir', 'cro', 'ma ly do', 'khong co phieu xuat', 'robbery'],
+    answer:
+      'Báo cáo "Other (on_ac)" ghi nhận thiết bị ĐÃ TRẢ UNSERVICE nhưng CHƯA tìm được phiếu xuất service đối ứng; ghi chú on_ac cho biết lý do:\n' +
+      '• NOI = no issue pickslip — không có phiếu xuất kho tương ứng.\n' +
+      '• ROB = robbery — tháo thiết bị xuống trước (lấy từ tàu/thiết bị khác) nên không phát sinh phiếu xuất.\n' +
+      '• DIR = lắp thẳng lên tàu vật tư đang có trong kho, không qua phiếu xuất service.\n' +
+      '• CRO = tháo vật tư loại repairable / consumable.\n' +
+      'Tab Other có cột "Lý do" lọc được theo từng mã và dòng thống kê số lượng mỗi mã trong kỳ.',
+  },
+  {
     keys: ['tat install', 'tat lap', 'thoi gian lap'],
     answer:
       'TAT install = thời điểm LẮP lên tàu (on_off vm=YE, lần đầu tiên cùng labelno SAU giờ xuất kho) − thời điểm XUẤT KHO (kho_ser1). Đơn vị: ngày. Dòng thiếu sự kiện lắp thì để trống, không tính vào trung bình.',

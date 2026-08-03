@@ -264,10 +264,19 @@ function other(range, f) {
       department: rnd(DEPARTMENTS),
       del_staff: 'NV' + rndInt(100, 999),
       del_time: rndDate(range.from, range.to).toISOString(),
-      note: rnd(['Kiem tra lai', 'Cho vat tu', 'Hong nang', 'Chuyen xuong', 'Ghi chu khac']),
+      labelno: String(rndInt(100000, 999999)),
+      voucher_issue: '',
+      note: rnd(['NOI', 'ROB', 'DIR', 'CRO', 'Ghi chu khac']),
     });
   }
-  return applyFilter(rows, f);
+  // Giai ma ma ly do giong server that (NOI/ROB/DIR/CRO)
+  const NAMES = { NOI: 'Không có phiếu xuất', ROB: 'Robbery (tháo xuống trước)',
+    DIR: 'Lắp thẳng từ kho', CRO: 'Repairable / consumable' };
+  return applyFilter(rows, f).map((r) => {
+    const m = /(^|[^A-Z])(NOI|ROB|DIR|CRO)([^A-Z]|$)/.exec(String(r.note).toUpperCase());
+    const code = m ? m[2] : '';
+    return { ...r, reason_code: code, reason_name: code ? NAMES[code] : 'Khác / chưa phân loại' };
+  });
 }
 
 function filters() {

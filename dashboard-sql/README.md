@@ -98,7 +98,7 @@ Sau khi sửa code: `git pull` (hoặc copy) rồi `sc stop DashboardTAT & sc st
 | **Tháo chưa trả US** | `on_off vm='YA'` không có `real_us1` (link `historyno_`). |
 | **Chưa đối ứng** | Có xuất service nhưng không có trả unservice. |
 | **Tháo trước lắp sau** | Sự kiện `YA` trước `YE` cùng thiết bị → TAT riêng. |
-| **Other** | Note trong `on_ac` của `real_us1`. |
+| **Other (on_ac)** | Thiết bị **đã trả unservice** nhưng **chưa tìm được phiếu xuất service đối ứng**; ghi chú `on_ac` cho biết lý do. Mã: **NOI** = no issue pickslip (không có phiếu xuất) · **ROB** = robbery, tháo xuống trước · **DIR** = lắp thẳng lên tàu vật tư trong kho · **CRO** = tháo vật tư repairable/consumable. Server tự giải mã thành cột **Lý do** + **Diễn giải** (khớp nguyên từ nên không bắt nhầm `DIRECT`/`CROSS`); tab có bộ lọc theo mã và dòng thống kê số lượng mỗi mã trong kỳ. |
 
 ### Quy đổi giờ AMOS → VN
 
