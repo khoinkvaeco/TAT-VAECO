@@ -158,13 +158,15 @@ function kpiDelta(cur, prev, dir) {
 function renderKPIs(kpis, prev) {
   prev = prev || {};
   const cards = [
+    // TAT TONG = install + US return + CUVT (3 chang lien tiep cua 1 vong doi)
+    { label: 'TAT tổng (3 chặng)', value: kpis.tatTotalAvg, prev: prev.tatTotalAvg, dir: 'down', unit: 'ngày', accent: '--series-4' },
     { label: 'TAT install', value: kpis.tatInstallAvg, prev: prev.tatInstallAvg, dir: 'down', unit: 'ngày', accent: '--series-1' },
     { label: 'TAT US return', value: kpis.tatUsReturnAvg, prev: prev.tatUsReturnAvg, dir: 'down', unit: 'ngày', accent: '--series-8' },
     { label: 'TAT CUVT', value: kpis.tatCuvtAvg, prev: prev.tatCuvtAvg, dir: 'down', unit: 'ngày', accent: '--series-2' },
     { label: 'TAT hoàn kho', value: kpis.tatReturnStoreAvg, prev: prev.tatReturnStoreAvg, dir: 'down', unit: 'ngày', accent: '--series-5' },
     { label: 'Thiết bị xuất kho', value: kpis.countIssued, prev: prev.countIssued, dir: 'neutral', unit: 'thiết bị', accent: '--series-3' },
     { label: 'Chưa đối ứng', value: kpis.countNotReconciled, prev: prev.countNotReconciled, dir: 'down', unit: 'thiết bị', accent: '--series-6' },
-    { label: 'Tỷ lệ đối ứng', value: kpis.reconcileRate, prev: prev.reconcileRate, dir: 'up', unit: '%', accent: '--series-4' },
+    { label: 'Tỷ lệ đối ứng', value: kpis.reconcileRate, prev: prev.reconcileRate, dir: 'up', unit: '%', accent: '--series-7' },
     // SL da NHAN (reci) / SL da GIAO (del) cua CUVT trong ky (2 so -> khong tinh delta)
     { label: 'SL nhận / SL giao (CUVT)', value: `${kpis.cntReci ?? 0}/${kpis.cntDel ?? 0}`, unit: '', accent: '--series-7' },
   ];
@@ -231,18 +233,40 @@ function renderCharts(c) {
   const d = chartDefaults();
   const colors = seriesColors();
 
-  // 4.1 Bieu do cot theo Trung tam - 2 series: TAT install / TAT US return
+  // 4.1 Bieu do cot XEP CHONG theo Trung tam - 3 chang cong don = TAT tong:
+  //     install (xuat->lap) + US return (thao->tra US) + CUVT (tra US->CUVT nhan).
+  //     Chieu cao ca cot = TAT tong cua trung tam do.
   destroyChart('bar');
   charts.bar = new Chart($('#chartBarDept'), {
     type: 'bar',
     data: {
       labels: c.barDept.labels,
       datasets: [
-        { label: 'TAT install', data: c.barDept.install, backgroundColor: cssVar('--series-1'), borderRadius: 4 },
-        { label: 'TAT US return', data: c.barDept.usret, backgroundColor: cssVar('--series-8'), borderRadius: 4 },
+        { label: 'TAT install', data: c.barDept.install, backgroundColor: cssVar('--series-1') },
+        { label: 'TAT US return', data: c.barDept.usret, backgroundColor: cssVar('--series-8') },
+        { label: 'TAT CUVT', data: c.barDept.cuvt || [], backgroundColor: cssVar('--series-2'), borderRadius: 4 },
       ],
     },
-    options: { ...d.common, onClick: chartDrill(c.barDept.labels, 'department') },
+    options: {
+      ...d.common,
+      scales: {
+        x: { ...d.common.scales.x, stacked: true },
+        y: { ...d.common.scales.y, stacked: true },
+      },
+      plugins: {
+        ...d.common.plugins,
+        tooltip: {
+          callbacks: {
+            // Them dong TONG 3 chang o cuoi tooltip cho de doi chieu
+            footer: (items) => {
+              const t = items.reduce((s, it) => s + (Number(it.parsed.y) || 0), 0);
+              return `TAT tổng: ${Math.round(t * 10) / 10} ngày`;
+            },
+          },
+        },
+      },
+      onClick: chartDrill(c.barDept.labels, 'department'),
+    },
   });
 
   // 4.2 Bieu do tron - phan bo theo station (categorical theo thu tu)
@@ -558,6 +582,8 @@ const REPORT_DEFS = {
 // --------------------------------------------------------------------------
 let baseKpiInstall = 0; // TAT install goc (khoi phuc khi Dat lai)
 let baseKpiUsret = 0;   // TAT US return goc
+let baseKpiCuvt = 0;    // TAT CUVT goc (chang 3 - khong co trong bang chi tiet)
+let baseKpiTotal = 0;   // TAT tong goc (3 chang cong lai)
 let mainTotalRows = 0;  // tong so dong bang chi tiet (cho bo dem X/Y)
 let reportTotalRows = 0; // tong so dong bang bao cao (cho bo dem X/Y)
 
@@ -574,6 +600,8 @@ async function loadDashboard() {
     $('#rangeLabel').textContent = `${dash.range.label}: ${fmtDateTime(dash.range.from)} → ${fmtRangeEnd(dash.range.to)}`;
     baseKpiInstall = dash.kpis.tatInstallAvg;
     baseKpiUsret = dash.kpis.tatUsReturnAvg;
+    baseKpiCuvt = dash.kpis.tatCuvtAvg || 0;
+    baseKpiTotal = dash.kpis.tatTotalAvg || 0;
     renderKPIs(dash.kpis, dash.prevKpis);
     renderCharts(dash.charts);
 
@@ -638,23 +666,28 @@ function recalcTat() {
   );
   const newInstall = avgField(kept, 'tat_install_days');
   const newUsret = avgField(kept, 'tat_usreturn_days');
+  // TAT tong = 3 chang; chang CUVT khong nam trong bang chi tiet nen giu nguyen
+  const newTotal = Math.round((newInstall + newUsret + baseKpiCuvt) * 10) / 10;
 
-  setKpiCard(0, newInstall); // card "TAT install"
-  setKpiCard(1, newUsret);   // card "TAT US return"
+  setKpiCard(0, newTotal);   // card "TAT tổng (3 chặng)"
+  setKpiCard(1, newInstall); // card "TAT install"
+  setKpiCard(2, newUsret);   // card "TAT US return"
   const note = $('#recalcNote');
   note.classList.remove('hidden');
   note.innerHTML =
     `Đã loại <b>${excludedKeys.size}</b> mục (trên ${kept.length}/${all.length} thiết bị) · ` +
     `TAT install: <b>${newInstall}</b> ngày (gốc ${baseKpiInstall}) · ` +
-    `TAT US return: <b>${newUsret}</b> ngày (gốc ${baseKpiUsret}).`;
+    `TAT US return: <b>${newUsret}</b> ngày (gốc ${baseKpiUsret}) · ` +
+    `TAT tổng: <b>${newTotal}</b> ngày (gốc ${baseKpiTotal}, đã cộng TAT CUVT ${baseKpiCuvt}).`;
 }
 
 /** Bỏ tích tất cả checkbox và khôi phục TAT gốc. */
 function resetRecalc() {
   excludedKeys.clear();
   if (mainTable) mainTable.redraw(true); // ve lai de checkbox ve trang thai trong
-  setKpiCard(0, baseKpiInstall);
-  setKpiCard(1, baseKpiUsret);
+  setKpiCard(0, baseKpiTotal);
+  setKpiCard(1, baseKpiInstall);
+  setKpiCard(2, baseKpiUsret);
   $('#recalcNote').classList.add('hidden');
 }
 

@@ -51,6 +51,11 @@ function hasKey(n, key) {
 // ---------------------------------------------------------------------------
 const DEFINITIONS = [
   {
+    keys: ['tat tong', 'tong tat', 'tat toan chuoi', 'tat 3 chang', 'tat cong lai'],
+    answer:
+      'TAT tổng = TAT install + TAT US return + TAT CUVT. Đây là 3 chặng LIÊN TIẾP của cùng một vòng đời khí tài nên cộng lại được: (1) xuất kho → lắp lên tàu; (2) tháo khỏi tàu → trả unservice; (3) trả unservice → CUVT nhận. Trên biểu đồ "TAT tổng theo Trung tâm", 3 chặng được XẾP CHỒNG nên chiều cao cả cột chính là TAT tổng của trung tâm đó. Đơn vị: ngày.',
+  },
+  {
     keys: ['tat install', 'tat lap', 'thoi gian lap'],
     answer:
       'TAT install = thời điểm LẮP lên tàu (on_off vm=YE, lần đầu tiên cùng labelno SAU giờ xuất kho) − thời điểm XUẤT KHO (kho_ser1). Đơn vị: ngày. Dòng thiếu sự kiện lắp thì để trống, không tính vào trung bình.',
@@ -139,6 +144,7 @@ const USAGE = [
 // 2. NHAN DIEN CHI SO (metric) cho cau hoi so lieu
 // ---------------------------------------------------------------------------
 const METRICS = [
+  { keys: ['tat tong', 'tong tat', 'tat toan chuoi', 'tat 3 chang'], field: 'tatTotalAvg', label: 'TAT tổng (3 chặng)', unit: 'ngày' },
   { keys: ['tat install', 'tat lap'], field: 'tatInstallAvg', label: 'TAT install', unit: 'ngày' },
   { keys: ['us return', 'tat us', 'tra us'], field: 'tatUsReturnAvg', label: 'TAT US return', unit: 'ngày' },
   { keys: ['tat cuvt', 'cuvt'], field: 'tatCuvtAvg', label: 'TAT CUVT', unit: 'ngày' },

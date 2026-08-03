@@ -360,12 +360,31 @@ function dashboard(range, f) {
     (a, b) => (issuedCnt.get(b) || 0) - (issuedCnt.get(a) || 0)
   );
 
+  // TAT CUVT theo tung trung tam (chang 3) - de xep chong vao bieu do cot
+  const cuvtByDept = new Map();
+  {
+    const m = new Map();
+    cuvt.forEach((d) => {
+      const g = m.get(d.department) || { s: 0, c: 0 };
+      if (isFinite(d.tat_days)) { g.s += d.tat_days; g.c++; }
+      m.set(d.department, g);
+    });
+    for (const [k, g] of m) cuvtByDept.set(k, g.c ? r1(g.s / g.c) : 0);
+  }
+  const stackTotal = (x) => (x.avgI || 0) + (x.avgU || 0) + (cuvtByDept.get(x.key) || 0);
+  const byDeptStack = [...byDept2].sort((a, b) => stackTotal(b) - stackTotal(a));
+
+  const kInstall = r1(wavg(byDept2, 'avgI', 'cntI'));
+  const kUsret = r1(wavg(byDept2, 'avgU', 'cntU'));
+  const kCuvt = r1(avg(cuvt, (d) => d.tat_days));
+
   return {
     range: { from: range.from, to: range.to, label: range.label },
     kpis: {
-      tatInstallAvg: r1(wavg(byDept2, 'avgI', 'cntI')),
-      tatUsReturnAvg: r1(wavg(byDept2, 'avgU', 'cntU')),
-      tatCuvtAvg: r1(avg(cuvt, (d) => d.tat_days)),
+      tatInstallAvg: kInstall,
+      tatUsReturnAvg: kUsret,
+      tatCuvtAvg: kCuvt,
+      tatTotalAvg: r1(kInstall + kUsret + kCuvt),
       tatReturnStoreAvg: r1(avg(ret, (d) => d.tat_days)),
       countIssued: dept.length + nr.length,
       countNotReconciled: nr.length,
@@ -376,10 +395,12 @@ function dashboard(range, f) {
     },
     charts: {
       barDept: {
-        labels: byDept2.map((x) => x.key),
-        install: byDept2.map((x) => r1(x.avgI)),
-        usret: byDept2.map((x) => r1(x.avgU)),
-        counts: byDept2.map((x) => x.count),
+        labels: byDeptStack.map((x) => x.key),
+        install: byDeptStack.map((x) => r1(x.avgI)),
+        usret: byDeptStack.map((x) => r1(x.avgU)),
+        cuvt: byDeptStack.map((x) => cuvtByDept.get(x.key) || 0),
+        total: byDeptStack.map((x) => r1(stackTotal(x))),
+        counts: byDeptStack.map((x) => x.count),
       },
       pieStation: { labels: pieOrder.map((s) => (s === 'OTHER' ? 'Khác' : s)), values: pieOrder.map((s) => stMap.get(s) || 0) },
       deptVolume: {

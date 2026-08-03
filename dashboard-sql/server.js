@@ -1248,15 +1248,18 @@ async function qDashboardAgg(range, f) {
     ) x
     GROUP BY x.department;
 
-    -- [1] TAT CUVT (scalar)
-    SELECT COUNT(*) AS cnt,
+    -- [1] TAT CUVT theo Trung tam (chang 3: tra US -> CUVT nhan).
+    --     GROUP BY de xep chong duoc vao bieu do; tong the = trung binh CO TRONG SO
+    --     theo cnt (bang dung AVG tren toan bo dong).
+    SELECT ${deptR} AS department, COUNT(*) AS cnt,
            AVG(CAST(DATEDIFF(MINUTE, r.[del_time], r.[reci_time]) AS float) / 1440.0) AS avg_tat
     FROM [NQT].[dbo].[real_us1] r
     ${signJoin('r.[action_per]', 'sm')}
     WHERE r.[del_time] IS NOT NULL AND r.[reci_time] IS NOT NULL
       AND r.[reci_time] >= r.[del_time]
       AND r.[del_time] >= @from AND r.[del_time] < @to
-      ${wCuvt};
+      ${wCuvt}
+    GROUP BY ${deptR};
 
     -- [2] TAT hoan kho theo Trung tam
     SELECT ${deptT} AS department, COUNT(*) AS cnt,
@@ -1349,7 +1352,7 @@ async function qDashboardAgg(range, f) {
     GROUP BY s.station;`;
 
   const [deptAgg, cuvtAgg, retAgg, notRecAgg, retUSAgg, niAgg, stationAgg] = await queryMulti(text, params);
-  return { deptAgg, cuvtAgg: cuvtAgg[0], retAgg, notRecAgg, retUSAgg, niAgg: niAgg[0], stationAgg };
+  return { deptAgg, cuvtAgg, retAgg, notRecAgg, retUSAgg, niAgg: niAgg[0], stationAgg };
 }
 
 /** Dung ket qua aggregate SQL de tao KPI + charts (chinh xac tren toan bo du lieu). */
@@ -1379,14 +1382,24 @@ function buildDashboardFromAgg(range, agg) {
   // So luong CUVT: reci = so thiet bi da NHAN (real_us1.reci_time hop le, cuvtAgg.cnt);
   // del = tong so thiet bi da GIAO/tra unservice trong ky (real_us1.del_time,
   // = tong retUSAgg.cnt - cung dieu kien filter voi cuvtAgg nen so sanh duoc truc tiep).
-  const cntReci = agg.cuvtAgg?.cnt || 0;
+  const cuvtAgg = agg.cuvtAgg || [];
+  const cntReci = sum(cuvtAgg, (x) => x.cnt);
   const cntDel = sum(agg.retUSAgg, (x) => x.cnt);
 
+  // 3 chang cua CUNG mot vong doi -> cong lai = TAT tong:
+  //   [1] install: xuat kho -> lap len tau
+  //   [2] US return: thao khoi tau -> tra unservice
+  //   [3] CUVT: tra unservice -> CUVT nhan
+  const tatInstallAvg = round1(wavgBy(deptTat, 'avg_install', 'cnt_install'));
+  const tatUsReturnAvg = round1(wavgBy(deptTat, 'avg_usret', 'cnt_usret'));
+  const tatCuvtAvg = round1(wavgBy(cuvtAgg, 'avg_tat', 'cnt'));
+
   const kpis = {
-    // TAT tach 2 thanh phan (thay cho TAT TB tong truoc day) - KHONG gom CUVT
-    tatInstallAvg: round1(wavgBy(deptTat, 'avg_install', 'cnt_install')),
-    tatUsReturnAvg: round1(wavgBy(deptTat, 'avg_usret', 'cnt_usret')),
-    tatCuvtAvg: round1(agg.cuvtAgg?.avg_tat || 0),
+    // TAT tach 3 thanh phan + TAT TONG (cong 3 chang)
+    tatInstallAvg,
+    tatUsReturnAvg,
+    tatCuvtAvg,
+    tatTotalAvg: round1(tatInstallAvg + tatUsReturnAvg + tatCuvtAvg),
     tatReturnStoreAvg: round1(wavg(agg.retAgg)),
     countIssued: reconciled + notRec,
     countNotReconciled: notRec,
@@ -1396,12 +1409,18 @@ function buildDashboardFromAgg(range, agg) {
     cntDel,
   };
 
-  // Bieu do cot theo Trung tam: 2 series (install / US return) - KHONG gom CUVT
-  const byDept = [...deptTat].sort((a, b) => (b.avg_install || 0) - (a.avg_install || 0));
+  // Bieu do cot XEP CHONG theo Trung tam: 3 chang cong don = TAT tong cua don vi.
+  // Sap xep theo TONG 3 chang (cot cao nhat = don vi cham nhat toan chuoi).
+  const cuvtByDept = new Map(cuvtAgg.map((x) => [x.department, round1(x.avg_tat)]));
+  const stackTotal = (x) =>
+    (x.avg_install || 0) + (x.avg_usret || 0) + (cuvtByDept.get(x.department) || 0);
+  const byDept = [...deptTat].sort((a, b) => stackTotal(b) - stackTotal(a));
   const barDept = {
     labels: byDept.map((x) => x.department),
     install: byDept.map((x) => round1(x.avg_install)),
     usret: byDept.map((x) => round1(x.avg_usret)),
+    cuvt: byDept.map((x) => cuvtByDept.get(x.department) || 0),
+    total: byDept.map((x) => round1(stackTotal(x))),
     counts: byDept.map((x) => x.cnt),
   };
 
@@ -1995,7 +2014,7 @@ async function chatAnswerKpi(intent, ctx) {
 
   // Khong chi ro chi so -> tom tat cac KPI chinh
   return `${ctxLine}\n` +
-    ['tatInstallAvg', 'tatUsReturnAvg', 'tatCuvtAvg', 'tatReturnStoreAvg',
+    ['tatTotalAvg', 'tatInstallAvg', 'tatUsReturnAvg', 'tatCuvtAvg', 'tatReturnStoreAvg',
      'countIssued', 'countNotReconciled', 'reconcileRate'].map(fmtMetric).join('\n');
 }
 
@@ -2243,6 +2262,7 @@ function deltaTxt(cur, prev, downGood) {
 /** Adaptive Card KPI cho Teams Workflows. */
 function buildTeamsCard(label, k, p) {
   const facts = [
+    { title: 'TAT tổng (3 chặng)', value: `${k.tatTotalAvg} ngày${deltaTxt(k.tatTotalAvg, p.tatTotalAvg, true)}` },
     { title: 'TAT install', value: `${k.tatInstallAvg} ngày${deltaTxt(k.tatInstallAvg, p.tatInstallAvg, true)}` },
     { title: 'TAT US return', value: `${k.tatUsReturnAvg} ngày${deltaTxt(k.tatUsReturnAvg, p.tatUsReturnAvg, true)}` },
     { title: 'TAT hoàn kho', value: `${k.tatReturnStoreAvg} ngày${deltaTxt(k.tatReturnStoreAvg, p.tatReturnStoreAvg, true)}` },
@@ -2288,6 +2308,7 @@ function kpiTable(kpis, prevKpis) {
     return Math.round(((c - p) / Math.abs(p)) * 1000) / 10;
   };
   return [
+    ['TAT tổng (ngày) = install + US return + CUVT', kpis.tatTotalAvg, prevKpis.tatTotalAvg],
     ['TAT install (ngày)', kpis.tatInstallAvg, prevKpis.tatInstallAvg],
     ['TAT US return (ngày)', kpis.tatUsReturnAvg, prevKpis.tatUsReturnAvg],
     ['TAT CUVT (ngày)', kpis.tatCuvtAvg, prevKpis.tatCuvtAvg],
@@ -2830,7 +2851,7 @@ app.get(
       const k = dash.kpis;
       return {
         month: mstr,
-        tatInstall: k.tatInstallAvg, tatUsReturn: k.tatUsReturnAvg, tatReturnStore: k.tatReturnStoreAvg,
+        tatTotal: k.tatTotalAvg, tatInstall: k.tatInstallAvg, tatUsReturn: k.tatUsReturnAvg, tatReturnStore: k.tatReturnStoreAvg,
         issued: k.countIssued, notReconciled: k.countNotReconciled, reconcileRate: k.reconcileRate,
         cntReci: k.cntReci, cntDel: k.cntDel,
       };

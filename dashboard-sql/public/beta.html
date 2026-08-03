@@ -167,6 +167,7 @@
           labels: series.map((x) => x.month),
           datasets: [
             { type: 'bar', label: 'Chưa đối ứng', data: series.map((x) => x.notReconciled), yAxisID: 'y1', backgroundColor: cssVar('--series-6') + '99', order: 3 },
+            { type: 'line', label: 'TAT tổng (3 chặng)', data: series.map((x) => x.tatTotal), yAxisID: 'y', borderColor: cssVar('--series-4'), backgroundColor: cssVar('--series-4'), borderWidth: 3, tension: .3, order: 0 },
             { type: 'line', label: 'TAT install', data: series.map((x) => x.tatInstall), yAxisID: 'y', borderColor: cssVar('--series-1'), backgroundColor: cssVar('--series-1'), tension: .3, order: 1 },
             { type: 'line', label: 'TAT US return', data: series.map((x) => x.tatUsReturn), yAxisID: 'y', borderColor: cssVar('--series-8'), backgroundColor: cssVar('--series-8'), tension: .3, order: 2 },
           ],
