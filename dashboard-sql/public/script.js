@@ -551,6 +551,51 @@ const REPORT_DEFS = {
       { title: 'TAT (now)', field: 'tat_days', formatter: fmtTatCell, hozAlign: 'right', sorter: 'number' },
     ],
   },
+  'manual-pair': {
+    title: 'Đối ứng thủ công — thiết bị tháo/lắp có LABEL LỆCH NHAU',
+    desc: 'Trường hợp bất thường: tháo thiết bị này xuống, lắp thiết bị khác lên → label của 2 cái khác nhau nên chương trình không tự đối ứng được. Cột "Cách ghép" cho biết cặp gợi ý tìm bằng nguồn nào (độ tin cậy giảm dần: WO_PART_ON_OFF → cùng orderno/psn → cùng tàu). Kiểm tra rồi bấm ✔ Xác nhận — thiết bị sẽ hết nằm trong "Chưa đối ứng" và được tính vào KPI.',
+    columns: [
+      { title: 'PN xuất (lắp lên)', field: 'partno', headerFilter: 'input' },
+      { title: 'SN xuất', field: 'serialno', headerFilter: 'input' },
+      { title: 'Label xuất', field: 'labelno', headerFilter: 'input' },
+      { title: 'Phiếu xuất', field: 'voucher_issue', headerFilter: 'input' },
+      { title: 'Ngày Giờ xuất', field: 'issue_time_vn', formatter: fmtDateCell },
+      { title: 'Tồn (ngày)', field: 'tat_days', formatter: fmtTatCell, hozAlign: 'right', sorter: 'number' },
+      // --- Cặp GỢI Ý: thiết bị đã tháo xuống ---
+      { title: 'PN tháo (gợi ý)', field: 'sug_partno_off', headerFilter: 'input' },
+      { title: 'SN tháo (gợi ý)', field: 'sug_serialno_off', headerFilter: 'input' },
+      { title: 'Label trả', field: 'sug_ret_labelno', headerFilter: 'input' },
+      { title: 'Giờ trả US', field: 'sug_ret_del_time', formatter: fmtDateCell },
+      { title: 'TAT nếu ghép', field: 'sug_tat_days', formatter: fmtTatCell, hozAlign: 'right', sorter: 'number' },
+      {
+        title: 'Cách ghép', field: 'match_method', headerFilter: 'input',
+        formatter: (cell) => cell.getValue() || '<span style="color:var(--text-muted)">— không tìm được —</span>',
+      },
+      {
+        title: 'Tin cậy', field: 'confidence', hozAlign: 'center',
+        headerFilter: 'list',
+        headerFilterParams: { values: { '': 'Tất cả', 'Cao': 'Cao', 'Trung bình': 'Trung bình', 'Thấp': 'Thấp' } },
+        formatter: (cell) => {
+          const v = cell.getValue();
+          if (!v) return '';
+          const color = v === 'Cao' ? 'var(--good)' : (v === 'Thấp' ? 'var(--critical)' : 'var(--warning)');
+          return `<span style="color:${color};font-weight:700">${v}</span>`;
+        },
+      },
+      { title: 'Center', field: 'department', headerFilter: 'input' },
+      { title: 'Station', field: 'station', headerFilter: 'input' },
+      // Nút xác nhận cặp (chỉ hiện khi tìm được gợi ý)
+      {
+        title: 'Đối ứng', field: '_confirm', headerSort: false, hozAlign: 'center', width: 120,
+        formatter: (cell) => {
+          const d = cell.getRow().getData();
+          if (!d.sug_serialno_off) return '<span style="color:var(--text-muted)">—</span>';
+          return '<button class="btn-accent" style="padding:2px 8px;font-size:11px">✔ Xác nhận</button>';
+        },
+        cellClick: (e, cell) => confirmManualPair(cell.getRow()),
+      },
+    ],
+  },
   'removed-before-installed': {
     title: 'Tháo trước, lắp sau (ngày xuất kho SAU ngày lắp)',
     desc: 'Liên kết theo labelno. Thiết bị THÁO (tháo trước) và thiết bị XUẤT KHO (phiếu xuất làm sau ngày lắp) được hiển thị riêng để dễ đối chiếu.',
@@ -1187,6 +1232,45 @@ function initChat() {
   $$('#chatQuick button').forEach((b) =>
     b.addEventListener('click', () => { open(); chatSend(b.dataset.q); })
   );
+}
+
+/** Xac nhan 1 cap doi ung THU CONG (label lech) -> luu o server, bo dong khoi
+ *  bang va tai lai dashboard de KPI cap nhat ngay. */
+async function confirmManualPair(row) {
+  const d = row.getData();
+  if (!d.sug_serialno_off) return;
+  const msg =
+    `Xác nhận đối ứng?\n\n` +
+    `Thiết bị XUẤT: ${d.partno || ''} / ${d.serialno || ''} (label ${d.labelno || ''}, phiếu ${d.voucher_issue || ''})\n` +
+    `Thiết bị THÁO: ${d.sug_partno_off || ''} / ${d.sug_serialno_off || ''}` +
+    (d.sug_ret_labelno ? ` (label trả ${d.sug_ret_labelno})` : ' (chưa thấy bản ghi trả US)') + `\n` +
+    `Cách ghép: ${d.match_method || '—'} · Độ tin cậy: ${d.confidence || '—'}\n\n` +
+    `Sau khi xác nhận, thiết bị này hết nằm trong "Chưa đối ứng" và được tính vào KPI.`;
+  if (!confirm(msg)) return;
+  try {
+    const res = await fetch('/api/admin/manual-pair/confirm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        issueLabel: d.labelno, issueVoucher: d.voucher_issue,
+        issuePartno: d.partno, issueSerialno: d.serialno,
+        issueTimeVn: d.issue_time_vn,
+        department: d.department, station: d.station, store: d.store,
+        offPartno: d.sug_partno_off, offSerialno: d.sug_serialno_off,
+        retLabelno: d.sug_ret_labelno, retVoucher: d.sug_ret_voucher,
+        retDelTime: d.sug_ret_del_time, tatDays: d.sug_tat_days,
+        matchMethod: d.match_method, confidence: d.confidence,
+      }),
+    });
+    const out = await res.json();
+    if (!res.ok || out.error) throw new Error(out.message || `Lỗi ${res.status}`);
+    row.delete();                 // bo dong da xu ly khoi bang
+    reportCache.clear();          // so lieu bao cao da doi
+    loadDashboard();              // KPI "Chua doi ung" / "Ty le doi ung" cap nhat
+  } catch (err) {
+    showError('Không lưu được cặp đối ứng: ' + err.message +
+      ' (chức năng này chỉ dùng được từ máy quản trị)');
+  }
 }
 
 /** Filter "tim kiem tren moi cot" cho Tabulator. */

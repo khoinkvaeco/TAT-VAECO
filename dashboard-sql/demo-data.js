@@ -494,8 +494,34 @@ function partOnOff(crit) {
   return rows;
 }
 
+/** Ung vien doi ung THU CONG mau (label lech) cho DEMO_MODE. */
+function manualPairCandidates(range, f) {
+  const rows = notReconciled(range, f).slice(0, 12);
+  const METHODS = [
+    ['WO_PART_ON_OFF', 'Cao'],
+    ['Cùng orderno/psn', 'Trung bình'],
+    ['Cùng tàu, gần thời gian', 'Thấp'],
+  ];
+  return rows.map((r, i) => {
+    const [method, conf] = METHODS[i % 3];
+    const del = new Date(Date.now() - rndInt(1, 20) * 86400000);
+    return {
+      ...r,
+      sug_partno_off: 'PN-' + pad(rndInt(100, 999)),
+      sug_serialno_off: 'SN' + rndInt(10000, 99999),
+      match_method: method,
+      confidence: conf,
+      sug_ret_labelno: String(rndInt(100000, 999999)), // label KHAC voi phieu xuat
+      sug_ret_voucher: 'P-' + rndInt(100000, 999999),
+      sug_ret_del_time: del.toISOString(),
+      sug_tat_days: Math.round(rndInt(5, 300) / 10) / 10 + 1,
+    };
+  });
+}
+
 module.exports = {
   filters,
+  manualPairCandidates,
   deviceLookup,
   partOnOff,
   reconcileStatus,

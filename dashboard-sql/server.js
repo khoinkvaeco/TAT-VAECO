@@ -474,6 +474,83 @@ function recertExists(kAlias) {
 }
 
 // ---------------------------------------------------------------------------
+// 3d. DOI UNG THU CONG (cap thao <-> lap co LABEL LECH NHAU)
+//     Nghiep vu: co ca "thao truoc, lap thiet bi khac len" -> label cua thiet bi
+//     THAO va thiet bi XUAT KHO khac nhau nen join theo labelno KHONG tim duoc
+//     doi ung. Nguoi dung xem goi y, XAC NHAN cap -> luu vao file JSON noi bo;
+//     tu do phieu xuat do KHONG con nam trong "chua doi ung" va duoc tinh la
+//     DA doi ung trong KPI.
+// ---------------------------------------------------------------------------
+const MANUAL_PAIR_FILE = path.join(DATA_DIR_EARLY(), 'reconcile-manual.json');
+
+/** DATA_DIR duoc khai bao o muc 7c (sau doan nay) -> ham nho de dung som. */
+function DATA_DIR_EARLY() {
+  return path.join(__dirname, 'data');
+}
+
+function loadManualPairs() {
+  try {
+    if (!fs.existsSync(MANUAL_PAIR_FILE)) return [];
+    const arr = JSON.parse(fs.readFileSync(MANUAL_PAIR_FILE, 'utf8'));
+    return Array.isArray(arr) ? arr : [];
+  } catch (e) {
+    console.warn('[PAIR] Khong doc duoc reconcile-manual.json:', e.message);
+    return [];
+  }
+}
+
+function saveManualPairs(arr) {
+  const dir = DATA_DIR_EARLY();
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(MANUAL_PAIR_FILE, JSON.stringify(arr, null, 2), 'utf8');
+}
+
+/** Khoa duy nhat cua 1 cap = (labelno phieu xuat, voucherno phieu xuat). */
+const pairKey = (label, voucher) =>
+  `${String(label ?? '').trim()}|${String(voucher ?? '').trim().toUpperCase()}`;
+
+/** Cac cap doi ung thu cong THUOC KY + khop bo loc dang chon (station/store/
+ *  department). Luc XAC NHAN da luu san cac truong nay nen loc duoc o JS. */
+function manualPairsInRange(range, f) {
+  const from = new Date(String(range.from) + 'Z').getTime();
+  const to = new Date(String(range.to) + 'Z').getTime();
+  const eq = (a, b) => String(a ?? '').trim().toUpperCase() === String(b ?? '').trim().toUpperCase();
+  return loadManualPairs().filter((p) => {
+    const t = new Date(String(p.issueTimeVn || '').replace(/Z?$/, 'Z')).getTime();
+    if (!isFinite(t) || t < from || t >= to) return false;
+    if (f && f.station && !eq(p.station, f.station)) return false;
+    if (f && f.store && !eq(p.store, f.store)) return false;
+    if (f && f.department && !eq(p.department, f.department)) return false;
+    return true;
+  });
+}
+const countManualPairsInRange = (range, f) => manualPairsInRange(range, f).length;
+
+/**
+ * Manh SQL loai cac phieu xuat DA duoc doi ung THU CONG ra khoi "chua doi ung".
+ * Nhung cap da xac nhan duoc truyen vao bang THAM SO (@mpL0/@mpV0...) - khong
+ * noi chuoi truc tiep de tranh SQL injection. Khong co cap nao -> chuoi rong.
+ * @param {string} kAlias alias bang kho_ser1
+ * @param {Object} params doi tuong tham so cua query (duoc them @mpL_i, @mpV_i)
+ */
+function manualPairExclude(kAlias, params) {
+  const pairs = loadManualPairs();
+  if (!pairs.length) return '';
+  const values = pairs.map((p, i) => {
+    params[`mpL${i}`] = String(p.issueLabel ?? '');
+    params[`mpV${i}`] = String(p.issueVoucher ?? '');
+    return `(@mpL${i}, @mpV${i})`;
+  });
+  return `
+      AND NOT EXISTS (
+        SELECT 1 FROM (VALUES ${values.join(', ')}) AS mp(labelno, voucherno)
+        WHERE (TRY_CONVERT(float, mp.labelno) = TRY_CONVERT(float, ${kAlias}.[labelno])
+               OR UPPER(RTRIM(mp.labelno)) = UPPER(RTRIM(${kAlias}.[labelno])))
+          AND UPPER(RTRIM(mp.voucherno)) = UPPER(RTRIM(${kAlias}.[voucherno]))
+      )`;
+}
+
+// ---------------------------------------------------------------------------
 // 4. TAO KHOANG THOI GIAN (thang / tuan)
 // ---------------------------------------------------------------------------
 
@@ -981,7 +1058,145 @@ async function qNotReconciled(range, f) {
       )
       -- Bo qua neu da doi ung kieu TRA SERVICE (thao YA -> recertify CI @SHOPLOC)
       AND NOT ${recertExists('k')}
+      ${manualPairExclude('k', params)}
       AND k.[mutation] BETWEEN @fromDay AND @toDay  -- loc tho theo index (sargable)
+      AND ${amosToVN('k')} >= @from AND ${amosToVN('k')} < @to
+      ${where}
+    ORDER BY issue_time_vn DESC`;
+  return query(text, params);
+}
+
+/**
+ * BAO CAO: DOI UNG THU CONG - cac phieu xuat CHUA doi ung, kem CAP GOI Y
+ * (thiet bi da thao xuong) tim theo 3 cach, UU TIEN DAN:
+ *   [1] WO_PART_ON_OFF: 1 dong ghi CA thiet bi lap (PARTNO/SERIALNO) va thiet bi
+ *       thao (PARTNO_OFF/SERIALNO_OFF) -> cap CHINH XAC do AMOS ghi. Do cot nay
+ *       nam tren linked server Oracle nen keo VE MOT LAN bang bang con (KHONG
+ *       OUTER APPLY tung dong -> tranh loi OLE DB nhu bai hoc voi bang SIGN).
+ *   [2] on_off cung ORDERNO/PSN: YE (lap thiet bi vua xuat) va YA (thao) cung
+ *       phieu cong viec.
+ *   [3] on_off cung SO TAU: lan thao YA gan nhat TRUOC gio lap YE tren cung tau.
+ * Sau khi co thiet bi thao -> tim ban ghi TRA UNSERVICE (real_us1) cua no de
+ * biet da tra ve kho hay chua (do chinh la ve con lai cua cap doi ung).
+ */
+async function qManualPairCandidates(range, f) {
+  const params = { from: range.from, to: range.to, tzOffset: CONFIG.tzOffset, top: CONFIG.maxRows, ...amosDayParams(range) };
+  // Noi rong cua so WO_PART_ON_OFF +/- 90 ngay quanh ky (thao/lap co the lech ky)
+  params.woFrom = params.fromDay - 90;
+  params.woTo = params.toDay + 90;
+  const dept = deptFromStaff('k.[created_b2]', 'sm');
+  let where = buildFilterClause(
+    f,
+    { station: 'k.[station]', store: 'k.[store]', department: dept },
+    params
+  );
+  const text = `
+    SELECT TOP (@top)
+      k.[partno]     AS partno,          -- thiet bi XUAT KHO (lap len tau)
+      k.[serialno]   AS serialno,
+      k.[labelno]    AS labelno,         -- label cua phieu xuat
+      k.[descriptio] AS description,
+      k.[voucherno]  AS voucher_issue,
+      k.[station]    AS station,
+      k.[store]      AS store,
+      k.[ac_registr] AS ac_registr,
+      k.[created_b2] AS staff,
+      ${dept} AS department,
+      ${amosToVN('k')} AS issue_time_vn,
+      CAST(DATEDIFF(MINUTE, ${amosToVN('k')}, GETDATE()) AS float) / 1440.0 AS tat_days,
+      -- Cap GOI Y: thiet bi da THAO (uu tien [1] -> [2] -> [3])
+      COALESCE(w.part_off,  o2.partno_off, o3.partno_off)   AS sug_partno_off,
+      COALESCE(w.serial_off, o2.serialno_off, o3.serialno_off) AS sug_serialno_off,
+      CASE
+        WHEN w.serial_off IS NOT NULL  THEN N'WO_PART_ON_OFF'
+        WHEN o2.serialno_off IS NOT NULL THEN N'Cùng orderno/psn'
+        WHEN o3.serialno_off IS NOT NULL THEN N'Cùng tàu, gần thời gian'
+        ELSE NULL
+      END AS match_method,
+      CASE
+        WHEN w.serial_off IS NOT NULL  THEN N'Cao'
+        WHEN o2.serialno_off IS NOT NULL THEN N'Trung bình'
+        WHEN o3.serialno_off IS NOT NULL THEN N'Thấp'
+        ELSE NULL
+      END AS confidence,
+      -- Ban ghi TRA UNSERVICE cua thiet bi thao (ve con lai cua cap)
+      ret.ret_labelno   AS sug_ret_labelno,
+      ret.ret_voucher   AS sug_ret_voucher,
+      ret.ret_del_time  AS sug_ret_del_time,
+      CASE WHEN ret.ret_del_time IS NOT NULL
+        THEN CAST(DATEDIFF(MINUTE, ${amosToVN('k')}, ret.ret_del_time) AS float) / 1440.0
+      END AS sug_tat_days
+    FROM [NQT].[dbo].[kho_ser1] k
+    LEFT JOIN [NQT].[dbo].[real_us1] r
+      ON k.[labelno] = r.[labelno] AND k.[voucherno] = r.[voucher_s]
+    -- [1] Cap tu WO_PART_ON_OFF (keo ve MOT LAN roi LEFT JOIN - khong hoi
+    --     linked server theo tung dong)
+    LEFT JOIN (
+      SELECT z.partno_on, z.serialno_on, z.part_off, z.serial_off
+      FROM (
+        SELECT RTRIM(x.[PARTNO]) AS partno_on, RTRIM(x.[SERIALNO]) AS serialno_on,
+               RTRIM(x.[PARTNO_OFF]) AS part_off, RTRIM(x.[SERIALNO_OFF]) AS serial_off,
+               ROW_NUMBER() OVER (
+                 PARTITION BY RTRIM(x.[PARTNO]), RTRIM(x.[SERIALNO])
+                 ORDER BY TRY_CONVERT(float, x.[MUTATION]) DESC
+               ) AS rn
+        FROM [DWH_DB]..[STG_AMOS].[WO_PART_ON_OFF] x
+        WHERE x.[MUTATION] BETWEEN @woFrom AND @woTo
+          AND x.[SERIALNO_OFF] IS NOT NULL
+          AND LTRIM(RTRIM(x.[SERIALNO_OFF])) <> ''
+      ) z
+      WHERE z.rn = 1
+    ) w ON w.partno_on = RTRIM(k.[partno]) AND w.serialno_on = RTRIM(k.[serialno])
+    -- [2] Cung ORDERNO/PSN: YE lap thiet bi vua xuat <-> YA thao
+    OUTER APPLY (
+      SELECT TOP 1 ya.[partno] AS partno_off, ya.[serialno] AS serialno_off
+      FROM [NQT].[dbo].[on_off] ye
+      INNER JOIN [NQT].[dbo].[on_off] ya
+        ON ya.[orderno] = ye.[orderno] AND ya.[psn] = ye.[psn] AND ya.[vm] = 'YA'
+      WHERE ye.[vm] = 'YE'
+        AND ye.[partno] = k.[partno] AND ye.[serialno] = k.[serialno]
+        AND ye.[mut_t] >= ${amosToVN('k')}
+      ORDER BY ye.[mut_t] ASC
+    ) o2
+    -- [3] Cung SO TAU: YA gan nhat TRUOC gio lap YE
+    OUTER APPLY (
+      SELECT TOP 1 ya.[partno] AS partno_off, ya.[serialno] AS serialno_off
+      FROM [NQT].[dbo].[on_off] ye
+      INNER JOIN [NQT].[dbo].[on_off] ya
+        ON ya.[ac_registr] = ye.[ac_registr] AND ya.[vm] = 'YA'
+       AND ya.[mut_t] <= ye.[mut_t]
+      WHERE ye.[vm] = 'YE'
+        AND ye.[partno] = k.[partno] AND ye.[serialno] = k.[serialno]
+        AND ye.[mut_t] >= ${amosToVN('k')}
+        AND ye.[ac_registr] IS NOT NULL
+      ORDER BY ye.[mut_t] ASC, ya.[mut_t] DESC
+    ) o3
+    -- Ban ghi tra unservice cua thiet bi THAO (theo cap goi y o tren)
+    OUTER APPLY (
+      SELECT TOP 1 r2.[labelno] AS ret_labelno, r2.[voucher_s] AS ret_voucher,
+             r2.[del_time] AS ret_del_time
+      FROM [NQT].[dbo].[real_us1] r2
+      WHERE RTRIM(r2.[serialno_o]) = COALESCE(w.serial_off, o2.serialno_off, o3.serialno_off)
+        AND r2.[del_time] IS NOT NULL
+        AND r2.[del_time] >= ${amosToVN('k')}
+      ORDER BY r2.[del_time] ASC
+    ) ret
+    ${signJoin('k.[created_b2]', 'sm')}
+    WHERE k.[vm] = 'T'
+      AND k.[voucherno] LIKE 'P-%'
+      AND LTRIM(RTRIM(ISNULL(k.[costcenter], ''))) <> 'VN-SPL'
+      AND UPPER(LTRIM(RTRIM(ISNULL(k.[store], '')))) NOT IN ('MAIN','3RD')
+      AND UPPER(LTRIM(RTRIM(ISNULL(k.[condition], '')))) <> 'US'
+      AND ${dept} <> 'CUVT'
+      AND r.[partno] IS NULL                       -- chua doi ung theo label
+      AND NOT EXISTS (
+        SELECT 1 FROM [NQT].[dbo].[kho_ser1] tc
+        WHERE tc.[vm] = 'TC' AND tc.[voucherno] LIKE 'P-CA-%'
+          AND tc.[partno] = k.[partno] AND tc.[serialno] = k.[serialno]
+          AND tc.[labelno] = k.[labelno])
+      AND NOT ${recertExists('k')}                 -- chua doi ung kieu tra service
+      ${manualPairExclude('k', params)}            -- chua duoc doi ung THU CONG
+      AND k.[mutation] BETWEEN @fromDay AND @toDay
       AND ${amosToVN('k')} >= @from AND ${amosToVN('k')} < @to
       ${where}
     ORDER BY issue_time_vn DESC`;
@@ -1294,6 +1509,7 @@ async function qDashboardAgg(range, f) {
           AND tc.[partno] = k.[partno] AND tc.[serialno] = k.[serialno] AND tc.[labelno] = k.[labelno])
       -- Bo qua neu da doi ung kieu TRA SERVICE (recertify)
       AND NOT ${recertExists('k')}
+      ${manualPairExclude('k', params)}
       AND k.[mutation] BETWEEN @fromDay AND @toDay
       AND ${amosToVN('k')} >= @from AND ${amosToVN('k')} < @to
       ${wNotRec}
@@ -1356,7 +1572,7 @@ async function qDashboardAgg(range, f) {
 }
 
 /** Dung ket qua aggregate SQL de tao KPI + charts (chinh xac tren toan bo du lieu). */
-function buildDashboardFromAgg(range, agg) {
+function buildDashboardFromAgg(range, agg, f) {
   const sum = (arr, sel) => arr.reduce((a, b) => a + (Number(sel(b)) || 0), 0);
   const wavg = (arr) => {
     const c = sum(arr, (x) => x.cnt);
@@ -1393,6 +1609,8 @@ function buildDashboardFromAgg(range, agg) {
   const tatInstallAvg = round1(wavgBy(deptTat, 'avg_install', 'cnt_install'));
   const tatUsReturnAvg = round1(wavgBy(deptTat, 'avg_usret', 'cnt_usret'));
   const tatCuvtAvg = round1(wavgBy(cuvtAgg, 'avg_tat', 'cnt'));
+  // So cap doi ung THU CONG thuoc ky nay (loc theo gio xuat + bo loc dang chon)
+  const manualCnt = countManualPairsInRange(range, f);
 
   const kpis = {
     // TAT tach 3 thanh phan + TAT TONG (cong 3 chang)
@@ -1401,10 +1619,15 @@ function buildDashboardFromAgg(range, agg) {
     tatCuvtAvg,
     tatTotalAvg: round1(tatInstallAvg + tatUsReturnAvg + tatCuvtAvg),
     tatReturnStoreAvg: round1(wavg(agg.retAgg)),
-    countIssued: reconciled + notRec,
+    // Cap doi ung THU CONG (label lech, nguoi dung da xac nhan) -> tinh la DA
+    // doi ung: da bi loai khoi notRec o SQL nen cong vao 'reconciled' de tong
+    // so thiet bi xuat kho khong doi.
+    countIssued: reconciled + manualCnt + notRec,
     countNotReconciled: notRec,
+    countManualPaired: manualCnt,
     countIssuedNotInstalled: agg.niAgg?.cnt || 0,
-    reconcileRate: reconciled + notRec ? round1((reconciled / (reconciled + notRec)) * 100) : 0,
+    reconcileRate: reconciled + manualCnt + notRec
+      ? round1(((reconciled + manualCnt) / (reconciled + manualCnt + notRec)) * 100) : 0,
     cntReci,
     cntDel,
   };
@@ -1979,7 +2202,7 @@ async function chatAnswerKpi(intent, ctx) {
   const f = readFilters(q);
   const dash = CONFIG.demoMode
     ? DEMO.dashboard(range, f)
-    : buildDashboardFromAgg(range, await qDashboardAgg(range, f));
+    : buildDashboardFromAgg(range, await qDashboardAgg(range, f), f);
   const k = dash.kpis;
   const perLbl =
     q.periodType === 'month' ? (q.month ? ' ' + q.month : '')
@@ -2409,10 +2632,10 @@ async function runReportForPeriod(period, reason) {
   const f = {};
   const dash = CONFIG.demoMode
     ? DEMO.dashboard(range, f)
-    : buildDashboardFromAgg(range, await qDashboardAgg(range, f));
+    : buildDashboardFromAgg(range, await qDashboardAgg(range, f), f);
   const prev = CONFIG.demoMode
     ? DEMO.dashboard(prevRange, f)
-    : buildDashboardFromAgg(prevRange, await qDashboardAgg(prevRange, f));
+    : buildDashboardFromAgg(prevRange, await qDashboardAgg(prevRange, f), f);
   const out = { period, label, teams: null, files: [] };
 
   if (CONFIG.teamsWebhookUrl) {
@@ -2832,9 +3055,9 @@ app.get(
       qTatDepartments(range, f),
       qDashboardAgg(prevRange, f),
     ]);
-    const out = buildDashboardFromAgg(range, agg);
+    const out = buildDashboardFromAgg(range, agg, f);
     out.rows = rows;
-    out.prevKpis = buildDashboardFromAgg(prevRange, prevAgg).kpis;
+    out.prevKpis = buildDashboardFromAgg(prevRange, prevAgg, f).kpis;
     res.json(out);
   })
 );
@@ -2861,7 +3084,7 @@ app.get(
       const range = { ...monthRange(mstr), label: 'Thang' };
       const dash = CONFIG.demoMode
         ? DEMO.dashboard(range, f)
-        : buildDashboardFromAgg(range, await qDashboardAgg(range, f));
+        : buildDashboardFromAgg(range, await qDashboardAgg(range, f), f);
       const k = dash.kpis;
       return {
         month: mstr,
@@ -2901,6 +3124,7 @@ const REPORTS = {
   'removed-not-returned': { live: qRemovedNotReturned, demo: 'removedNotReturned' },
   'returned-unservice': { live: qReturnedUnservice, demo: 'returnedUnservice' },
   'not-reconciled': { live: qNotReconciled, demo: 'notReconciled' },
+  'manual-pair': { live: qManualPairCandidates, demo: 'manualPairCandidates' },
   'removed-before-installed': { live: qRemovedBeforeInstalled, demo: 'removedBeforeInstalled' },
   other: { live: qOther, demo: 'other' },
   'return-store-tat': { live: qTatReturnStore, demo: 'returnStoreTat' },
@@ -3127,6 +3351,60 @@ app.post('/api/admin/report-now', h(async (req, res) => {
   const periods = (p === 'week' || p === 'month') ? [p] : null;
   const r = await runScheduledReport('tay', periods);
   res.json(r);
+}));
+
+// --- ADMIN: DOI UNG THU CONG (cap thao <-> lap co label lech) ---
+//     Xac nhan 1 cap -> luu data/reconcile-manual.json; phieu xuat do se KHONG
+//     con nam trong "chua doi ung" va duoc tinh la DA doi ung trong KPI.
+app.get('/api/admin/manual-pairs', h(async (req, res) => {
+  res.json({ items: loadManualPairs() });
+}));
+
+app.post('/api/admin/manual-pair/confirm', h(async (req, res) => {
+  const b = req.body || {};
+  const issueLabel = String(b.issueLabel ?? '').trim();
+  const issueVoucher = String(b.issueVoucher ?? '').trim();
+  if (!issueLabel || !issueVoucher) {
+    return res.status(400).json({ error: true, message: 'Thieu issueLabel / issueVoucher.' });
+  }
+  const key = pairKey(issueLabel, issueVoucher);
+  const arr = loadManualPairs().filter((p) => pairKey(p.issueLabel, p.issueVoucher) !== key);
+  arr.push({
+    issueLabel, issueVoucher,
+    issuePartno: String(b.issuePartno ?? '').trim(),
+    issueSerialno: String(b.issueSerialno ?? '').trim(),
+    issueTimeVn: String(b.issueTimeVn ?? '').trim(),
+    // Luu san de loc theo bo loc dashboard ma khong phai truy van lai
+    department: String(b.department ?? '').trim(),
+    station: String(b.station ?? '').trim(),
+    store: String(b.store ?? '').trim(),
+    // Ve con lai cua cap: thiet bi da THAO + ban ghi tra unservice (neu co)
+    offPartno: String(b.offPartno ?? '').trim(),
+    offSerialno: String(b.offSerialno ?? '').trim(),
+    retLabelno: String(b.retLabelno ?? '').trim(),
+    retVoucher: String(b.retVoucher ?? '').trim(),
+    retDelTime: String(b.retDelTime ?? '').trim(),
+    tatDays: Number(b.tatDays) || null,
+    matchMethod: String(b.matchMethod ?? '').trim(),
+    confidence: String(b.confidence ?? '').trim(),
+    note: String(b.note ?? '').slice(0, 300),
+    confirmedAt: new Date().toISOString(),
+    confirmedBy: clientIp(req),
+  });
+  saveManualPairs(arr);
+  apiCache.clear(); // KPI thay doi -> bo cache de so lieu cap nhat ngay
+  cacheTotalBytes = 0;
+  res.json({ ok: true, count: arr.length });
+}));
+
+app.post('/api/admin/manual-pair/delete', h(async (req, res) => {
+  const b = req.body || {};
+  const key = pairKey(b.issueLabel, b.issueVoucher);
+  const arr = loadManualPairs().filter((p) => pairKey(p.issueLabel, p.issueVoucher) !== key);
+  saveManualPairs(arr);
+  apiCache.clear();
+  cacheTotalBytes = 0;
+  res.json({ ok: true, count: arr.length });
 }));
 
 // --- ADMIN: CHAN DOAN bao cao "Thao truoc lap sau" (vi sao khong co du lieu) ---
