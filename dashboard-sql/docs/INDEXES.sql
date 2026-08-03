@@ -1,4 +1,20 @@
 /* ============================================================================
+   INDEXES.sql — Tang toc truy van dashboard TAT
+   ----------------------------------------------------------------------------
+   TAO INDEX **KHONG THAY DOI DU LIEU**:
+     - Khong them/bot/sua mot dong du lieu nao.
+     - Khong them/bot/doi ten cot; cau truc bang giu nguyen.
+     - Ket qua truy van truoc va sau khi tao index GIONG HET NHAU - chi NHANH hon.
+     - Index la cau truc TRA CUU RIENG ben canh bang (nhu muc luc cua quyen sach).
+   Danh doi:
+     - Ton them dung luong dia (thuong 10-30% kich thuoc bang cho moi index).
+     - Ghi (INSERT/UPDATE) cham hon mot chut vi phai cap nhat ca index.
+     - Luc TAO index bang bi KHOA -> nen chay ngoai gio cao diem.
+   Go bo bat cu luc nao (cung khong mat du lieu):
+     DROP INDEX IX_ten_index ON [NQT].[dbo].[ten_bang];
+   ============================================================================ */
+
+/* ============================================================================
    INDEXES.sql — Index tang toc cho Dashboard TAT (VAECO)
    Chay 1 lan trong SSMS tren database NQT (nen chay NGOAI GIO cao diem:
    bang lon co the mat vai phut moi index; app van dung binh thuong khi
