@@ -507,12 +507,14 @@ function partOnOff(crit) {
 function manualPairCandidates(range, f) {
   const rows = notReconciled(range, f).slice(0, 12);
   const METHODS = [
-    ['WO_PART_ON_OFF', 'Cao'],
-    ['Cùng orderno/psn', 'Trung bình'],
-    ['Cùng tàu, gần thời gian', 'Thấp'],
+    ['WO_PART_ON_OFF', 'Cao', ''],
+    ['Cùng orderno/psn', 'Trung bình', ''],
+    ['Cùng tàu, gần thời gian', 'Thấp', ''],
+    ['Other — ROB (Robbery (tháo xuống trước))', 'Trung bình', 'ROB'],
+    ['Other — NOI (Không có phiếu xuất)', 'Thấp', 'NOI'],
   ];
   return rows.map((r, i) => {
-    const [method, conf] = METHODS[i % 3];
+    const [method, conf, onac] = METHODS[i % METHODS.length];
     const del = new Date(Date.now() - rndInt(1, 20) * 86400000);
     return {
       ...r,
@@ -520,6 +522,7 @@ function manualPairCandidates(range, f) {
       sug_serialno_off: 'SN' + rndInt(10000, 99999),
       match_method: method,
       confidence: conf,
+      sug_on_ac: onac,
       sug_ret_labelno: String(rndInt(100000, 999999)), // label KHAC voi phieu xuat
       sug_ret_voucher: 'P-' + rndInt(100000, 999999),
       sug_ret_del_time: del.toISOString(),

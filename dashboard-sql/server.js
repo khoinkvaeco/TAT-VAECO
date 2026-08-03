@@ -1105,26 +1105,31 @@ async function qManualPairCandidates(range, f) {
       ${amosToVN('k')} AS issue_time_vn,
       CAST(DATEDIFF(MINUTE, ${amosToVN('k')}, GETDATE()) AS float) / 1440.0 AS tat_days,
       -- Cap GOI Y: thiet bi da THAO (uu tien [1] -> [2] -> [3])
-      COALESCE(w.part_off,  o2.partno_off, o3.partno_off)   AS sug_partno_off,
-      COALESCE(w.serial_off, o2.serialno_off, o3.serialno_off) AS sug_serialno_off,
+      COALESCE(w.part_off,  o2.partno_off, o3.partno_off, o4.partno_off)     AS sug_partno_off,
+      COALESCE(w.serial_off, o2.serialno_off, o3.serialno_off, o4.serialno_off) AS sug_serialno_off,
       CASE
-        WHEN w.serial_off IS NOT NULL  THEN N'WO_PART_ON_OFF'
+        WHEN w.serial_off IS NOT NULL    THEN N'WO_PART_ON_OFF'
         WHEN o2.serialno_off IS NOT NULL THEN N'Cùng orderno/psn'
         WHEN o3.serialno_off IS NOT NULL THEN N'Cùng tàu, gần thời gian'
+        WHEN o4.serialno_off IS NOT NULL THEN N'Other (on_ac)'
         ELSE NULL
       END AS match_method,
       CASE
-        WHEN w.serial_off IS NOT NULL  THEN N'Cao'
+        WHEN w.serial_off IS NOT NULL    THEN N'Cao'
         WHEN o2.serialno_off IS NOT NULL THEN N'Trung bình'
         WHEN o3.serialno_off IS NOT NULL THEN N'Thấp'
+        -- Other: cung PN + CUNG SO TAU -> Trung binh, khac tau -> Thap
+        WHEN o4.serialno_off IS NOT NULL THEN CASE WHEN o4.same_ac = 1 THEN N'Trung bình' ELSE N'Thấp' END
         ELSE NULL
       END AS confidence,
-      -- Ban ghi TRA UNSERVICE cua thiet bi thao (ve con lai cua cap)
-      ret.ret_labelno   AS sug_ret_labelno,
-      ret.ret_voucher   AS sug_ret_voucher,
-      ret.ret_del_time  AS sug_ret_del_time,
-      CASE WHEN ret.ret_del_time IS NOT NULL
-        THEN CAST(DATEDIFF(MINUTE, ${amosToVN('k')}, ret.ret_del_time) AS float) / 1440.0
+      o4.on_ac AS sug_on_ac,   -- ma ly do (NOI/ROB/DIR/CRO) neu ghep tu tab Other
+      -- Ban ghi TRA UNSERVICE cua thiet bi thao (ve con lai cua cap).
+      -- Nguon [4] chinh la ban ghi tra -> lay truc tiep tu o4.
+      COALESCE(ret.ret_labelno,  o4.ret_labelno)  AS sug_ret_labelno,
+      COALESCE(ret.ret_voucher,  o4.ret_voucher)  AS sug_ret_voucher,
+      COALESCE(ret.ret_del_time, o4.ret_del_time) AS sug_ret_del_time,
+      CASE WHEN COALESCE(ret.ret_del_time, o4.ret_del_time) IS NOT NULL
+        THEN CAST(DATEDIFF(MINUTE, ${amosToVN('k')}, COALESCE(ret.ret_del_time, o4.ret_del_time)) AS float) / 1440.0
       END AS sug_tat_days
     FROM [NQT].[dbo].[kho_ser1] k
     LEFT JOIN [NQT].[dbo].[real_us1] r
@@ -1171,6 +1176,26 @@ async function qManualPairCandidates(range, f) {
         AND ye.[ac_registr] IS NOT NULL
       ORDER BY ye.[mut_t] ASC, ya.[mut_t] DESC
     ) o3
+    -- [4] Tu bang "Other" (real_us1 co ghi chu on_ac): thiet bi DA TRA US nhung
+    --     chua co phieu xuat doi ung - dac biet ma ROB (thao xuong truoc).
+    --     Ghep theo CUNG PART NO (thay the cung loai) + gan thoi gian; uu tien
+    --     dong CUNG SO TAU. Day la ban ghi tra LUON nen lay ca gio tra tu day.
+    OUTER APPLY (
+      SELECT TOP 1
+             RTRIM(r4.[partno_off]) AS partno_off, RTRIM(r4.[serialno_o]) AS serialno_off,
+             r4.[labelno] AS ret_labelno, r4.[voucher_s] AS ret_voucher,
+             r4.[del_time] AS ret_del_time, RTRIM(r4.[on_ac]) AS on_ac,
+             CASE WHEN RTRIM(ISNULL(r4.[ac_registr], '')) = RTRIM(ISNULL(k.[ac_registr], ''))
+                   AND RTRIM(ISNULL(k.[ac_registr], '')) <> '' THEN 1 ELSE 0 END AS same_ac
+      FROM [NQT].[dbo].[real_us1] r4
+      WHERE r4.[on_ac] IS NOT NULL AND LTRIM(RTRIM(r4.[on_ac])) <> ''
+        AND RTRIM(r4.[partno_off]) = RTRIM(k.[partno])   -- thay the cung part number
+        AND r4.[del_time] IS NOT NULL AND r4.[del_time] >= '1902-01-01'
+        -- Cua so +/- : ROB co the tra TRUOC ngay lam phieu xuat
+        AND r4.[del_time] >= DATEADD(DAY, -30, ${amosToVN('k')})
+        AND r4.[del_time] <  DATEADD(DAY, 60, ${amosToVN('k')})
+      ORDER BY same_ac DESC, ABS(DATEDIFF(MINUTE, ${amosToVN('k')}, r4.[del_time])) ASC
+    ) o4
     -- Ban ghi tra unservice cua thiet bi THAO (theo cap goi y o tren)
     OUTER APPLY (
       SELECT TOP 1 r2.[labelno] AS ret_labelno, r2.[voucher_s] AS ret_voucher,
@@ -1200,7 +1225,13 @@ async function qManualPairCandidates(range, f) {
       AND ${amosToVN('k')} >= @from AND ${amosToVN('k')} < @to
       ${where}
     ORDER BY issue_time_vn DESC`;
-  return query(text, params);
+  const rows = await query(text, params);
+  // Ghep tu tab "Other" -> ghi ro MA LY DO trong ten phuong phap (vd ROB)
+  return rows.map((r) => {
+    if (r.match_method !== 'Other (on_ac)') return r;
+    const d = decodeOnAc(r.sug_on_ac);
+    return { ...r, match_method: d ? `Other — ${d.code} (${d.name})` : 'Other (on_ac)' };
+  });
 }
 
 /**

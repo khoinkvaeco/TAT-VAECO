@@ -553,7 +553,7 @@ const REPORT_DEFS = {
   },
   'manual-pair': {
     title: 'Đối ứng thủ công — thiết bị tháo/lắp có LABEL LỆCH NHAU',
-    desc: 'Trường hợp bất thường: tháo thiết bị này xuống, lắp thiết bị khác lên → label của 2 cái khác nhau nên chương trình không tự đối ứng được. Cột "Cách ghép" cho biết cặp gợi ý tìm bằng nguồn nào (độ tin cậy giảm dần: WO_PART_ON_OFF → cùng orderno/psn → cùng tàu). Kiểm tra rồi bấm ✔ Xác nhận — thiết bị sẽ hết nằm trong "Chưa đối ứng" và được tính vào KPI.',
+    desc: 'Trường hợp bất thường: tháo thiết bị này xuống, lắp thiết bị khác lên → label của 2 cái khác nhau nên chương trình không tự đối ứng được. Cột "Cách ghép" cho biết cặp gợi ý tìm bằng nguồn nào, ưu tiên giảm dần: WO_PART_ON_OFF → cùng orderno/psn → cùng tàu → Other (on_ac: NOI/ROB/DIR/CRO — thiết bị đã trả US nhưng chưa có phiếu xuất). Kiểm tra rồi bấm ✔ Xác nhận — thiết bị sẽ hết nằm trong "Chưa đối ứng" và được tính vào KPI.',
     columns: [
       { title: 'PN xuất (lắp lên)', field: 'partno', headerFilter: 'input' },
       { title: 'SN xuất', field: 'serialno', headerFilter: 'input' },
@@ -567,8 +567,9 @@ const REPORT_DEFS = {
       { title: 'Label trả', field: 'sug_ret_labelno', headerFilter: 'input' },
       { title: 'Giờ trả US', field: 'sug_ret_del_time', formatter: fmtDateCell },
       { title: 'TAT nếu ghép', field: 'sug_tat_days', formatter: fmtTatCell, hozAlign: 'right', sorter: 'number' },
+      { title: 'Ghi chú on_ac', field: 'sug_on_ac', headerFilter: 'input' },
       {
-        title: 'Cách ghép', field: 'match_method', headerFilter: 'input',
+        title: 'Cách ghép', field: 'match_method', headerFilter: 'input', widthGrow: 2,
         formatter: (cell) => cell.getValue() || '<span style="color:var(--text-muted)">— không tìm được —</span>',
       },
       {
