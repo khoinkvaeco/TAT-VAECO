@@ -510,8 +510,10 @@ function manualPairCandidates(range, f) {
     ['WO_PART_ON_OFF', 'Cao', ''],
     ['Cùng orderno/psn', 'Trung bình', ''],
     ['Cùng tàu, gần thời gian', 'Thấp', ''],
-    ['Other — ROB (Robbery (tháo xuống trước))', 'Trung bình', 'ROB'],
-    ['Other — NOI (Không có phiếu xuất)', 'Thấp', 'NOI'],
+    ['Other — ROB (Robbery (tháo xuống trước)) · Khớp event (WO)', 'Cao', 'ROB'],
+    ['Other — ROB (Robbery (tháo xuống trước)) · Khớp part no + số tàu', 'Trung bình', 'ROB'],
+    ['Other — NOI (Không có phiếu xuất) · Khớp part no', 'Thấp', 'NOI'],
+    ['WO_PART_ON_OFF (theo event)', 'Cao', ''],
   ];
   return rows.map((r, i) => {
     const [method, conf, onac] = METHODS[i % METHODS.length];

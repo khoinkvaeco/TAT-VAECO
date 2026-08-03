@@ -505,6 +505,34 @@ function saveManualPairs(arr) {
   fs.writeFileSync(MANUAL_PAIR_FILE, JSON.stringify(arr, null, 2), 'utf8');
 }
 
+/** Danh sach cot cua 1 bang trong NQT (cache) - de dung cot TUY CHON ma khong
+ *  lam vo query neu cot do khong ton tai o moi truong khac. */
+const _colsCache = new Map();
+async function getColumns(table) {
+  const key = String(table).toLowerCase();
+  if (_colsCache.has(key)) return _colsCache.get(key);
+  let set = new Set();
+  try {
+    const rows = await query(
+      `SELECT COLUMN_NAME AS c FROM [NQT].[INFORMATION_SCHEMA].[COLUMNS]
+       WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = @t`,
+      { t: table }
+    );
+    set = new Set(rows.map((r) => String(r.c || '').toLowerCase()));
+  } catch (e) {
+    console.warn(`[SCHEMA] Khong doc duoc cot cua ${table}:`, e.message);
+  }
+  _colsCache.set(key, set);
+  return set;
+}
+
+/** Tim cot "event / work order" trong 1 bang (ten khac nhau tuy he thong). */
+async function findEventColumn(table) {
+  const cols = await getColumns(table);
+  return ['event_perf', 'event_perfno', 'event_perfno_i', 'eventno', 'event', 'orderno']
+    .find((c) => cols.has(c)) || null;
+}
+
 /** Khoa duy nhat cua 1 cap = (labelno phieu xuat, voucherno phieu xuat). */
 const pairKey = (label, voucher) =>
   `${String(label ?? '').trim()}|${String(voucher ?? '').trim().toUpperCase()}`;
@@ -1090,7 +1118,49 @@ async function qManualPairCandidates(range, f) {
     { station: 'k.[station]', store: 'k.[store]', department: dept },
     params
   );
+
+  // Cot EVENT (work order) co the khac ten tuy he thong -> do schema, khong doan.
+  const kEvCol = await findEventColumn('kho_ser1');
+  const rEvCol = await findEventColumn('real_us1');
+  const kEv = kEvCol ? `TRY_CONVERT(float, k.[${kEvCol}])` : 'NULL';
+  const rEv = rEvCol ? `TRY_CONVERT(float, r4.[${rEvCol}])` : 'NULL';
+  // Khop EVENT chi tinh khi CA HAI ben co cot va co gia tri
+  const sameEvent = (kEvCol && rEvCol) ? `(${rEv} IS NOT NULL AND ${kEv} IS NOT NULL AND ${rEv} = ${kEv})` : '(1 = 0)';
+  const sameAc = `(RTRIM(ISNULL(r4.[ac_registr], '')) <> '' AND RTRIM(ISNULL(r4.[ac_registr], '')) = RTRIM(ISNULL(k.[ac_registr], '')))`;
+  const samePn = `(RTRIM(r4.[partno_off]) = RTRIM(k.[partno]))`;
+
   const text = `
+    -- Don bang tam con sot tu lan chay loi truoc (connection pool dung lai
+    -- cung phien -> #temp co the van ton tai va gay loi "already an object").
+    IF OBJECT_ID('tempdb..#wo')    IS NOT NULL DROP TABLE #wo;
+    IF OBJECT_ID('tempdb..#wo_ps') IS NOT NULL DROP TABLE #wo_ps;
+    IF OBJECT_ID('tempdb..#wo_ev') IS NOT NULL DROP TABLE #wo_ev;
+
+    -- Keo WO_PART_ON_OFF (linked server Oracle) ve bang tam MOT LAN, roi join
+    -- nhieu lan tren bang tam -> khong hoi linked server theo tung dong.
+    SELECT RTRIM(x.[PARTNO]) AS partno_on, RTRIM(x.[SERIALNO]) AS serialno_on,
+           RTRIM(x.[PARTNO_OFF]) AS part_off, RTRIM(x.[SERIALNO_OFF]) AS serial_off,
+           TRY_CONVERT(float, x.[EVENT_PERFNO_I]) AS event_no,
+           TRY_CONVERT(float, x.[MUTATION]) AS mut
+    INTO #wo
+    FROM [DWH_DB]..[STG_AMOS].[WO_PART_ON_OFF] x
+    WHERE x.[MUTATION] BETWEEN @woFrom AND @woTo
+      AND x.[SERIALNO_OFF] IS NOT NULL AND LTRIM(RTRIM(x.[SERIALNO_OFF])) <> '';
+
+    -- Ban ghi MOI NHAT theo (part, serial) da lap
+    SELECT partno_on, serialno_on, part_off, serial_off
+    INTO #wo_ps
+    FROM (SELECT z.*, ROW_NUMBER() OVER (PARTITION BY z.partno_on, z.serialno_on
+                                         ORDER BY z.mut DESC) AS rn FROM #wo z) a
+    WHERE a.rn = 1;
+
+    -- Ban ghi MOI NHAT theo EVENT (work order)
+    SELECT event_no, part_off, serial_off
+    INTO #wo_ev
+    FROM (SELECT z.*, ROW_NUMBER() OVER (PARTITION BY z.event_no ORDER BY z.mut DESC) AS rn
+          FROM #wo z WHERE z.event_no IS NOT NULL) a
+    WHERE a.rn = 1;
+
     SELECT TOP (@top)
       k.[partno]     AS partno,          -- thiet bi XUAT KHO (lap len tau)
       k.[serialno]   AS serialno,
@@ -1100,58 +1170,73 @@ async function qManualPairCandidates(range, f) {
       k.[station]    AS station,
       k.[store]      AS store,
       k.[ac_registr] AS ac_registr,
+      ${kEvCol ? `k.[${kEvCol}]` : 'NULL'} AS event_perf,
       k.[created_b2] AS staff,
       ${dept} AS department,
       ${amosToVN('k')} AS issue_time_vn,
       CAST(DATEDIFF(MINUTE, ${amosToVN('k')}, GETDATE()) AS float) / 1440.0 AS tat_days,
-      -- Cap GOI Y: thiet bi da THAO (uu tien [1] -> [2] -> [3])
-      COALESCE(w.part_off,  o2.partno_off, o3.partno_off, o4.partno_off)     AS sug_partno_off,
-      COALESCE(w.serial_off, o2.serialno_off, o3.serialno_off, o4.serialno_off) AS sug_serialno_off,
+      -- Cap GOI Y. UU TIEN: [4] Other(on_ac) -> [1] WO theo part+serial ->
+      -- [1b] WO theo EVENT -> [2] cung orderno/psn -> [3] cung tau.
+      COALESCE(o4.partno_off,   w.part_off,   we.part_off,   o2.partno_off,   o3.partno_off)   AS sug_partno_off,
+      COALESCE(o4.serialno_off, w.serial_off, we.serial_off, o2.serialno_off, o3.serialno_off) AS sug_serialno_off,
       CASE
-        WHEN w.serial_off IS NOT NULL    THEN N'WO_PART_ON_OFF'
+        WHEN o4.serialno_off IS NOT NULL THEN N'Other (on_ac)'
+        WHEN w.serial_off  IS NOT NULL   THEN N'WO_PART_ON_OFF'
+        WHEN we.serial_off IS NOT NULL   THEN N'WO_PART_ON_OFF (theo event)'
         WHEN o2.serialno_off IS NOT NULL THEN N'Cùng orderno/psn'
         WHEN o3.serialno_off IS NOT NULL THEN N'Cùng tàu, gần thời gian'
-        WHEN o4.serialno_off IS NOT NULL THEN N'Other (on_ac)'
         ELSE NULL
       END AS match_method,
       CASE
-        WHEN w.serial_off IS NOT NULL    THEN N'Cao'
+        -- Other: cham diem theo so tieu chi khop (event > tau > chi part no)
+        WHEN o4.serialno_off IS NOT NULL THEN
+          CASE WHEN o4.score >= 3 THEN N'Cao' WHEN o4.score = 2 THEN N'Trung bình' ELSE N'Thấp' END
+        WHEN w.serial_off  IS NOT NULL   THEN N'Cao'
+        WHEN we.serial_off IS NOT NULL   THEN N'Cao'
         WHEN o2.serialno_off IS NOT NULL THEN N'Trung bình'
         WHEN o3.serialno_off IS NOT NULL THEN N'Thấp'
-        -- Other: cung PN + CUNG SO TAU -> Trung binh, khac tau -> Thap
-        WHEN o4.serialno_off IS NOT NULL THEN CASE WHEN o4.same_ac = 1 THEN N'Trung bình' ELSE N'Thấp' END
         ELSE NULL
       END AS confidence,
-      o4.on_ac AS sug_on_ac,   -- ma ly do (NOI/ROB/DIR/CRO) neu ghep tu tab Other
+      o4.on_ac      AS sug_on_ac,     -- ma ly do (NOI/ROB/DIR/CRO) neu ghep tu Other
+      o4.match_note AS sug_match_note, -- cac tieu chi da khop (event / tau / part)
       -- Ban ghi TRA UNSERVICE cua thiet bi thao (ve con lai cua cap).
       -- Nguon [4] chinh la ban ghi tra -> lay truc tiep tu o4.
-      COALESCE(ret.ret_labelno,  o4.ret_labelno)  AS sug_ret_labelno,
-      COALESCE(ret.ret_voucher,  o4.ret_voucher)  AS sug_ret_voucher,
-      COALESCE(ret.ret_del_time, o4.ret_del_time) AS sug_ret_del_time,
-      CASE WHEN COALESCE(ret.ret_del_time, o4.ret_del_time) IS NOT NULL
-        THEN CAST(DATEDIFF(MINUTE, ${amosToVN('k')}, COALESCE(ret.ret_del_time, o4.ret_del_time)) AS float) / 1440.0
+      COALESCE(o4.ret_labelno,  ret.ret_labelno)  AS sug_ret_labelno,
+      COALESCE(o4.ret_voucher,  ret.ret_voucher)  AS sug_ret_voucher,
+      COALESCE(o4.ret_del_time, ret.ret_del_time) AS sug_ret_del_time,
+      CASE WHEN COALESCE(o4.ret_del_time, ret.ret_del_time) IS NOT NULL
+        THEN CAST(DATEDIFF(MINUTE, ${amosToVN('k')}, COALESCE(o4.ret_del_time, ret.ret_del_time)) AS float) / 1440.0
       END AS sug_tat_days
     FROM [NQT].[dbo].[kho_ser1] k
     LEFT JOIN [NQT].[dbo].[real_us1] r
       ON k.[labelno] = r.[labelno] AND k.[voucherno] = r.[voucher_s]
-    -- [1] Cap tu WO_PART_ON_OFF (keo ve MOT LAN roi LEFT JOIN - khong hoi
-    --     linked server theo tung dong)
-    LEFT JOIN (
-      SELECT z.partno_on, z.serialno_on, z.part_off, z.serial_off
-      FROM (
-        SELECT RTRIM(x.[PARTNO]) AS partno_on, RTRIM(x.[SERIALNO]) AS serialno_on,
-               RTRIM(x.[PARTNO_OFF]) AS part_off, RTRIM(x.[SERIALNO_OFF]) AS serial_off,
-               ROW_NUMBER() OVER (
-                 PARTITION BY RTRIM(x.[PARTNO]), RTRIM(x.[SERIALNO])
-                 ORDER BY TRY_CONVERT(float, x.[MUTATION]) DESC
-               ) AS rn
-        FROM [DWH_DB]..[STG_AMOS].[WO_PART_ON_OFF] x
-        WHERE x.[MUTATION] BETWEEN @woFrom AND @woTo
-          AND x.[SERIALNO_OFF] IS NOT NULL
-          AND LTRIM(RTRIM(x.[SERIALNO_OFF])) <> ''
-      ) z
-      WHERE z.rn = 1
-    ) w ON w.partno_on = RTRIM(k.[partno]) AND w.serialno_on = RTRIM(k.[serialno])
+    -- [4] UU TIEN 1: bang "Other" (real_us1 co on_ac) - thiet bi DA TRA US nhung
+    --     chua co phieu xuat doi ung (dac biet ROB = thao xuong truoc).
+    --     Cham diem: cung EVENT (WO) = 3 > cung PART + cung TAU = 2 > cung PART = 1.
+    OUTER APPLY (
+      SELECT TOP 1
+             RTRIM(r4.[partno_off]) AS partno_off, RTRIM(r4.[serialno_o]) AS serialno_off,
+             r4.[labelno] AS ret_labelno, r4.[voucher_s] AS ret_voucher,
+             r4.[del_time] AS ret_del_time, RTRIM(r4.[on_ac]) AS on_ac,
+             CASE WHEN ${sameEvent} THEN 3
+                  WHEN ${samePn} AND ${sameAc} THEN 2
+                  ELSE 1 END AS score,
+             CASE WHEN ${sameEvent} THEN N'Khớp event (WO)'
+                  WHEN ${samePn} AND ${sameAc} THEN N'Khớp part no + số tàu'
+                  ELSE N'Khớp part no' END AS match_note
+      FROM [NQT].[dbo].[real_us1] r4
+      WHERE r4.[on_ac] IS NOT NULL AND LTRIM(RTRIM(r4.[on_ac])) <> ''
+        AND r4.[del_time] IS NOT NULL AND r4.[del_time] >= '1902-01-01'
+        -- Cua so +/- : ROB co the tra TRUOC ngay lam phieu xuat
+        AND r4.[del_time] >= DATEADD(DAY, -30, ${amosToVN('k')})
+        AND r4.[del_time] <  DATEADD(DAY, 60, ${amosToVN('k')})
+        AND (${sameEvent} OR ${samePn})
+      ORDER BY score DESC, ABS(DATEDIFF(MINUTE, ${amosToVN('k')}, r4.[del_time])) ASC
+    ) o4
+    -- [1] WO_PART_ON_OFF theo (part, serial) da lap len tau
+    LEFT JOIN #wo_ps w  ON w.partno_on = RTRIM(k.[partno]) AND w.serialno_on = RTRIM(k.[serialno])
+    -- [1b] WO_PART_ON_OFF theo EVENT (work order) cua phieu xuat
+    LEFT JOIN #wo_ev we ON we.event_no = ${kEv}
     -- [2] Cung ORDERNO/PSN: YE lap thiet bi vua xuat <-> YA thao
     OUTER APPLY (
       SELECT TOP 1 ya.[partno] AS partno_off, ya.[serialno] AS serialno_off
@@ -1176,32 +1261,12 @@ async function qManualPairCandidates(range, f) {
         AND ye.[ac_registr] IS NOT NULL
       ORDER BY ye.[mut_t] ASC, ya.[mut_t] DESC
     ) o3
-    -- [4] Tu bang "Other" (real_us1 co ghi chu on_ac): thiet bi DA TRA US nhung
-    --     chua co phieu xuat doi ung - dac biet ma ROB (thao xuong truoc).
-    --     Ghep theo CUNG PART NO (thay the cung loai) + gan thoi gian; uu tien
-    --     dong CUNG SO TAU. Day la ban ghi tra LUON nen lay ca gio tra tu day.
-    OUTER APPLY (
-      SELECT TOP 1
-             RTRIM(r4.[partno_off]) AS partno_off, RTRIM(r4.[serialno_o]) AS serialno_off,
-             r4.[labelno] AS ret_labelno, r4.[voucher_s] AS ret_voucher,
-             r4.[del_time] AS ret_del_time, RTRIM(r4.[on_ac]) AS on_ac,
-             CASE WHEN RTRIM(ISNULL(r4.[ac_registr], '')) = RTRIM(ISNULL(k.[ac_registr], ''))
-                   AND RTRIM(ISNULL(k.[ac_registr], '')) <> '' THEN 1 ELSE 0 END AS same_ac
-      FROM [NQT].[dbo].[real_us1] r4
-      WHERE r4.[on_ac] IS NOT NULL AND LTRIM(RTRIM(r4.[on_ac])) <> ''
-        AND RTRIM(r4.[partno_off]) = RTRIM(k.[partno])   -- thay the cung part number
-        AND r4.[del_time] IS NOT NULL AND r4.[del_time] >= '1902-01-01'
-        -- Cua so +/- : ROB co the tra TRUOC ngay lam phieu xuat
-        AND r4.[del_time] >= DATEADD(DAY, -30, ${amosToVN('k')})
-        AND r4.[del_time] <  DATEADD(DAY, 60, ${amosToVN('k')})
-      ORDER BY same_ac DESC, ABS(DATEDIFF(MINUTE, ${amosToVN('k')}, r4.[del_time])) ASC
-    ) o4
-    -- Ban ghi tra unservice cua thiet bi THAO (theo cap goi y o tren)
+    -- Ban ghi tra unservice cua thiet bi THAO (cho cac nguon 1/1b/2/3)
     OUTER APPLY (
       SELECT TOP 1 r2.[labelno] AS ret_labelno, r2.[voucher_s] AS ret_voucher,
              r2.[del_time] AS ret_del_time
       FROM [NQT].[dbo].[real_us1] r2
-      WHERE RTRIM(r2.[serialno_o]) = COALESCE(w.serial_off, o2.serialno_off, o3.serialno_off)
+      WHERE RTRIM(r2.[serialno_o]) = COALESCE(w.serial_off, we.serial_off, o2.serialno_off, o3.serialno_off)
         AND r2.[del_time] IS NOT NULL
         AND r2.[del_time] >= ${amosToVN('k')}
       ORDER BY r2.[del_time] ASC
@@ -1224,13 +1289,20 @@ async function qManualPairCandidates(range, f) {
       AND k.[mutation] BETWEEN @fromDay AND @toDay
       AND ${amosToVN('k')} >= @from AND ${amosToVN('k')} < @to
       ${where}
-    ORDER BY issue_time_vn DESC`;
-  const rows = await query(text, params);
-  // Ghep tu tab "Other" -> ghi ro MA LY DO trong ten phuong phap (vd ROB)
+    ORDER BY issue_time_vn DESC;
+
+    DROP TABLE #wo; DROP TABLE #wo_ps; DROP TABLE #wo_ev;`;
+
+  // Batch nhieu lenh -> lay recordset CUOI CUNG co du lieu (SELECT ... INTO
+  // khong tra recordset nen ket qua that la SELECT cuoi).
+  const sets = await queryMulti(text, params);
+  const rows = (sets && sets.length) ? (sets[sets.length - 1] || []) : [];
+  // Ghep tu tab "Other" -> ghi ro MA LY DO + tieu chi da khop trong ten phuong phap
   return rows.map((r) => {
     if (r.match_method !== 'Other (on_ac)') return r;
     const d = decodeOnAc(r.sug_on_ac);
-    return { ...r, match_method: d ? `Other — ${d.code} (${d.name})` : 'Other (on_ac)' };
+    const base = d ? `Other — ${d.code} (${d.name})` : 'Other (on_ac)';
+    return { ...r, match_method: r.sug_match_note ? `${base} · ${r.sug_match_note}` : base };
   });
 }
 

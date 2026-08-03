@@ -553,12 +553,14 @@ const REPORT_DEFS = {
   },
   'manual-pair': {
     title: 'Đối ứng thủ công — thiết bị tháo/lắp có LABEL LỆCH NHAU',
-    desc: 'Trường hợp bất thường: tháo thiết bị này xuống, lắp thiết bị khác lên → label của 2 cái khác nhau nên chương trình không tự đối ứng được. Cột "Cách ghép" cho biết cặp gợi ý tìm bằng nguồn nào, ưu tiên giảm dần: WO_PART_ON_OFF → cùng orderno/psn → cùng tàu → Other (on_ac: NOI/ROB/DIR/CRO — thiết bị đã trả US nhưng chưa có phiếu xuất). Kiểm tra rồi bấm ✔ Xác nhận — thiết bị sẽ hết nằm trong "Chưa đối ứng" và được tính vào KPI.',
+    desc: 'Trường hợp bất thường: tháo thiết bị này xuống, lắp thiết bị khác lên → label của 2 cái khác nhau nên chương trình không tự đối ứng được. Cột "Cách ghép" cho biết cặp gợi ý tìm bằng nguồn nào, ưu tiên giảm dần: (1) Other (on_ac: NOI/ROB/DIR/CRO — thiết bị đã trả US nhưng chưa có phiếu xuất), chấm điểm theo tiêu chí khớp: event (WO) > part no + số tàu > part no; (2) WO_PART_ON_OFF theo part+serial; (3) WO_PART_ON_OFF theo event; (4) cùng orderno/psn; (5) cùng tàu. Kiểm tra rồi bấm ✔ Xác nhận — thiết bị sẽ hết nằm trong "Chưa đối ứng" và được tính vào KPI.',
     columns: [
       { title: 'PN xuất (lắp lên)', field: 'partno', headerFilter: 'input' },
       { title: 'SN xuất', field: 'serialno', headerFilter: 'input' },
       { title: 'Label xuất', field: 'labelno', headerFilter: 'input' },
       { title: 'Phiếu xuất', field: 'voucher_issue', headerFilter: 'input' },
+      { title: 'Event (WO)', field: 'event_perf', headerFilter: 'input' },
+      { title: 'Tàu', field: 'ac_registr', headerFilter: 'input' },
       { title: 'Ngày Giờ xuất', field: 'issue_time_vn', formatter: fmtDateCell },
       { title: 'Tồn (ngày)', field: 'tat_days', formatter: fmtTatCell, hozAlign: 'right', sorter: 'number' },
       // --- Cặp GỢI Ý: thiết bị đã tháo xuống ---
