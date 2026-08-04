@@ -98,7 +98,7 @@ Sau khi sửa code: `git pull` (hoặc copy) rồi `sc stop DashboardTAT & sc st
 | **Tháo chưa trả US** | `on_off vm='YA'` không có `real_us1` (link `historyno_`). |
 | **Chưa đối ứng** | Có xuất service nhưng không có trả unservice. |
 | **Tháo trước lắp sau** | Sự kiện `YA` trước `YE` cùng thiết bị → TAT riêng. |
-| **Other (on_ac)** | Thiết bị **đã trả unservice** nhưng **chưa tìm được phiếu xuất service đối ứng**; ghi chú `on_ac` cho biết lý do. Mã: **NOI** = no issue pickslip (không có phiếu xuất) · **ROB** = robbery, tháo xuống trước · **DIR** = lắp thẳng lên tàu vật tư trong kho · **CRO** = tháo vật tư repairable/consumable. Server tự giải mã thành cột **Lý do** + **Diễn giải** (khớp nguyên từ nên không bắt nhầm `DIRECT`/`CROSS`); tab có bộ lọc theo mã và dòng thống kê số lượng mỗi mã trong kỳ. |
+| **Other (on_ac)** | Thiết bị **đã trả unservice** nhưng **chưa tìm được phiếu xuất service đối ứng**; ghi chú `on_ac` cho biết lý do. Mã: **NOI** = no issue pickslip (không có phiếu xuất) · **SWP** = swap, hoán đổi thiết bị · **ROB** = robbery, tháo xuống trước · **DIR** = lắp thẳng lên tàu vật tư trong kho · **CRO** = tháo vật tư repairable/consumable. Server tự giải mã thành cột **Lý do** + **Diễn giải** (khớp nguyên từ nên không bắt nhầm `DIRECT`/`CROSS`); tab có bộ lọc theo mã và dòng thống kê số lượng mỗi mã trong kỳ. |
 
 ### Quy đổi giờ AMOS → VN
 
@@ -112,10 +112,22 @@ Sau khi sửa code: `git pull` (hoặc copy) rồi `sc stop DashboardTAT & sc st
 - **Chia sẻ link:** bộ lọc hiện hành nằm trên URL (`?periodType=…&month=…&department=…`) — copy link gửi đồng nghiệp là họ mở ra đúng màn hình đang xem.
 - **Báo cáo định kỳ → Teams/SharePoint (tùy chọn, mặc định TẮT):** theo lịch (`REPORT_SCHEDULE`, vd `T2 06:30`), server tự tính KPI **kỳ vừa kết thúc** kèm so sánh kỳ trước. `REPORT_PERIOD=week,month`: mỗi lần chạy gửi báo cáo **tuần**; báo cáo **tháng** tự gửi **1 lần/tháng** (lần chạy đầu tiên của tháng mới, cho tháng vừa kết thúc). Hai kênh: (1) **thẻ Adaptive Card** vào kênh Teams qua **Workflows webhook** (`TEAMS_WEBHOOK_URL` — Incoming Webhook kiểu cũ đã bị Microsoft khai tử); (2) file **Excel .xlsx** (sheet KPI + sheet Chi tiết TAT có filter/freeze header) vào thư mục SharePoint/OneDrive **sync** trên server (`REPORT_EXPORT_DIR`) → tự lên thư viện SharePoint, xem được từ mọi nơi. Trang Admin có nút **📨 Gửi báo cáo ngay** để test (gửi cả 2 kỳ). ⚠️ Bật tính năng này = số liệu **tổng hợp** rời mạng nội bộ lên cloud M365; mỗi lần gửi đều ghi audit `logs/report-YYYY-MM-DD.log`.
 - **Đối ứng thủ công (label lệch):** tab riêng cho các ca bất thường — *tháo thiết bị này xuống, lắp thiết bị khác lên* nên **label của 2 thiết bị khác nhau**, join theo `labelno` không tự đối ứng được. Hệ thống **gợi ý cặp** theo thứ tự ưu tiên:
-  1. **Other (`on_ac`)** — thiết bị đã trả US nhưng chưa có phiếu xuất (NOI/ROB/DIR/CRO, đặc biệt **ROB** = tháo xuống trước). Chấm điểm theo tiêu chí khớp: **event (WO)** → *Cao*; **part no + số tàu** → *Trung bình*; chỉ **part no** → *Thấp*. Cửa sổ −30/+60 ngày quanh phiếu xuất (ROB có thể trả *trước* ngày lập phiếu).
-  2. **`WO_PART_ON_OFF` theo part+serial** — AMOS ghi cả thiết bị lắp và tháo trong một dòng → *Cao*.
-  3. **`WO_PART_ON_OFF` theo event (WO)** → *Cao*.
-  4. `on_off` cùng `orderno`/`psn` → *Trung bình*.  5. `on_off` cùng số tàu, gần thời gian → *Thấp*.
+  Thứ tự chọn theo **ĐỘ TIN CẬY** giảm dần (không phải theo nguồn) — nguồn mạnh luôn thắng nguồn yếu:
+
+  | Bậc | Cách ghép | Tin cậy |
+  |---|---|---|
+  | 1 | **Other (`on_ac`) · khớp event (WO)** | 🟢 Cao |
+  | 2 | `WO_PART_ON_OFF` theo part+serial — AMOS ghi cả thiết bị lắp và tháo trong một dòng | 🟢 Cao |
+  | 3 | `WO_PART_ON_OFF` theo event (WO) | 🟢 Cao |
+  | 4 | **Other · khớp part no + số tàu** | 🟡 Trung bình |
+  | 5 | `on_off` cùng `orderno`/`psn` | 🟡 Trung bình |
+  | 6 | **Other · chỉ khớp part no** | 🔴 Thấp |
+  | 7 | `on_off` cùng số tàu, gần thời gian | 🔴 Thấp |
+
+  Nguồn **Other** = thiết bị đã trả US nhưng chưa có phiếu xuất; cửa sổ −30/+60 ngày quanh phiếu
+  xuất (ROB/SWP có thể trả *trước* ngày lập phiếu). Mã **DIR** (lắp thẳng vật tư từ kho) **không
+  dùng** để gợi ý ghép vì không phải ca label lệch — vẫn hiển thị bình thường ở tab *Other*.
+  Danh sách loại trừ nằm ở hằng `ON_AC_EXCLUDE_FROM_MATCH` trong `server.js`.
 
   Cột *Cách ghép* ghi rõ nguồn + mã lý do + tiêu chí đã khớp (vd `Other — ROB (Robbery…) · Khớp event (WO)`). Bấm **✔ Xác nhận** → cặp lưu vào `data/reconcile-manual.json`, phiếu xuất hết nằm trong *Chưa đối ứng* và được tính là **đã đối ứng** trong KPI (`countManualPaired`). Xác nhận chỉ làm được từ **IP quản trị**.
   Kỹ thuật: bảng `WO_PART_ON_OFF` (linked server Oracle) được kéo về **bảng tạm một lần** rồi join nhiều lần — không hỏi linked server theo từng dòng; cột event dò qua `INFORMATION_SCHEMA` nên không vỡ nếu hệ thống khác tên cột.

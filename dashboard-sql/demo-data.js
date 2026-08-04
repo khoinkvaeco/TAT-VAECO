@@ -269,14 +269,14 @@ function other(range, f) {
       del_time: rndDate(range.from, range.to).toISOString(),
       labelno: String(rndInt(100000, 999999)),
       voucher_issue: '',
-      note: rnd(['NOI', 'ROB', 'DIR', 'CRO', 'Ghi chu khac']),
+      note: rnd(['NOI', 'ROB', 'DIR', 'CRO', 'SWP', 'Ghi chu khac']),
     });
   }
   // Giai ma ma ly do giong server that (NOI/ROB/DIR/CRO)
-  const NAMES = { NOI: 'Không có phiếu xuất', ROB: 'Robbery (tháo xuống trước)',
-    DIR: 'Lắp thẳng từ kho', CRO: 'Repairable / consumable' };
+  const NAMES = { NOI: 'Không có phiếu xuất', SWP: 'Swap (hoán đổi thiết bị)',
+    ROB: 'Robbery (tháo xuống trước)', DIR: 'Lắp thẳng từ kho', CRO: 'Repairable / consumable' };
   return applyFilter(rows, f).map((r) => {
-    const m = /(^|[^A-Z])(NOI|ROB|DIR|CRO)([^A-Z]|$)/.exec(String(r.note).toUpperCase());
+    const m = /(^|[^A-Z])(NOI|SWP|ROB|DIR|CRO)([^A-Z]|$)/.exec(String(r.note).toUpperCase());
     const code = m ? m[2] : '';
     return { ...r, reason_code: code, reason_name: code ? NAMES[code] : 'Khác / chưa phân loại' };
   });
@@ -514,9 +514,11 @@ function manualPairCandidates(range, f) {
     ['Cùng orderno/psn', 'Trung bình', ''],
     ['Cùng tàu, gần thời gian', 'Thấp', ''],
     ['Other — ROB (Robbery (tháo xuống trước)) · Khớp event (WO)', 'Cao', 'ROB'],
-    ['Other — ROB (Robbery (tháo xuống trước)) · Khớp part no + số tàu', 'Trung bình', 'ROB'],
-    ['Other — NOI (Không có phiếu xuất) · Khớp part no', 'Thấp', 'NOI'],
+    ['Other — SWP (Swap (hoán đổi thiết bị)) · Khớp event (WO)', 'Cao', 'SWP'],
     ['WO_PART_ON_OFF (theo event)', 'Cao', ''],
+    ['Other — SWP (Swap (hoán đổi thiết bị)) · Khớp part no + số tàu', 'Trung bình', 'SWP'],
+    ['Cùng orderno/psn', 'Trung bình', ''],
+    ['Other — NOI (Không có phiếu xuất) · Khớp part no', 'Thấp', 'NOI'],
   ];
   return rows.map((r, i) => {
     const [method, conf, onac] = METHODS[i % METHODS.length];

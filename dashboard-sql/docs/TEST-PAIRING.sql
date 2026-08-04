@@ -146,6 +146,8 @@ DECLARE @woTo    int = @toDay   + 90;
 
 -- Don bang tam con sot tu lan chay loi truoc (connection pool dung lai
     -- cung phien -> #temp co the van ton tai va gay loi "already an object").
+-- Don bang tam con sot tu lan chay loi truoc (connection pool dung lai
+    -- cung phien -> #temp co the van ton tai va gay loi "already an object").
     IF OBJECT_ID('tempdb..#wo')    IS NOT NULL DROP TABLE #wo;
     IF OBJECT_ID('tempdb..#wo_ps') IS NOT NULL DROP TABLE #wo_ps;
     IF OBJECT_ID('tempdb..#wo_ev') IS NOT NULL DROP TABLE #wo_ev;
@@ -222,37 +224,39 @@ DECLARE @woTo    int = @toDay   + 90;
       'PA') AS department,
       DATEADD(HOUR, @tzOffset, DATEADD(MILLISECOND, TRY_CONVERT(int, TRY_CONVERT(bigint, TRY_CONVERT(float, k.[mutation_t])) % 86400000), DATEADD(DAY, TRY_CONVERT(int, TRY_CONVERT(float, k.[mutation])), TRY_CONVERT(datetime, @amosEpoch)))) AS issue_time_vn,
       CAST(DATEDIFF(MINUTE, DATEADD(HOUR, @tzOffset, DATEADD(MILLISECOND, TRY_CONVERT(int, TRY_CONVERT(bigint, TRY_CONVERT(float, k.[mutation_t])) % 86400000), DATEADD(DAY, TRY_CONVERT(int, TRY_CONVERT(float, k.[mutation])), TRY_CONVERT(datetime, @amosEpoch)))), GETDATE()) AS float) / 1440.0 AS tat_days,
-      -- Cap GOI Y. UU TIEN: [4] Other(on_ac) -> [1] WO theo part+serial ->
-      -- [1b] WO theo EVENT -> [2] cung orderno/psn -> [3] cung tau.
-      COALESCE(o4.partno_off,   w.part_off,   we.part_off,   o2.partno_off,   o3.partno_off)   AS sug_partno_off,
-      COALESCE(o4.serialno_off, w.serial_off, we.serial_off, o2.serialno_off, o3.serialno_off) AS sug_serialno_off,
-      CASE
-        WHEN o4.serialno_off IS NOT NULL THEN N'Other (on_ac)'
-        WHEN w.serial_off  IS NOT NULL   THEN N'WO_PART_ON_OFF'
-        WHEN we.serial_off IS NOT NULL   THEN N'WO_PART_ON_OFF (theo event)'
-        WHEN o2.serialno_off IS NOT NULL THEN N'Cùng orderno/psn'
-        WHEN o3.serialno_off IS NOT NULL THEN N'Cùng tàu, gần thời gian'
-        ELSE NULL
+      -- Cap GOI Y - chon theo DO TIN CAY giam dan (p.pick tinh 1 lan o CROSS APPLY):
+      --   Cao : O4E Other khop event > WPS WO part+serial > WEV WO theo event
+      --   TB  : O4A Other part+tau   > ORD cung orderno/psn
+      --   Thap: O4P Other chi part   > AC  cung tau, gan thoi gian
+      CASE p.pick WHEN 'O4E' THEN o4.partno_off WHEN 'O4A' THEN o4.partno_off
+                  WHEN 'O4P' THEN o4.partno_off WHEN 'WPS' THEN w.part_off
+                  WHEN 'WEV' THEN we.part_off   WHEN 'ORD' THEN o2.partno_off
+                  WHEN 'AC'  THEN o3.partno_off END AS sug_partno_off,
+      CASE p.pick WHEN 'O4E' THEN o4.serialno_off WHEN 'O4A' THEN o4.serialno_off
+                  WHEN 'O4P' THEN o4.serialno_off WHEN 'WPS' THEN w.serial_off
+                  WHEN 'WEV' THEN we.serial_off   WHEN 'ORD' THEN o2.serialno_off
+                  WHEN 'AC'  THEN o3.serialno_off END AS sug_serialno_off,
+      CASE WHEN p.pick IN ('O4E','O4A','O4P') THEN N'Other (on_ac)'
+           WHEN p.pick = 'WPS' THEN N'WO_PART_ON_OFF'
+           WHEN p.pick = 'WEV' THEN N'WO_PART_ON_OFF (theo event)'
+           WHEN p.pick = 'ORD' THEN N'Cùng orderno/psn'
+           WHEN p.pick = 'AC'  THEN N'Cùng tàu, gần thời gian'
       END AS match_method,
-      CASE
-        -- Other: cham diem theo so tieu chi khop (event > tau > chi part no)
-        WHEN o4.serialno_off IS NOT NULL THEN
-          CASE WHEN o4.score >= 3 THEN N'Cao' WHEN o4.score = 2 THEN N'Trung bình' ELSE N'Thấp' END
-        WHEN w.serial_off  IS NOT NULL   THEN N'Cao'
-        WHEN we.serial_off IS NOT NULL   THEN N'Cao'
-        WHEN o2.serialno_off IS NOT NULL THEN N'Trung bình'
-        WHEN o3.serialno_off IS NOT NULL THEN N'Thấp'
-        ELSE NULL
+      CASE WHEN p.pick IN ('O4E','WPS','WEV') THEN N'Cao'
+           WHEN p.pick IN ('O4A','ORD')       THEN N'Trung bình'
+           WHEN p.pick IN ('O4P','AC')        THEN N'Thấp'
       END AS confidence,
-      o4.on_ac      AS sug_on_ac,     -- ma ly do (NOI/ROB/DIR/CRO) neu ghep tu Other
-      o4.match_note AS sug_match_note, -- cac tieu chi da khop (event / tau / part)
-      -- Ban ghi TRA UNSERVICE cua thiet bi thao (ve con lai cua cap).
-      -- Nguon [4] chinh la ban ghi tra -> lay truc tiep tu o4.
-      COALESCE(o4.ret_labelno,  ret.ret_labelno)  AS sug_ret_labelno,
-      COALESCE(o4.ret_voucher,  ret.ret_voucher)  AS sug_ret_voucher,
-      COALESCE(o4.ret_del_time, ret.ret_del_time) AS sug_ret_del_time,
-      CASE WHEN COALESCE(o4.ret_del_time, ret.ret_del_time) IS NOT NULL
-        THEN CAST(DATEDIFF(MINUTE, DATEADD(HOUR, @tzOffset, DATEADD(MILLISECOND, TRY_CONVERT(int, TRY_CONVERT(bigint, TRY_CONVERT(float, k.[mutation_t])) % 86400000), DATEADD(DAY, TRY_CONVERT(int, TRY_CONVERT(float, k.[mutation])), TRY_CONVERT(datetime, @amosEpoch)))), COALESCE(o4.ret_del_time, ret.ret_del_time)) AS float) / 1440.0
+      -- Ma ly do / tieu chi khop: chi co nghia khi ghep tu nguon Other
+      CASE WHEN p.pick IN ('O4E','O4A','O4P') THEN o4.on_ac      END AS sug_on_ac,
+      CASE WHEN p.pick IN ('O4E','O4A','O4P') THEN o4.match_note END AS sug_match_note,
+      -- Ban ghi TRA UNSERVICE: nguon Other CHINH LA ban ghi tra -> lay tu o4;
+      -- cac nguon khac phai tra cuu them (apply ret).
+      CASE WHEN p.pick IN ('O4E','O4A','O4P') THEN o4.ret_labelno  ELSE ret.ret_labelno  END AS sug_ret_labelno,
+      CASE WHEN p.pick IN ('O4E','O4A','O4P') THEN o4.ret_voucher  ELSE ret.ret_voucher  END AS sug_ret_voucher,
+      CASE WHEN p.pick IN ('O4E','O4A','O4P') THEN o4.ret_del_time ELSE ret.ret_del_time END AS sug_ret_del_time,
+      CASE WHEN (CASE WHEN p.pick IN ('O4E','O4A','O4P') THEN o4.ret_del_time ELSE ret.ret_del_time END) IS NOT NULL
+        THEN CAST(DATEDIFF(MINUTE, DATEADD(HOUR, @tzOffset, DATEADD(MILLISECOND, TRY_CONVERT(int, TRY_CONVERT(bigint, TRY_CONVERT(float, k.[mutation_t])) % 86400000), DATEADD(DAY, TRY_CONVERT(int, TRY_CONVERT(float, k.[mutation])), TRY_CONVERT(datetime, @amosEpoch)))),
+             CASE WHEN p.pick IN ('O4E','O4A','O4P') THEN o4.ret_del_time ELSE ret.ret_del_time END) AS float) / 1440.0
       END AS sug_tat_days
     FROM [NQT].[dbo].[kho_ser1] k
     LEFT JOIN [NQT].[dbo].[real_us1] r
@@ -288,7 +292,8 @@ DECLARE @woTo    int = @toDay   + 90;
                   ELSE N'Khớp part no' END AS match_note
       FROM #other oa
       -- Cua so +/- : ROB co the tra TRUOC ngay lam phieu xuat
-      WHERE oa.ret_del_time >= DATEADD(DAY, -30, DATEADD(HOUR, @tzOffset, DATEADD(MILLISECOND, TRY_CONVERT(int, TRY_CONVERT(bigint, TRY_CONVERT(float, k.[mutation_t])) % 86400000), DATEADD(DAY, TRY_CONVERT(int, TRY_CONVERT(float, k.[mutation])), TRY_CONVERT(datetime, @amosEpoch)))))
+      WHERE UPPER(RTRIM(oa.on_ac)) NOT IN ('DIR')
+        AND oa.ret_del_time >= DATEADD(DAY, -30, DATEADD(HOUR, @tzOffset, DATEADD(MILLISECOND, TRY_CONVERT(int, TRY_CONVERT(bigint, TRY_CONVERT(float, k.[mutation_t])) % 86400000), DATEADD(DAY, TRY_CONVERT(int, TRY_CONVERT(float, k.[mutation])), TRY_CONVERT(datetime, @amosEpoch)))))
         AND oa.ret_del_time <  DATEADD(DAY,  60, DATEADD(HOUR, @tzOffset, DATEADD(MILLISECOND, TRY_CONVERT(int, TRY_CONVERT(bigint, TRY_CONVERT(float, k.[mutation_t])) % 86400000), DATEADD(DAY, TRY_CONVERT(int, TRY_CONVERT(float, k.[mutation])), TRY_CONVERT(datetime, @amosEpoch)))))
         AND (((CASE
       WHEN TRY_CONVERT(bigint, k.[event_perf]) IS NOT NULL
@@ -333,12 +338,27 @@ DECLARE @woTo    int = @toDay   + 90;
         AND ye.[ac_registr] IS NOT NULL
       ORDER BY ye.[mut_t] ASC, ya.[mut_t] DESC
     ) o3
-    -- Ban ghi tra unservice cua thiet bi THAO (cho cac nguon 1/1b/2/3)
+    -- CHON NGUON theo DO TIN CAY giam dan. Tinh MOT LAN o day roi dung lai o
+    -- SELECT (SQL Server khong cho tham chieu alias cua SELECT trong cung cau).
+    CROSS APPLY (VALUES (
+      CASE
+        WHEN o4.score = 3                THEN 'O4E'   -- Cao: Other khop event (WO)
+        WHEN w.serial_off  IS NOT NULL   THEN 'WPS'   -- Cao: WO_PART_ON_OFF part+serial
+        WHEN we.serial_off IS NOT NULL   THEN 'WEV'   -- Cao: WO_PART_ON_OFF theo event
+        WHEN o4.score = 2                THEN 'O4A'   -- TB : Other part no + so tau
+        WHEN o2.serialno_off IS NOT NULL THEN 'ORD'   -- TB : cung orderno/psn
+        WHEN o4.score = 1                THEN 'O4P'   -- Thap: Other chi khop part no
+        WHEN o3.serialno_off IS NOT NULL THEN 'AC'    -- Thap: cung tau, gan thoi gian
+      END
+    )) AS p(pick)
+    -- Ban ghi tra unservice cua thiet bi THAO (chi cho nguon KHONG phai Other)
     OUTER APPLY (
       SELECT TOP 1 r2.[labelno] AS ret_labelno, r2.[voucher_s] AS ret_voucher,
              r2.[del_time] AS ret_del_time
       FROM [NQT].[dbo].[real_us1] r2
-      WHERE RTRIM(r2.[serialno_o]) = COALESCE(w.serial_off, we.serial_off, o2.serialno_off, o3.serialno_off)
+      WHERE RTRIM(r2.[serialno_o]) = CASE p.pick
+              WHEN 'WPS' THEN w.serial_off  WHEN 'WEV' THEN we.serial_off
+              WHEN 'ORD' THEN o2.serialno_off WHEN 'AC' THEN o3.serialno_off END
         AND r2.[del_time] IS NOT NULL
         AND r2.[del_time] >= DATEADD(HOUR, @tzOffset, DATEADD(MILLISECOND, TRY_CONVERT(int, TRY_CONVERT(bigint, TRY_CONVERT(float, k.[mutation_t])) % 86400000), DATEADD(DAY, TRY_CONVERT(int, TRY_CONVERT(float, k.[mutation])), TRY_CONVERT(datetime, @amosEpoch))))
       ORDER BY r2.[del_time] ASC
@@ -387,24 +407,6 @@ DECLARE @woTo    int = @toDay   + 90;
     ORDER BY issue_time_vn DESC;
 
     DROP TABLE #wo; DROP TABLE #wo_ps; DROP TABLE #wo_ev; DROP TABLE #other;
-GO
-
-/* ===== PHAN 6: VI TRI HIEN TAI (ROTABLES) cho "Xuat kho chua lap" =========
-   Bao cao "Xuat kho chua lap" lay them cot Vi tri hien tai bang cach noi
-   ROTABLES qua khoa [psn]. Chay phan nay de kiem tra:
-     - Cot [psn] nam o bang nao (kho_ser1 hay chi co on_off)?
-     - Doc duoc ROTABLES tren linked server khong?                           */
-SELECT 'kho_ser1' AS bang, MAX(CASE WHEN COLUMN_NAME='psn' THEN 1 ELSE 0 END) AS co_psn
-FROM [NQT].[INFORMATION_SCHEMA].[COLUMNS] WHERE TABLE_SCHEMA='dbo' AND TABLE_NAME='kho_ser1'
-UNION ALL
-SELECT 'on_off', MAX(CASE WHEN COLUMN_NAME='psn' THEN 1 ELSE 0 END)
-FROM [NQT].[INFORMATION_SCHEMA].[COLUMNS] WHERE TABLE_SCHEMA='dbo' AND TABLE_NAME='on_off';
-
--- Doc thu ROTABLES (linked server Oracle)
-SELECT TOP 5 [psn], [location] FROM [DWH_DB]..[STG_AMOS].[ROTABLES];
-
--- Thu chinh vi du nguoi dung dua
-SELECT [psn], [location] FROM [DWH_DB]..[STG_AMOS].[ROTABLES] WHERE [psn] = 1064701;
 GO
 
 /* ===== PHAN 5: GHI CHU =====================================================
