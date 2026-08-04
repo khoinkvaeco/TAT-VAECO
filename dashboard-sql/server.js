@@ -42,6 +42,12 @@ const CONFIG = {
     .split(',').map((s) => s.trim()).filter(Boolean),
   // Cache bang SIGN (Oracle linked server DWH_DB) vao bang local NQT.dbo.SIGN_CACHE
   // de moi query khong phai keo qua linked server (cham). Tu lam moi dinh ky.
+  // Thu muc luu DU LIEU DO NGUOI DUNG TAO (cap doi ung thu cong, KB chatbot da
+  // hoc, trang thai bao cao). MAC DINH nam trong thu muc app; NEN doi ra NGOAI
+  // (vd D:\VAECO\dashboard-data) de cai lai/ghi de app KHONG lam mat du lieu.
+  dataDir: (process.env.DATA_DIR || '').trim()
+    ? path.resolve(process.env.DATA_DIR.trim())
+    : path.join(__dirname, 'data'),
   signCache: String(process.env.SIGN_CACHE || 'true').toLowerCase() !== 'false',
   signCacheMinutes: parseInt(process.env.SIGN_CACHE_MINUTES || '360', 10), // mac dinh 6h
   // --- Bao cao dinh ky day len Teams / SharePoint (phuong an 3) - MAC DINH TAT ---
@@ -493,9 +499,29 @@ function recertExists(kAlias) {
 // ---------------------------------------------------------------------------
 const MANUAL_PAIR_FILE = path.join(DATA_DIR_EARLY(), 'reconcile-manual.json');
 
-/** DATA_DIR duoc khai bao o muc 7c (sau doan nay) -> ham nho de dung som. */
+/** Thu muc du lieu (cau hinh qua DATA_DIR trong .env). Ham nho de dung som
+ *  vi hang DATA_DIR duoc khai bao o muc 7c ben duoi. */
 function DATA_DIR_EARLY() {
-  return path.join(__dirname, 'data');
+  return CONFIG.dataDir;
+}
+
+/**
+ * GHI FILE JSON AN TOAN (chong mat du lieu):
+ *   1. Ghi ra file .tmp truoc,
+ *   2. Giu ban cu thanh .bak,
+ *   3. Doi ten .tmp -> file that (thao tac NGUYEN TU tren cung o dia).
+ * Neu service bi tat dot ngot giua chung, file that van con nguyen (hoac la
+ * ban cu, hoac la ban moi) - KHONG bao gio bi cut doi/hong.
+ */
+function saveJsonSafe(file, data) {
+  const dir = path.dirname(file);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  const tmp = file + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf8');
+  if (fs.existsSync(file)) {
+    try { fs.copyFileSync(file, file + '.bak'); } catch (_) { /* co ban bak la tot, khong bat buoc */ }
+  }
+  fs.renameSync(tmp, file);
 }
 
 function loadManualPairs() {
@@ -510,9 +536,7 @@ function loadManualPairs() {
 }
 
 function saveManualPairs(arr) {
-  const dir = DATA_DIR_EARLY();
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(MANUAL_PAIR_FILE, JSON.stringify(arr, null, 2), 'utf8');
+  saveJsonSafe(MANUAL_PAIR_FILE, arr);
 }
 
 /** Danh sach cot cua 1 bang trong NQT (cache) - de dung cot TUY CHON ma khong
@@ -2193,7 +2217,7 @@ function accessLogger(req, res, next) {
 // ---------------------------------------------------------------------------
 
 // --- KHO TRI THUC "DA HOC" (admin duyet) - luu NOI BO o data/kb-learned.json ---
-const DATA_DIR = path.join(__dirname, 'data');
+const DATA_DIR = CONFIG.dataDir;
 const KB_LEARNED_FILE = path.join(DATA_DIR, 'kb-learned.json');
 function loadLearnedKB() {
   try {
@@ -2206,8 +2230,7 @@ function loadLearnedKB() {
   }
 }
 function saveLearnedKB(arr) {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-  fs.writeFileSync(KB_LEARNED_FILE, JSON.stringify(arr, null, 2), 'utf8');
+  saveJsonSafe(KB_LEARNED_FILE, arr);
   chatbot.setLearned(arr); // nap ngay cho chatbot
 }
 // Nap luc khoi dong
@@ -3825,6 +3848,12 @@ app.listen(CONFIG.port, () => {
   console.log(`  Che do: ${CONFIG.demoMode ? 'DEMO (du lieu mau)' : 'LIVE (SQL Server)'}`);
   console.log(`  AMOS -> VN offset: +${CONFIG.tzOffset}h | MAX_ROWS: ${CONFIG.maxRows}`);
   console.log(`  Admin IPs (ngoai localhost): ${CONFIG.adminIps.join(', ') || '(khong co)'}`);
+  // Du lieu do NGUOI DUNG tao (cap doi ung thu cong, KB da hoc) - nhac sao luu
+  console.log(`  Thu muc du lieu: ${CONFIG.dataDir}`);
+  if (CONFIG.dataDir === path.join(__dirname, 'data')) {
+    console.log('  ⚠️  Du lieu dang nam TRONG thu muc app -> cai lai/ghi de app co the MAT.');
+    console.log('     Nen dat DATA_DIR trong .env tro ra ngoai, vd: D:\\VAECO\\dashboard-data');
+  }
   // Trang thai chatbot: rule-based luon bat; LLM (noi bo/dam may) neu cau hinh + hop le
   if (!llm.isEnabled()) {
     console.log('  Chatbot: rule/intent noi bo (LLM: TAT)');

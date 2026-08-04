@@ -150,6 +150,26 @@ linked server — vẫn chạy đúng, chỉ **chậm hơn**. Đặt `SIGN_CACHE
 thông báo. Muốn nhanh thì nhờ DBA cấp quyền ghi cho **đúng một bảng** `SIGN_CACHE` (không đụng
 bảng nghiệp vụ nào).
 
+### Nên đặt thư mục dữ liệu Ở ĐÂU
+
+File JSON **bắt buộc nằm trên máy chạy backend** (chỉ backend đọc/ghi được — trình duyệt
+không ghi file). Nhưng **vị trí** thì nên đổi:
+
+| Đặt ở đâu | Ưu / nhược |
+|---|---|
+| `dashboard-sql/data/` (mặc định) | ❌ Nằm **trong** thư mục app → `git pull` bị xung đột, cài lại/ghi đè app có thể **mất sạch** |
+| **Thư mục riêng ngoài app** (khuyến nghị) — `DATA_DIR=D:\VAECO\dashboard-data` | ✅ Cài lại/nâng cấp app không đụng tới; dễ chỉ IT backup đúng 1 thư mục |
+| Ổ mạng dùng chung (`\\server\share\...`) | ✅ IT backup tập trung · ❌ Mạng trục trặc là không xác nhận được cặp; tài khoản service phải có quyền ghi |
+| SQL Server | ❌ Không dùng được — tài khoản DB chỉ có quyền **đọc** |
+
+Đặt `DATA_DIR` trong `.env` rồi **chép thư mục `data/` cũ sang vị trí mới** trước khi restart.
+Tài khoản chạy service phải có quyền **ghi** vào thư mục đó. Nếu để mặc định, log khởi động
+sẽ **cảnh báo** nhắc chuyển ra ngoài.
+
+**Chống hỏng file:** mỗi lần ghi đều làm 3 bước — ghi ra `.tmp` → giữ bản cũ thành `.bak` →
+đổi tên `.tmp` thành file thật (thao tác nguyên tử). Service bị tắt đột ngột giữa chừng thì
+file thật vẫn nguyên vẹn (hoặc bản cũ, hoặc bản mới), **không bao giờ cụt/hỏng**.
+
 > ⚠️ **Sao lưu:** thư mục `data/` (cặp đối ứng thủ công + KB chatbot đã học) **không nằm trong git**.
 > Trang Admin có nút **⬇ Tải bản sao lưu**; nên tải định kỳ, hoặc chép cả thư mục `data/` khi
 > cài lại / đổi máy chủ. Mất file này = mất toàn bộ cặp đã xác nhận (thiết bị quay lại "Chưa đối ứng").
