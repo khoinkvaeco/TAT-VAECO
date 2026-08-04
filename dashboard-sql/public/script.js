@@ -502,7 +502,7 @@ const REPORT_DEFS = {
   },
   'issued-not-installed': {
     title: 'Thiết bị xuất kho nhưng chưa lắp lên tàu',
-    desc: 'kho_ser1 vm=T (P-…) chưa lắp (on_off vm=YE) và chưa được return. TAT = hiện tại − giờ xuất kho. Cột "Vị trí hiện tại" lấy từ ROTABLES (nối qua khóa psn) — cho biết thiết bị đang nằm ở đâu.',
+    desc: 'kho_ser1 vm=T (P-…) chưa lắp (on_off vm=YE) và chưa được return. TAT = hiện tại − giờ xuất kho. Các cột "Vị trí hiện tại", "Higher PN", "Higher SN" lấy từ ROTABLES (nối qua khóa psn) — cho biết thiết bị đang nằm ở đâu và đang lắp trên thiết bị cấp trên nào.',
     columns: [
       { title: 'Part No', field: 'partno', headerFilter: 'input' },
       { title: 'Serial No', field: 'serialno', headerFilter: 'input' },
@@ -516,10 +516,20 @@ const REPORT_DEFS = {
       { title: 'Phiếu xuất', field: 'voucher_issue', headerFilter: 'input'  },
       { title: 'Ngày Giờ xuất', field: 'issue_time_vn', formatter: fmtDateCell },
       { title: 'TAT (now)', field: 'tat_days', formatter: fmtTatCell, hozAlign: 'right', sorter: 'number' },
-      // Vi tri hien tai cua thiet bi (ROTABLES.location, noi qua psn)
+      // Thong tin tu ROTABLES (noi qua psn): vi tri + thiet bi CAP TREN
       { title: 'PSN', field: 'psn', headerFilter: 'input', formatter: fmtIntCell, hozAlign: 'right' },
       {
         title: 'Vị trí hiện tại', field: 'location', headerFilter: 'input', widthGrow: 1.5,
+        formatter: (cell) => cell.getValue() || '<span style="color:var(--text-muted)">—</span>',
+      },
+      {
+        title: 'Higher PN', field: 'higher_pn', headerFilter: 'input',
+        headerTooltip: 'ROTABLES.PARTNONEW — Part No của thiết bị cấp trên đang lắp thiết bị này',
+        formatter: (cell) => cell.getValue() || '<span style="color:var(--text-muted)">—</span>',
+      },
+      {
+        title: 'Higher SN', field: 'higher_sn', headerFilter: 'input',
+        headerTooltip: 'ROTABLES.SERIALNONEW — Serial No của thiết bị cấp trên',
         formatter: (cell) => cell.getValue() || '<span style="color:var(--text-muted)">—</span>',
       },
     ],

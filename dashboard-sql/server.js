@@ -1017,16 +1017,18 @@ function psnKey(v) {
 }
 
 /**
- * VI TRI HIEN TAI cua thiet bi: [DWH_DB]..[STG_AMOS].[ROTABLES].location, noi
- * qua khoa [psn].
+ * Thong tin thiet bi tu [DWH_DB]..[STG_AMOS].[ROTABLES], noi qua khoa [psn]:
+ *   location    -> VI TRI HIEN TAI
+ *   PARTNONEW   -> Higher PN  (part/serial CAP TREN dang lap thiet bi nay)
+ *   SERIALNONEW -> Higher SN
  * Cach lam: KHONG join truc tiep bang linked server trong query chinh (se hoi
  * Oracle theo tung dong -> rat cham / loi OLE DB). Thay vao do lay danh sach
  * psn tu ket qua roi hoi ROTABLES theo TUNG LO (WHERE psn IN (...)) -> dieu
  * kien duoc day xuong Oracle, chi vai luot goi.
  * Loi linked server -> tra Map rong (bao cao van hien binh thuong, cot de trong).
- * @returns {Promise<Map<string,string>>} psnKey -> location
+ * @returns {Promise<Map<string,{location:string,higher_pn:string,higher_sn:string}>>}
  */
-async function fetchRotableLocations(psnList) {
+async function fetchRotableInfo(psnList) {
   const uniq = [...new Set((psnList || []).map(psnKey).filter(Boolean))];
   const out = new Map();
   if (!uniq.length) return out;
@@ -1037,26 +1039,33 @@ async function fetchRotableLocations(psnList) {
     const names = part.map((v, j) => { params['rp' + j] = Number(v); return '@rp' + j; });
     try {
       const rows = await query(
-        `SELECT [psn] AS psn, RTRIM([location]) AS location
+        `SELECT [psn] AS psn, RTRIM([location]) AS location,
+                RTRIM([PARTNONEW]) AS higher_pn, RTRIM([SERIALNONEW]) AS higher_sn
          FROM [DWH_DB]..[STG_AMOS].[ROTABLES]
          WHERE [psn] IN (${names.join(', ')})`,
         params
       );
-      for (const r of rows) out.set(psnKey(r.psn), r.location || '');
+      for (const r of rows) {
+        out.set(psnKey(r.psn), {
+          location: r.location || '',
+          higher_pn: r.higher_pn || '',
+          higher_sn: r.higher_sn || '',
+        });
+      }
     } catch (e) {
-      console.warn('[ROTABLES] Khong lay duoc location (bo qua cot nay):', e.message);
+      console.warn('[ROTABLES] Khong lay duoc thong tin (bo qua cac cot nay):', e.message);
       return out; // loi lo dau -> dung han, khong lam vo bao cao
     }
   }
   return out;
 }
 
-/** Gan cot `location` vao cac dong da co truong `psn`. */
-async function attachRotableLocation(rows) {
+/** Gan `location` / `higher_pn` / `higher_sn` vao cac dong da co truong `psn`. */
+async function attachRotableInfo(rows) {
   if (!rows.length || !('psn' in rows[0])) return rows;
-  const map = await fetchRotableLocations(rows.map((r) => r.psn));
-  if (!map.size) return rows.map((r) => ({ ...r, location: '' }));
-  return rows.map((r) => ({ ...r, location: map.get(psnKey(r.psn)) || '' }));
+  const map = await fetchRotableInfo(rows.map((r) => r.psn));
+  const EMPTY = { location: '', higher_pn: '', higher_sn: '' };
+  return rows.map((r) => ({ ...r, ...(map.get(psnKey(r.psn)) || EMPTY) }));
 }
 
 async function qIssuedNotInstalled(range, f) {
@@ -1124,9 +1133,9 @@ async function qIssuedNotInstalled(range, f) {
       AND ${amosToVN('k')} >= @from AND ${amosToVN('k')} < @to
       ${where}
     ORDER BY issue_time_vn DESC`;
-  // Gan VI TRI HIEN TAI tu ROTABLES (noi qua psn) - lam sau khi da co ket qua
-  // de chi hoi linked server theo lo, khong hoi tung dong.
-  return attachRotableLocation(await query(text, params));
+  // Gan VI TRI HIEN TAI + Higher PN/SN tu ROTABLES (noi qua psn) - lam sau khi
+  // da co ket qua de chi hoi linked server theo lo, khong hoi tung dong.
+  return attachRotableInfo(await query(text, params));
 }
 
 /**
@@ -3820,7 +3829,8 @@ app.get('/api/admin/diag/pairing', h(async (req, res) => {
       : (offCols.has('psn') ? 'on_off.psn (tra theo part+serial)' : 'KHONG CO -> cot Vi tri se trong'),
   };
   try {
-    const t = await query(`SELECT TOP 3 [psn] AS psn, RTRIM([location]) AS location
+    const t = await query(`SELECT TOP 3 [psn] AS psn, RTRIM([location]) AS location,
+                                  RTRIM([PARTNONEW]) AS higher_pn, RTRIM([SERIALNONEW]) AS higher_sn
                            FROM [DWH_DB]..[STG_AMOS].[ROTABLES]`);
     out.viTriHienTai.docDuocROTABLES = true;
     out.viTriHienTai.viDu = t;
