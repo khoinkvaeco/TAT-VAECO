@@ -268,6 +268,7 @@ CREATE INDEX IX_SIGN_user ON [DWH_DB].[STG_AMOS].[SIGN] ([USER_SIGN]) INCLUDE ([
 | `GET /api/admin/manual-pairs/export` | Tải bản sao lưu JSON các cặp đã xác nhận. **Chỉ IP quản trị.** |
 | `POST /api/admin/manual-pair/delete` | Gỡ 1 cặp đã xác nhận (thiết bị quay lại *Chưa đối ứng*). **Chỉ IP quản trị.** |
 | `GET /api/admin/diag/rbi` | Chẩn đoán báo cáo *Tháo trước lắp sau* (đếm theo từng điều kiện nới lỏng dần). **Chỉ IP quản trị.** |
+| `GET /api/admin/diag/higher` | Soi dữ liệu để xác định cột nào trong `WO_PART_ON_OFF` đánh dấu **lắp vào higher assembly** (thay vì lắp lên tàu): liệt kê cột thật, đối chiếu danh sách *Xuất kho chưa lắp* với `WO_PART_ON_OFF`, thống kê phân bố giá trị từng cột. **Chỉ đọc. Chỉ IP quản trị.** |
 | `GET /api/admin/report-status` | Trạng thái báo cáo định kỳ Teams/SharePoint (lịch, kỳ, kênh đã bật). **Chỉ IP quản trị.** |
 | `POST /api/admin/report-now` | Chạy báo cáo định kỳ NGAY (để test webhook/thư mục xuất). **Chỉ IP quản trị.** |
 | `POST /api/admin/llm-test` | Gọi thử LLM một lần để kiểm tra kết nối. Body `{ message }` → `{ ok, reply, sent, ms, error }`. **Chỉ IP quản trị.** |

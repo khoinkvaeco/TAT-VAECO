@@ -3928,6 +3928,144 @@ app.get('/api/admin/diag/rbi', h(async (req, res) => {
   res.json(Object.assign({ range }, ...parts));
 }));
 
+// --- ADMIN: SOI "LAP VAO HIGHER ASSEMBLY" -------------------------------------
+//     Nghiep vu: co thiet bi KHONG lap len tau (khong co su kien YA/YE trong
+//     on_off) ma duoc gan vao mot CUM CAO HON (higher_pn / higher_sn cua
+//     ROTABLES). Nhung thiet bi nay dang bi liet ke nham vao "Xuat kho chua lap".
+//     MUC DICH cua endpoint: DOC THAT du lieu de xac dinh COT NAO trong
+//     WO_PART_ON_OFF danh dau viec do - KHONG doan ten cot.
+//     Endpoint CHI DOC (SELECT), khong sua gi.
+app.get('/api/admin/diag/higher', h(async (req, res) => {
+  if (CONFIG.demoMode) return res.json({ note: 'Dang o DEMO_MODE, khong co du lieu that.' });
+  const range = resolveRange(req.query);
+  const f = readFilters(req.query);
+  const out = { range };
+
+  /** Rut gon 1 dong de tra ve JSON goc (cat chuoi qua dai, bo cot nhi phan). */
+  const slim = (row) => {
+    const o = {};
+    for (const [k, v] of Object.entries(row)) {
+      if (v === null || v === undefined) { o[k] = null; continue; }
+      if (Buffer.isBuffer(v)) { o[k] = '(binary ' + v.length + ' bytes)'; continue; }
+      if (v instanceof Date) { o[k] = v.toISOString(); continue; }
+      const s = typeof v === 'string' ? v.trim() : v;
+      o[k] = typeof s === 'string' && s.length > 120 ? s.slice(0, 120) + '…' : s;
+    }
+    return o;
+  };
+
+  // ---- 1) Danh sach COT THAT cua WO_PART_ON_OFF + vai dong mau -------------
+  try {
+    const s = await query('SELECT TOP 3 * FROM [DWH_DB]..[STG_AMOS].[WO_PART_ON_OFF]');
+    out.woPartOnOff = {
+      docDuoc: true,
+      soCot: s.length ? Object.keys(s[0]).length : 0,
+      cot: s.length ? Object.keys(s[0]) : [],
+      viDu: s.map(slim),
+    };
+  } catch (e) {
+    out.woPartOnOff = { docDuoc: false, loi: e.message };
+  }
+
+  // ---- 2) on_off: cot [higher_par] dang duoc dung nhu the nao --------------
+  //        (code hien tai coi vm='YE' + higher_par IS NULL = "lap thang len tau")
+  const dayParams = { ...amosDayParams(range) };
+  try {
+    out.onOffHigherPar = {
+      theoVm: await query(`
+        SELECT RTRIM(o.[vm]) AS vm,
+               COUNT(*) AS tong,
+               SUM(CASE WHEN o.[higher_par] IS NULL THEN 1 ELSE 0 END) AS higher_par_rong,
+               SUM(CASE WHEN o.[higher_par] IS NOT NULL THEN 1 ELSE 0 END) AS higher_par_co
+        FROM [NQT].[dbo].[on_off] o
+        WHERE o.[mutation] BETWEEN @fromDay AND @toDay
+        GROUP BY o.[vm]
+        ORDER BY COUNT(*) DESC`, dayParams),
+    };
+    out.onOffHigherPar.viDuYE_coHigherPar = (await query(`
+      SELECT TOP 5 RTRIM(o.[partno]) AS partno, RTRIM(o.[serialno]) AS serialno,
+             o.[labelno] AS labelno, RTRIM(o.[vm]) AS vm,
+             o.[higher_par] AS higher_par, RTRIM(o.[ac_registr]) AS ac_registr,
+             ${amosToVN('o')} AS time_vn
+      FROM [NQT].[dbo].[on_off] o
+      WHERE o.[vm] = 'YE' AND o.[higher_par] IS NOT NULL
+        AND o.[mutation] BETWEEN @fromDay AND @toDay`, dayParams)).map(slim);
+  } catch (e) {
+    out.onOffHigherPar = { loi: e.message };
+  }
+
+  // ---- 3) DOI CHIEU: danh sach "Xuat kho chua lap" <-> WO_PART_ON_OFF ------
+  //        Neu thiet bi "chua lap" thuc ra CO trong WO_PART_ON_OFF thi cac cot
+  //        cua dong do se cho biet no duoc lap vao dau.
+  try {
+    const rows = await qIssuedNotInstalled(range, f);
+    const coHigher = rows.filter((r) => (r.higher_pn || '').trim() || (r.higher_sn || '').trim());
+    out.xuatKhoChuaLap = {
+      soDong: rows.length,
+      coHigherPnSn_tuROTABLES: coHigher.length,
+      viDuCoHigher: coHigher.slice(0, 5).map((r) => ({
+        partno: r.partno, serialno: r.serialno, labelno: r.labelno,
+        ac_registr: r.ac_registr, psn: r.psn, location: r.location,
+        higher_pn: r.higher_pn, higher_sn: r.higher_sn,
+      })),
+    };
+
+    // Hoi WO_PART_ON_OFF THEO LO (1 lan) - KHONG hoi tung dong (linked server).
+    const LIMIT = 200;
+    const seen = new Set();
+    const serials = [];
+    for (const r of rows) {
+      const s = String(r.serialno || '').trim().toUpperCase();
+      if (!s || seen.has(s)) continue;
+      seen.add(s); serials.push(s);
+      if (serials.length >= LIMIT) break;
+    }
+    out.xuatKhoChuaLap.soSerialDemDoiChieu = serials.length;
+    if (serials.length) {
+      const p = {}; const names = [];
+      serials.forEach((s, i) => { p['s' + i] = s; names.push('@s' + i); });
+      const t0 = Date.now();
+      const woRows = await query(
+        `SELECT * FROM [DWH_DB]..[STG_AMOS].[WO_PART_ON_OFF]
+         WHERE [SERIALNO] IN (${names.join(', ')})`, p);
+      // Khop chinh xac ca part + serial
+      const key = (pn, sn) => String(pn || '').trim().toUpperCase() + '|' + String(sn || '').trim().toUpperCase();
+      const want = new Set(rows.map((r) => key(r.partno, r.serialno)));
+      const hit = woRows.filter((w) => want.has(key(w.PARTNO ?? w.partno, w.SERIALNO ?? w.serialno)));
+      out.xuatKhoChuaLap.doiChieuWO = {
+        ms: Date.now() - t0,
+        soDongWO_theoSerial: woRows.length,
+        soDongWO_khopCaPartVaSerial: hit.length,
+        viDuDongWO: hit.slice(0, 5).map(slim),
+      };
+      // Phan bo GIA TRI cua tung cot trong cac dong khop -> cot nao la "dau hieu"
+      // se lo ra ngay (vi du cot chi co 2 gia tri 'AC' / 'SHOP').
+      const dist = {};
+      for (const w of hit) {
+        for (const [k, v] of Object.entries(w)) {
+          const s = v === null || v === undefined ? '(NULL)'
+            : (v instanceof Date ? v.toISOString().slice(0, 10) : String(v).trim().slice(0, 40));
+          (dist[k] = dist[k] || new Map()).set(s, (dist[k].get(s) || 0) + 1);
+        }
+      }
+      out.xuatKhoChuaLap.phanBoGiaTriCot = Object.fromEntries(
+        Object.entries(dist).map(([k, m]) => [k, {
+          soGiaTriKhacNhau: m.size,
+          topGiaTri: [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5)
+            .map(([v, n]) => `${v} (${n})`),
+        }])
+      );
+    }
+  } catch (e) {
+    out.xuatKhoChuaLap = { loi: e.message };
+  }
+
+  out.huongDan = 'Xem "phanBoGiaTriCot": cột nào chỉ có ít giá trị khác nhau ' +
+    '(ví dụ 2-3 giá trị) chính là cột đánh dấu lắp vào tàu hay vào higher assembly. ' +
+    'Báo tên cột + giá trị nào là "higher assembly" để cập nhật logic báo cáo.';
+  res.json(out);
+}));
+
 // --- ADMIN: TRANG THAI LLM (de kiem tra cau hinh da dung chua) ---
 app.get('/api/admin/llm-status', h(async (req, res) => {
   res.json({
