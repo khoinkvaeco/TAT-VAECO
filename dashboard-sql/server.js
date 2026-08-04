@@ -1362,11 +1362,23 @@ async function qManualPairCandidates(range, f) {
     }
   }
   // Ghep tu tab "Other" -> ghi ro MA LY DO + tieu chi da khop trong ten phuong phap
+  // CANH BAO TRUNG: mot thiet bi da thao chi duoc doi ung cho DUNG MOT phieu
+  // xuat. Neu cung 1 serial thao duoc goi y cho NHIEU phieu -> chi toi da 1 cai
+  // dung; danh dau de nguoi dung khong xac nhan nham ca hai (se lam KPI sai).
+  const dupCount = new Map();
+  for (const r of rows) {
+    const k = String(r.sug_serialno_off || '').trim().toUpperCase();
+    if (k) dupCount.set(k, (dupCount.get(k) || 0) + 1);
+  }
   return rows.map((r) => {
-    if (r.match_method !== 'Other (on_ac)') return r;
+    const k = String(r.sug_serialno_off || '').trim().toUpperCase();
+    const dup = k ? (dupCount.get(k) || 0) : 0;
+    const out = { ...r, sug_duplicate: dup > 1 ? dup : 0 };
+    if (r.match_method !== 'Other (on_ac)') return out;
     const d = decodeOnAc(r.sug_on_ac);
     const base = d ? `Other — ${d.code} (${d.name})` : 'Other (on_ac)';
-    return { ...r, match_method: r.sug_match_note ? `${base} · ${r.sug_match_note}` : base };
+    out.match_method = r.sug_match_note ? `${base} · ${r.sug_match_note}` : base;
+    return out;
   });
 }
 
@@ -3563,7 +3575,24 @@ app.post('/api/admin/manual-pair/confirm', h(async (req, res) => {
     return res.status(400).json({ error: true, message: 'Thieu issueLabel / issueVoucher.' });
   }
   const key = pairKey(issueLabel, issueVoucher);
-  const arr = loadManualPairs().filter((p) => pairKey(p.issueLabel, p.issueVoucher) !== key);
+  const all = loadManualPairs();
+  // CHAN TRUNG: 1 thiet bi da thao chi doi ung cho DUNG 1 phieu xuat. Neu serial
+  // thao nay da duoc gan cho phieu KHAC -> tu choi (tranh dem 2 lan trong KPI).
+  const offSn = String(b.offSerialno ?? '').trim().toUpperCase();
+  if (offSn) {
+    const clash = all.find((p) =>
+      String(p.offSerialno ?? '').trim().toUpperCase() === offSn &&
+      pairKey(p.issueLabel, p.issueVoucher) !== key);
+    if (clash && !b.force) {
+      return res.status(409).json({
+        error: true, code: 'DUPLICATE_OFF_SERIAL',
+        message: `Serial tháo ${b.offSerialno} đã được đối ứng cho phiếu ${clash.issueVoucher} ` +
+          `(label ${clash.issueLabel}) lúc ${clash.confirmedAt || ''}. Một thiết bị tháo chỉ ` +
+          `đối ứng cho MỘT phiếu xuất — hãy gỡ cặp cũ trước nếu cặp này mới đúng.`,
+      });
+    }
+  }
+  const arr = all.filter((p) => pairKey(p.issueLabel, p.issueVoucher) !== key);
   arr.push({
     issueLabel, issueVoucher,
     issuePartno: String(b.issuePartno ?? '').trim(),

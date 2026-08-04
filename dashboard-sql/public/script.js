@@ -571,6 +571,15 @@ const REPORT_DEFS = {
       { title: 'TAT nếu ghép', field: 'sug_tat_days', formatter: fmtTatCell, hozAlign: 'right', sorter: 'number' },
       { title: 'Ghi chú on_ac', field: 'sug_on_ac', headerFilter: 'input' },
       {
+        title: '⚠', field: 'sug_duplicate', hozAlign: 'center', width: 55,
+        headerTooltip: 'Cùng một thiết bị tháo được gợi ý cho nhiều phiếu xuất — chỉ tối đa 1 cái đúng',
+        formatter: (cell) => {
+          const n = Number(cell.getValue()) || 0;
+          if (n < 2) return '';
+          return `<span title="Serial tháo này còn được gợi ý cho ${n - 1} phiếu khác — kiểm tra kỹ trước khi xác nhận" style="color:${cssVar('--critical')};font-weight:700">⚠${n}</span>`;
+        },
+      },
+      {
         title: 'Cách ghép', field: 'match_method', headerFilter: 'input', widthGrow: 2,
         formatter: (cell) => cell.getValue() || '<span style="color:var(--text-muted)">— không tìm được —</span>',
       },
@@ -1273,8 +1282,12 @@ async function confirmManualPair(row) {
     `Thiết bị XUẤT: ${d.partno || ''} / ${d.serialno || ''} (label ${d.labelno || ''}, phiếu ${d.voucher_issue || ''})\n` +
     `Thiết bị THÁO: ${d.sug_partno_off || ''} / ${d.sug_serialno_off || ''}` +
     (d.sug_ret_labelno ? ` (label trả ${d.sug_ret_labelno})` : ' (chưa thấy bản ghi trả US)') + `\n` +
-    `Cách ghép: ${d.match_method || '—'} · Độ tin cậy: ${d.confidence || '—'}\n\n` +
-    `Sau khi xác nhận, thiết bị này hết nằm trong "Chưa đối ứng" và được tính vào KPI.`;
+    `Cách ghép: ${d.match_method || '—'} · Độ tin cậy: ${d.confidence || '—'}\n` +
+    (Number(d.sug_duplicate) > 1
+      ? `\n⚠ CẢNH BÁO: serial tháo này còn được gợi ý cho ${Number(d.sug_duplicate) - 1} phiếu xuất khác.\n` +
+        `Chỉ tối đa MỘT cặp là đúng — hãy kiểm tra kỹ.\n`
+      : '') +
+    `\nSau khi xác nhận, thiết bị này hết nằm trong "Chưa đối ứng" và được tính vào KPI.`;
   if (!confirm(msg)) return;
   try {
     const res = await fetch('/api/admin/manual-pair/confirm', {
@@ -1292,6 +1305,7 @@ async function confirmManualPair(row) {
       }),
     });
     const out = await res.json();
+    if (res.status === 409) { showError(out.message); return; }  // trung serial tháo
     if (!res.ok || out.error) throw new Error(out.message || `Lỗi ${res.status}`);
     row.delete();                 // bo dong da xu ly khoi bang
     reportCache.clear();          // so lieu bao cao da doi

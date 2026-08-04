@@ -525,6 +525,7 @@ function manualPairCandidates(range, f) {
       match_method: method,
       confidence: conf,
       sug_on_ac: onac,
+      sug_duplicate: i % 5 === 0 ? 2 : 0,   // mo phong ca trung de xem canh bao
       sug_ret_labelno: String(rndInt(100000, 999999)), // label KHAC voi phieu xuat
       sug_ret_voucher: 'P-' + rndInt(100000, 999999),
       sug_ret_del_time: del.toISOString(),
