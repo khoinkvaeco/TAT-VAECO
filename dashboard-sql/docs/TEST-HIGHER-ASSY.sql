@@ -77,19 +77,18 @@ WHERE o.[vm] IN ('YE','YA')
 ORDER BY o.[mutation] DESC, o.[mutation_t] DESC;
 GO
 
-/* ===== PHAN 4: THIET BI "XUAT KHO CHUA LAP" NHUNG DA GAN VAO CUM ==========
-   Lay danh sach phieu xuat KHONG co su kien lap (dung dung dieu kien cua bao
-   cao "Xuat kho chua lap"), roi noi sang ROTABLES qua [psn] de xem thiet bi
-   hien dang gan vao higher_PN / higher_SN nao.
-   -> So dong tra ve chinh la so ca dang bi liet ke NHAM. */
+/* ===== PHAN 4: THIET BI "XUAT KHO CHUA LAP" (chi bang NOI BO, chay nhanh) ==
+   Dung DUNG dieu kien cua bao cao "Xuat kho chua lap" nhung KHONG dung linked
+   server -> chay rat nhanh, de doi chieu so luong voi dashboard.
+   Cot [psn] lay san de PHAN 5 noi sang ROTABLES.
+   LUU Y: cot vi tri / higher_pn / higher_sn nam o PHAN 5 (phai keo ROTABLES ve
+   bang tam mot lan, khong join truc tiep qua linked server theo tung dong). */
 DECLARE @tuNgay date = '2026-07-01';   -- <<< SUA NGAY
 DECLARE @denNgay date = '2026-08-01';  -- <<< SUA NGAY
 DECLARE @amosEpoch date = '1971-12-31';
 DECLARE @tzOffset int = 7;
 DECLARE @fromDay int = DATEDIFF(DAY, @amosEpoch, @tuNgay);
 DECLARE @toDay   int = DATEDIFF(DAY, @amosEpoch, @denNgay);
-DECLARE @from datetime = CAST(@tuNgay AS datetime);
-DECLARE @to   datetime = CAST(@denNgay AS datetime);
 
 SELECT TOP 200
        RTRIM(k.[partno])     AS partno,
@@ -97,13 +96,12 @@ SELECT TOP 200
        k.[labelno]           AS labelno,
        RTRIM(k.[voucherno])  AS voucher_xuat,
        RTRIM(k.[ac_registr]) AS ac_registr,
-       ro.[psn]              AS psn,
-       RTRIM(ro.[location])  AS vi_tri_hien_tai,
-       RTRIM(ro.[PARTNONEW]) AS higher_pn,
-       RTRIM(ro.[SERIALNONEW]) AS higher_sn,
+       px.psn                AS psn,
        DATEADD(HOUR, @tzOffset,
-         DATEADD(MILLISECOND, CAST(k.[mutation_t] % 86400000 AS int),
-           DATEADD(DAY, CAST(k.[mutation] AS int), CAST(@amosEpoch AS datetime)))) AS gio_xuat_vn
+         DATEADD(MILLISECOND,
+           TRY_CONVERT(int, TRY_CONVERT(bigint, TRY_CONVERT(float, k.[mutation_t])) % 86400000),
+           DATEADD(DAY, TRY_CONVERT(int, TRY_CONVERT(float, k.[mutation])),
+             TRY_CONVERT(datetime, @amosEpoch)))) AS gio_xuat_vn
 FROM [NQT].[dbo].[kho_ser1] k
 LEFT JOIN [NQT].[dbo].[on_off] o
        ON k.[labelno] = o.[labelno] AND o.[vm] = 'YE'
@@ -111,7 +109,6 @@ OUTER APPLY (
        SELECT TOP 1 op.[psn] FROM [NQT].[dbo].[on_off] op
        WHERE op.[partno] = k.[partno] AND op.[serialno] = k.[serialno]
          AND op.[psn] IS NOT NULL ORDER BY op.[mut_t] DESC) px(psn)
-LEFT JOIN [DWH_DB]..[STG_AMOS].[ROTABLES] ro ON ro.[psn] = px.psn
 WHERE k.[vm] = 'T'
   AND k.[voucherno] LIKE 'P-%'
   AND LTRIM(RTRIM(ISNULL(k.[costcenter], ''))) <> 'VN-SPL'
@@ -151,12 +148,23 @@ DECLARE @woFrom  int = @fromDay - 30;   -- lap co the xay ra truoc/sau ky
 DECLARE @woTo    int = @toDay   + 30;
 
 IF OBJECT_ID('tempdb..#wo')      IS NOT NULL DROP TABLE #wo;
+IF OBJECT_ID('tempdb..#ro')      IS NOT NULL DROP TABLE #ro;
 IF OBJECT_ID('tempdb..#chualap') IS NOT NULL DROP TABLE #chualap;
 
 -- (5a) Keo ve bang tam MOT LAN, lay HET cac cot de con soi
 SELECT * INTO #wo
 FROM [DWH_DB]..[STG_AMOS].[WO_PART_ON_OFF] x
 WHERE x.[MUTATION] BETWEEN @woFrom AND @woTo;
+
+-- (5a2) ROTABLES cung keo ve MOT LAN (KHONG join truc tiep qua linked server
+--       theo tung dong - se rat cham). Chi lay 4 cot can dung.
+SELECT x.[psn]                  AS psn,
+       RTRIM(x.[location])      AS location,
+       RTRIM(x.[PARTNONEW])     AS higher_pn,
+       RTRIM(x.[SERIALNONEW])   AS higher_sn
+INTO #ro
+FROM [DWH_DB]..[STG_AMOS].[ROTABLES] x;
+CREATE INDEX IX_ro_psn ON #ro (psn);
 
 -- (5b) DANH SACH DAY DU CAC COT (chieu doc - de chup man hinh gui lai)
 SELECT c.column_id AS stt, c.name AS ten_cot, t.name AS kieu_du_lieu,
@@ -173,12 +181,14 @@ SELECT RTRIM(k.[partno])      AS partno,
        RTRIM(k.[voucherno])   AS voucher_xuat,
        RTRIM(k.[ac_registr])  AS ac_registr,
        px.psn                 AS psn,
-       RTRIM(ro.[location])   AS vi_tri_hien_tai,
-       RTRIM(ro.[PARTNONEW])  AS higher_pn,
-       RTRIM(ro.[SERIALNONEW]) AS higher_sn,
+       ISNULL(ro.location, '')   AS vi_tri_hien_tai,
+       ISNULL(ro.higher_pn, '')  AS higher_pn,
+       ISNULL(ro.higher_sn, '')  AS higher_sn,
        DATEADD(HOUR, @tzOffset,
-         DATEADD(MILLISECOND, CAST(k.[mutation_t] % 86400000 AS int),
-           DATEADD(DAY, CAST(k.[mutation] AS int), CAST(@amosEpoch AS datetime)))) AS gio_xuat_vn
+         DATEADD(MILLISECOND,
+           TRY_CONVERT(int, TRY_CONVERT(bigint, TRY_CONVERT(float, k.[mutation_t])) % 86400000),
+           DATEADD(DAY, TRY_CONVERT(int, TRY_CONVERT(float, k.[mutation])),
+             TRY_CONVERT(datetime, @amosEpoch)))) AS gio_xuat_vn
 INTO #chualap
 FROM [NQT].[dbo].[kho_ser1] k
 LEFT JOIN [NQT].[dbo].[on_off] o
@@ -187,7 +197,7 @@ OUTER APPLY (
        SELECT TOP 1 op.[psn] FROM [NQT].[dbo].[on_off] op
        WHERE op.[partno] = k.[partno] AND op.[serialno] = k.[serialno]
          AND op.[psn] IS NOT NULL ORDER BY op.[mut_t] DESC) px(psn)
-LEFT JOIN [DWH_DB]..[STG_AMOS].[ROTABLES] ro ON ro.[psn] = px.psn
+LEFT JOIN #ro ro ON ro.psn = px.psn
 WHERE k.[vm] = 'T'
   AND k.[voucherno] LIKE 'P-%'
   AND LTRIM(RTRIM(ISNULL(k.[costcenter], ''))) <> 'VN-SPL'
@@ -232,7 +242,31 @@ WHERE EXISTS (SELECT 1 FROM [NQT].[dbo].[on_off] o3
                 AND o3.[vm] = 'YE' AND o3.[higher_par] IS NULL
                 AND o3.[mutation] BETWEEN @fromDay AND @toDay);
 
+-- (5g) SO SANH NHANH 2 NHOM tren 3 cot nghi ngo nhat (LABELNO / AC_POSITION /
+--      LOCID_PK). Neu nhom "chua lap" luon rong o mot cot ma nhom binh thuong
+--      luon co -> chinh cot do la dau hieu.
+SELECT 'A. Nhom XUAT KHO CHUA LAP' AS nhom,
+       COUNT(*) AS so_dong,
+       SUM(CASE WHEN w.[LABELNO]     IS NULL THEN 1 ELSE 0 END) AS labelno_rong,
+       SUM(CASE WHEN w.[AC_POSITION] IS NULL THEN 1 ELSE 0 END) AS ac_position_rong,
+       SUM(CASE WHEN w.[LOCID_PK]    IS NULL THEN 1 ELSE 0 END) AS locid_pk_rong
+FROM #chualap c
+INNER JOIN #wo w ON RTRIM(w.[PARTNO]) = c.partno AND RTRIM(w.[SERIALNO]) = c.serialno
+UNION ALL
+SELECT 'B. Nhom LAP LEN TAU binh thuong',
+       COUNT(*),
+       SUM(CASE WHEN w.[LABELNO]     IS NULL THEN 1 ELSE 0 END),
+       SUM(CASE WHEN w.[AC_POSITION] IS NULL THEN 1 ELSE 0 END),
+       SUM(CASE WHEN w.[LOCID_PK]    IS NULL THEN 1 ELSE 0 END)
+FROM #wo w
+WHERE EXISTS (SELECT 1 FROM [NQT].[dbo].[on_off] o4
+              WHERE RTRIM(o4.[partno]) = RTRIM(w.[PARTNO])
+                AND RTRIM(o4.[serialno]) = RTRIM(w.[SERIALNO])
+                AND o4.[vm] = 'YE' AND o4.[higher_par] IS NULL
+                AND o4.[mutation] BETWEEN @fromDay AND @toDay);
+
 DROP TABLE #wo;
+DROP TABLE #ro;
 DROP TABLE #chualap;
 GO
 
