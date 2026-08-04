@@ -378,3 +378,71 @@ FROM [DWH_DB]..[STG_AMOS].[WO_PART_ON_OFF]
 WHERE [MUTATION] BETWEEN @woFrom AND @woTo
 GROUP BY RTRIM([LOCID_PK]) ORDER BY COUNT(*) DESC;
 GO
+
+/* ===== PHAN 7: CHIEU NGUOC LAI - "CHI THAO MA KHONG CO LAP" ================
+   Trong WO_PART_ON_OFF, moi dong la 1 lan THAY THE tren cum: thiet bi CU ra
+   (PARTNO_OFF/SERIALNO_OFF), thiet bi MOI vao (PARTNO/SERIALNO).
+   Nhung thiet bi CU do cung KHONG sinh su kien on_off vm='YA' (vi khong thao
+   tu tau) -> bao cao "Thao chua tra US" (dieu kien vm='YA' AND higher_par IS
+   NULL) KHONG nhin thay chung.
+
+   Khoi nay CHI DEM de biet nhom do lon co nao va da tra unservice hay chua:
+     - da tra US   -> nhieu kha nang dang nam o tab "Other (on_ac)" / "Chua doi ung"
+     - chua tra US -> dang bi thieu hoan toan, nen dua vao "Thao chua tra US"
+   >>> CHI CAN SUA 2 DONG NGAY BEN DUOI <<< */
+DECLARE @tuNgay  date = '2026-07-01';   -- <<< SUA NGAY BAT DAU KY
+DECLARE @denNgay date = '2026-08-01';   -- <<< SUA NGAY KET THUC KY (khong bao gom)
+
+DECLARE @amosEpoch date = '1971-12-31';
+DECLARE @woFrom int = DATEDIFF(DAY, @amosEpoch, @tuNgay) - 30;
+DECLARE @woTo   int = DATEDIFF(DAY, @amosEpoch, @denNgay) + 30;
+
+IF OBJECT_ID('tempdb..#wooff') IS NOT NULL DROP TABLE #wooff;
+
+-- Keo ve bang tam MOT LAN (khong hoi linked server theo tung dong)
+SELECT DISTINCT RTRIM(x.[PARTNO_OFF])   AS partno_off,
+                RTRIM(x.[SERIALNO_OFF]) AS serialno_off
+INTO #wooff
+FROM [DWH_DB]..[STG_AMOS].[WO_PART_ON_OFF] x
+WHERE x.[MUTATION] BETWEEN @woFrom AND @woTo
+  AND x.[SERIALNO_OFF] IS NOT NULL AND LTRIM(RTRIM(x.[SERIALNO_OFF])) <> ''
+  AND x.[PARTNO_OFF]   IS NOT NULL AND LTRIM(RTRIM(x.[PARTNO_OFF]))   <> '';
+
+SELECT 1 AS stt, 'Tong thiet bi bi THAY RA khoi cum (theo WO)' AS tieu_chi,
+       COUNT(*) AS so_thiet_bi FROM #wooff
+UNION ALL SELECT 2, 'Trong do: KHONG co su kien YA trong on_off',
+       COUNT(*) FROM #wooff t
+       WHERE NOT EXISTS (SELECT 1 FROM [NQT].[dbo].[on_off] o
+                         WHERE RTRIM(o.[partno]) = t.partno_off
+                           AND RTRIM(o.[serialno]) = t.serialno_off AND o.[vm] = 'YA')
+UNION ALL SELECT 3, '   ... va DA tra unservice (real_us1)',
+       COUNT(*) FROM #wooff t
+       WHERE NOT EXISTS (SELECT 1 FROM [NQT].[dbo].[on_off] o
+                         WHERE RTRIM(o.[partno]) = t.partno_off
+                           AND RTRIM(o.[serialno]) = t.serialno_off AND o.[vm] = 'YA')
+         AND EXISTS (SELECT 1 FROM [NQT].[dbo].[real_us1] r
+                     WHERE RTRIM(r.[partno]) = t.partno_off
+                       AND RTRIM(r.[serialno]) = t.serialno_off)
+UNION ALL SELECT 4, '   ... va CHUA tra unservice  <<< dang bi thieu han',
+       COUNT(*) FROM #wooff t
+       WHERE NOT EXISTS (SELECT 1 FROM [NQT].[dbo].[on_off] o
+                         WHERE RTRIM(o.[partno]) = t.partno_off
+                           AND RTRIM(o.[serialno]) = t.serialno_off AND o.[vm] = 'YA')
+         AND NOT EXISTS (SELECT 1 FROM [NQT].[dbo].[real_us1] r
+                         WHERE RTRIM(r.[partno]) = t.partno_off
+                           AND RTRIM(r.[serialno]) = t.serialno_off)
+ORDER BY stt;
+
+-- Vai vi du de xem tan mat
+SELECT TOP 20 t.partno_off AS partno, t.serialno_off AS serialno,
+       CASE WHEN EXISTS (SELECT 1 FROM [NQT].[dbo].[real_us1] r
+                         WHERE RTRIM(r.[partno]) = t.partno_off
+                           AND RTRIM(r.[serialno]) = t.serialno_off)
+            THEN N'da tra US' ELSE N'CHUA tra US' END AS trang_thai
+FROM #wooff t
+WHERE NOT EXISTS (SELECT 1 FROM [NQT].[dbo].[on_off] o
+                  WHERE RTRIM(o.[partno]) = t.partno_off
+                    AND RTRIM(o.[serialno]) = t.serialno_off AND o.[vm] = 'YA');
+
+DROP TABLE #wooff;
+GO

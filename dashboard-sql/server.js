@@ -4187,10 +4187,11 @@ app.get('/api/admin/diag/higher', h(async (req, res) => {
   // ---- 3) DOI CHIEU: danh sach "Xuat kho chua lap" <-> WO_PART_ON_OFF ------
   //        Neu thiet bi "chua lap" thuc ra CO trong WO_PART_ON_OFF thi cac cot
   //        cua dong do se cho biet no duoc lap vao dau.
+  let rows = [];   // dung lai o muc (3c) ben duoi
   try {
     // DUNG BAN GOC (chua loai nhom "lap vao cum") - de con do duoc bao nhieu cai
     // bi loai va vi sao.
-    const rows = await qIssuedNotInstalledRaw(range, f);
+    rows = await qIssuedNotInstalledRaw(range, f);
     const split = await splitIssuedByWoInstall(rows);
     out.ketQuaTach = {
       truocKhiLoai: rows.length,
@@ -4211,6 +4212,57 @@ app.get('/api/admin/diag/higher', h(async (req, res) => {
       })),
       soCoThayThe: split.lapVaoCum.filter((r) => r.wo_serialno_off).length,
     };
+  } catch (e) {
+    out.ketQuaTach = { loi: e.message };
+  }
+
+  // ---- 3b) CHIEU NGUOC LAI: "CHI THAO MA KHONG CO LAP" --------------------
+  //      Thiet bi bi THAY RA khoi cum (WO_PART_ON_OFF.PARTNO_OFF/SERIALNO_OFF)
+  //      cung khong sinh su kien on_off YA -> bao cao "Thao chua tra US"
+  //      (dieu kien vm='YA' AND higher_par IS NULL) KHONG thay chung.
+  //      Do xem nhom nay lon co nao va da tra unservice hay chua -> quyet dinh
+  //      dua chung vao bao cao nao. CHI DEM, chua thay doi bao cao nao.
+  try {
+    const d = amosDayParams(range);
+    const p = { ...d, woFrom: d.fromDay - 30, woTo: d.toDay + 30, from: range.from, to: range.to };
+    const noYa = `NOT EXISTS (
+        SELECT 1 FROM [NQT].[dbo].[on_off] o
+        WHERE RTRIM(o.[partno]) = t.partno_off AND RTRIM(o.[serialno]) = t.serialno_off
+          AND o.[vm] = 'YA')`;
+    const daTraUS = `EXISTS (
+        SELECT 1 FROM [NQT].[dbo].[real_us1] r
+        WHERE RTRIM(r.[partno]) = t.partno_off AND RTRIM(r.[serialno]) = t.serialno_off)`;
+    const sets = await queryMulti(
+      `IF OBJECT_ID('tempdb..#wooff') IS NOT NULL DROP TABLE #wooff;
+       SELECT DISTINCT RTRIM(x.[PARTNO_OFF]) AS partno_off, RTRIM(x.[SERIALNO_OFF]) AS serialno_off
+       INTO #wooff
+       FROM [DWH_DB]..[STG_AMOS].[WO_PART_ON_OFF] x
+       WHERE x.[MUTATION] BETWEEN @woFrom AND @woTo
+         AND x.[SERIALNO_OFF] IS NOT NULL AND LTRIM(RTRIM(x.[SERIALNO_OFF])) <> ''
+         AND x.[PARTNO_OFF]   IS NOT NULL AND LTRIM(RTRIM(x.[PARTNO_OFF]))   <> '';
+
+       SELECT
+         (SELECT COUNT(*) FROM #wooff)                                  AS tongThietBiBiThayRa,
+         (SELECT COUNT(*) FROM #wooff t WHERE ${noYa})                  AS khongCoYA_trongOnOff,
+         (SELECT COUNT(*) FROM #wooff t WHERE ${noYa} AND ${daTraUS})   AS khongCoYA_daTraUS,
+         (SELECT COUNT(*) FROM #wooff t WHERE ${noYa} AND NOT ${daTraUS}) AS khongCoYA_chuaTraUS;
+
+       SELECT TOP 10 t.partno_off AS partno, t.serialno_off AS serialno,
+              CASE WHEN ${daTraUS} THEN 1 ELSE 0 END AS da_tra_us
+       FROM #wooff t WHERE ${noYa};
+
+       DROP TABLE #wooff;`,
+      p
+    );
+    const sum = (sets.find((s) => s.length && 'tongThietBiBiThayRa' in s[0]) || [])[0] || {};
+    const ex = sets.find((s) => s.length && 'da_tra_us' in s[0]) || [];
+    out.chiThaoKhongCoLap = { ...sum, viDu: ex };
+  } catch (e) {
+    out.chiThaoKhongCoLap = { loi: e.message };
+  }
+
+  // ---- 3c) Phan bo gia tri tung cot cua WO_PART_ON_OFF cho nhom "chua lap" --
+  try {
     const coHigher = rows.filter((r) => (r.higher_pn || '').trim() || (r.higher_sn || '').trim());
     out.xuatKhoChuaLap = {
       soDong: rows.length,
