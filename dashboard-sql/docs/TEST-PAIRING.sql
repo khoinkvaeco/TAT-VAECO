@@ -61,24 +61,67 @@ FROM [DWH_DB]..[STG_AMOS].[WO_PART_ON_OFF] x
 WHERE x.[MUTATION] BETWEEN @woFrom AND @woTo;
 GO
 
-/* ===== PHAN 3: DEM NHANH - co bao nhieu du lieu de ghep ================== */
-DECLARE @from      datetime     = '2026-07-01T00:00:00';   -- dau ky (>=)
-DECLARE @to        datetime     = '2026-08-01T00:00:00';   -- cuoi ky (<, LOAI TRU)
-DECLARE @tzOffset  int          = 7;                       -- AMOS (UTC) -> gio VN
-DECLARE @amosEpoch varchar(10)  = '1971-12-31';            -- moc so ngay AMOS
-DECLARE @top       int          = 200;                     -- gioi han dong khi test
+/* ===== PHAN 3: DOI CHIEU SO LIEU VOI DASHBOARD ============================
+   Vi sao dem tho ra 4416 nhung dashboard hien "Thiet bi xuat kho" it hon?
+   Vi dashboard AP DUNG THEM cac bo loc nghiep vu + moc gio CHINH XAC.
+   Bang duoi day tru dan tung buoc de thay ro so bien doi o dau.            */
+DECLARE @from      datetime     = '2026-07-01T00:00:00';
+DECLARE @to        datetime     = '2026-08-01T00:00:00';
+DECLARE @tzOffset  int          = 7;
+DECLARE @amosEpoch varchar(10)  = '1971-12-31';
 DECLARE @fromDay int = DATEDIFF(DAY, TRY_CONVERT(datetime, @amosEpoch), @from) - 2;
 DECLARE @toDay   int = DATEDIFF(DAY, TRY_CONVERT(datetime, @amosEpoch), @to)   + 2;
-DECLARE @woFrom  int = @fromDay - 90;
-DECLARE @woTo    int = @toDay   + 90;
+
+-- Bieu thuc doi gio AMOS -> gio VN (giong het app)
+;WITH k AS (
+  SELECT k.*,
+         DATEADD(HOUR, @tzOffset,
+           DATEADD(MILLISECOND,
+             TRY_CONVERT(int, TRY_CONVERT(bigint, TRY_CONVERT(float, k.[mutation_t])) % 86400000),
+             DATEADD(DAY, TRY_CONVERT(int, TRY_CONVERT(float, k.[mutation])),
+                     TRY_CONVERT(datetime, @amosEpoch)))) AS issue_vn
+  FROM [NQT].[dbo].[kho_ser1] k
+  WHERE k.[vm] = 'T' AND k.[voucherno] LIKE 'P-%'
+    AND k.[mutation] BETWEEN @fromDay AND @toDay
+)
 SELECT
-  (SELECT COUNT(*) FROM [NQT].[dbo].[kho_ser1] k
-    WHERE k.[vm]='T' AND k.[voucherno] LIKE 'P-%'
-      AND k.[mutation] BETWEEN @fromDay AND @toDay)                 AS phieu_xuat_trong_ky,
-  (SELECT COUNT(*) FROM [NQT].[dbo].[real_us1] r
-    WHERE r.[on_ac] IS NOT NULL AND LTRIM(RTRIM(r.[on_ac])) <> ''
-      AND r.[del_time] >= DATEADD(DAY,-30,@from)
-      AND r.[del_time] <  DATEADD(DAY, 60,@to))                     AS ban_ghi_other_trong_cua_so;
+  COUNT(*)                                                        AS [1_dem_tho_loc_+-2_ngay],
+  SUM(CASE WHEN issue_vn >= @from AND issue_vn < @to
+           THEN 1 ELSE 0 END)                                     AS [2_dung_moc_gio_chinh_xac],
+  SUM(CASE WHEN issue_vn >= @from AND issue_vn < @to
+            AND LTRIM(RTRIM(ISNULL(k.[costcenter], ''))) <> 'VN-SPL'
+           THEN 1 ELSE 0 END)                                     AS [3_bo_costcenter_VN_SPL],
+  SUM(CASE WHEN issue_vn >= @from AND issue_vn < @to
+            AND LTRIM(RTRIM(ISNULL(k.[costcenter], ''))) <> 'VN-SPL'
+            AND UPPER(LTRIM(RTRIM(ISNULL(k.[store], '')))) NOT IN ('MAIN','3RD')
+           THEN 1 ELSE 0 END)                                     AS [4_bo_store_MAIN_3RD],
+  SUM(CASE WHEN issue_vn >= @from AND issue_vn < @to
+            AND LTRIM(RTRIM(ISNULL(k.[costcenter], ''))) <> 'VN-SPL'
+            AND UPPER(LTRIM(RTRIM(ISNULL(k.[store], '')))) NOT IN ('MAIN','3RD')
+            AND UPPER(LTRIM(RTRIM(ISNULL(k.[condition], '')))) <> 'US'
+           THEN 1 ELSE 0 END)                                     AS [5_bo_condition_US_CON_LAI]
+FROM k;
+
+/* Dong [5] la tap phieu xuat ma dashboard XET. Tu tap nay dashboard con:
+     - bo cac phieu cua trung tam CUVT (TAT CUVT do rieng),
+     - nhanh "da doi ung" con doi hoi receiver <> '' va khu trung cap
+       (1 phieu chi ghep 1 lan) -> mot so phieu khong roi vao ca 2 nhom.
+   Nen KPI "Thiet bi xuat kho" = (da doi ung) + (chua doi ung) co the con
+   NHO HON dong [5]. Kiem chung bang phep tinh cua chinh dashboard:
+       Thiet bi xuat kho  -  Chua doi ung  =  So da doi ung
+       (So da doi ung) / (Thiet bi xuat kho) x 100  =  Ty le doi ung %      */
+
+-- So ban ghi "Other" (da tra US nhung CHUA co phieu xuat doi ung) trong cua so
+SELECT COUNT(*) AS ban_ghi_other_trong_cua_so
+FROM [NQT].[dbo].[real_us1] r
+WHERE r.[on_ac] IS NOT NULL AND LTRIM(RTRIM(r.[on_ac])) <> ''
+  AND r.[del_time] >= DATEADD(DAY,-30,@from) AND r.[del_time] < DATEADD(DAY,60,@to);
+
+/* LUU Y QUAN TRONG: 199 ban ghi "Other" KHONG phai phan con lai cua 4416.
+   Day la HAI TAP KHAC NHAU, nguoc chieu nhau:
+     - Phieu xuat  : co XUAT nhung tim TRA       (thieu -> "chua doi ung")
+     - Other       : co TRA  nhung thieu XUAT    (nguoc lai)
+   Tab "Doi ung thu cong" chinh la cho ghep 2 tap nay lai voi nhau.          */
 GO
 
 /* ===== PHAN 4: TRUY VAN GHEP CAP — BAN THAT CUA APP =======================
