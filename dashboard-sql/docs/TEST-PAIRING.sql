@@ -389,6 +389,24 @@ DECLARE @woTo    int = @toDay   + 90;
     DROP TABLE #wo; DROP TABLE #wo_ps; DROP TABLE #wo_ev; DROP TABLE #other;
 GO
 
+/* ===== PHAN 6: VI TRI HIEN TAI (ROTABLES) cho "Xuat kho chua lap" =========
+   Bao cao "Xuat kho chua lap" lay them cot Vi tri hien tai bang cach noi
+   ROTABLES qua khoa [psn]. Chay phan nay de kiem tra:
+     - Cot [psn] nam o bang nao (kho_ser1 hay chi co on_off)?
+     - Doc duoc ROTABLES tren linked server khong?                           */
+SELECT 'kho_ser1' AS bang, MAX(CASE WHEN COLUMN_NAME='psn' THEN 1 ELSE 0 END) AS co_psn
+FROM [NQT].[INFORMATION_SCHEMA].[COLUMNS] WHERE TABLE_SCHEMA='dbo' AND TABLE_NAME='kho_ser1'
+UNION ALL
+SELECT 'on_off', MAX(CASE WHEN COLUMN_NAME='psn' THEN 1 ELSE 0 END)
+FROM [NQT].[INFORMATION_SCHEMA].[COLUMNS] WHERE TABLE_SCHEMA='dbo' AND TABLE_NAME='on_off';
+
+-- Doc thu ROTABLES (linked server Oracle)
+SELECT TOP 5 [psn], [location] FROM [DWH_DB]..[STG_AMOS].[ROTABLES];
+
+-- Thu chinh vi du nguoi dung dua
+SELECT [psn], [location] FROM [DWH_DB]..[STG_AMOS].[ROTABLES] WHERE [psn] = 1064701;
+GO
+
 /* ===== PHAN 5: GHI CHU =====================================================
    Thu tu uu tien cac cach ghep (nhu tren dashboard):
      1. Other (on_ac)               - ROB/NOI/DIR/CRO, cham diem:

@@ -155,6 +155,9 @@ function issuedNotInstalled(range, f) {
       department: rnd(DEPARTMENTS),
       issue_time_vn: issue.toISOString(),
       tat_days: +((Date.now() - issue.getTime()) / 86400000).toFixed(1),
+      // Vi tri hien tai (that: ROTABLES.location noi qua psn)
+      psn: rndInt(1000000, 1999999),
+      location: rnd(['SHOPLOC', 'HANSTORE', 'SGNSTORE', 'AOG-DAD', 'WORKSHOP-01', '']),
     });
   }
   return applyFilter(rows, f);

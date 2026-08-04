@@ -1009,9 +1009,73 @@ async function qTatReturnStore(range, f) {
  * kho_ser1 vm='T' (P-...) khong co ban ghi on_off vm='YE' (lap len tau).
  * Link kho_ser1 <-> on_off qua (partno, serialno, labelno).
  */
+/** Chuan hoa psn de lam khoa doi chieu (Oracle tra so -> co the la float). */
+function psnKey(v) {
+  if (v == null) return '';
+  const n = Number(v);
+  return Number.isFinite(n) ? String(Math.round(n)) : String(v).trim();
+}
+
+/**
+ * VI TRI HIEN TAI cua thiet bi: [DWH_DB]..[STG_AMOS].[ROTABLES].location, noi
+ * qua khoa [psn].
+ * Cach lam: KHONG join truc tiep bang linked server trong query chinh (se hoi
+ * Oracle theo tung dong -> rat cham / loi OLE DB). Thay vao do lay danh sach
+ * psn tu ket qua roi hoi ROTABLES theo TUNG LO (WHERE psn IN (...)) -> dieu
+ * kien duoc day xuong Oracle, chi vai luot goi.
+ * Loi linked server -> tra Map rong (bao cao van hien binh thuong, cot de trong).
+ * @returns {Promise<Map<string,string>>} psnKey -> location
+ */
+async function fetchRotableLocations(psnList) {
+  const uniq = [...new Set((psnList || []).map(psnKey).filter(Boolean))];
+  const out = new Map();
+  if (!uniq.length) return out;
+  const CHUNK = 500; // 500 tham so/luot - xa nguong 2100 cua SQL Server
+  for (let i = 0; i < uniq.length; i += CHUNK) {
+    const part = uniq.slice(i, i + CHUNK);
+    const params = {};
+    const names = part.map((v, j) => { params['rp' + j] = Number(v); return '@rp' + j; });
+    try {
+      const rows = await query(
+        `SELECT [psn] AS psn, RTRIM([location]) AS location
+         FROM [DWH_DB]..[STG_AMOS].[ROTABLES]
+         WHERE [psn] IN (${names.join(', ')})`,
+        params
+      );
+      for (const r of rows) out.set(psnKey(r.psn), r.location || '');
+    } catch (e) {
+      console.warn('[ROTABLES] Khong lay duoc location (bo qua cot nay):', e.message);
+      return out; // loi lo dau -> dung han, khong lam vo bao cao
+    }
+  }
+  return out;
+}
+
+/** Gan cot `location` vao cac dong da co truong `psn`. */
+async function attachRotableLocation(rows) {
+  if (!rows.length || !('psn' in rows[0])) return rows;
+  const map = await fetchRotableLocations(rows.map((r) => r.psn));
+  if (!map.size) return rows.map((r) => ({ ...r, location: '' }));
+  return rows.map((r) => ({ ...r, location: map.get(psnKey(r.psn)) || '' }));
+}
+
 async function qIssuedNotInstalled(range, f) {
   const params = { from: range.from, to: range.to, tzOffset: CONFIG.tzOffset, top: CONFIG.maxRows, ...amosDayParams(range) };
   const dept = deptFromStaff('k.[created_b2]', 'sm');
+  // [psn] = khoa noi sang ROTABLES de lay VI TRI HIEN TAI. Uu tien lay tu
+  // kho_ser1; neu bang do khong co cot thi lay tu on_off theo part+serial.
+  // DO SCHEMA that (khong doan ten cot) -> thieu cot thi bo qua, query van chay.
+  const khoCols = await getColumns('kho_ser1');
+  const offCols = await getColumns('on_off');
+  const psnFromKho = khoCols.has('psn');
+  const psnFromOff = !psnFromKho && offCols.has('psn');
+  const psnSelect = psnFromKho
+    ? 'k.[psn]'
+    : (psnFromOff
+      ? `(SELECT TOP 1 op.[psn] FROM [NQT].[dbo].[on_off] op
+           WHERE op.[partno] = k.[partno] AND op.[serialno] = k.[serialno]
+             AND op.[psn] IS NOT NULL ORDER BY op.[mut_t] DESC)`
+      : 'NULL');
   let where = buildFilterClause(
     f,
     { station: 'k.[station]', store: 'k.[store]', department: dept },
@@ -1030,6 +1094,7 @@ async function qIssuedNotInstalled(range, f) {
       k.[created_b2] AS staff,
       ${dept} AS department,
       ${amosToVN('k')} AS issue_time_vn,
+      ${psnSelect} AS psn,
       -- TAT ton dong = tu luc xuat kho den HIEN TAI (ngay)
       CAST(DATEDIFF(MINUTE, ${amosToVN('k')}, GETDATE()) AS float) / 1440.0 AS tat_days
     FROM [NQT].[dbo].[kho_ser1] k
@@ -1059,7 +1124,9 @@ async function qIssuedNotInstalled(range, f) {
       AND ${amosToVN('k')} >= @from AND ${amosToVN('k')} < @to
       ${where}
     ORDER BY issue_time_vn DESC`;
-  return query(text, params);
+  // Gan VI TRI HIEN TAI tu ROTABLES (noi qua psn) - lam sau khi da co ket qua
+  // de chi hoi linked server theo lo, khong hoi tung dong.
+  return attachRotableLocation(await query(text, params));
 }
 
 /**
@@ -3716,6 +3783,24 @@ app.get('/api/admin/diag/pairing', h(async (req, res) => {
     };
   }
   out.khopEventDuoc = !!(out.kho_ser1.coEventPerf && out.real_us1.coEventPerf);
+  // Vi tri hien tai (ROTABLES.location noi qua psn) - bao cao "Xuat kho chua lap"
+  const offCols = await getColumns('on_off');
+  const khoCols = await getColumns('kho_ser1');
+  out.viTriHienTai = {
+    psnO_kho_ser1: khoCols.has('psn'),
+    psnO_on_off: offCols.has('psn'),
+    nguonPsn: khoCols.has('psn') ? 'kho_ser1.psn'
+      : (offCols.has('psn') ? 'on_off.psn (tra theo part+serial)' : 'KHONG CO -> cot Vi tri se trong'),
+  };
+  try {
+    const t = await query(`SELECT TOP 3 [psn] AS psn, RTRIM([location]) AS location
+                           FROM [DWH_DB]..[STG_AMOS].[ROTABLES]`);
+    out.viTriHienTai.docDuocROTABLES = true;
+    out.viTriHienTai.viDu = t;
+  } catch (e) {
+    out.viTriHienTai.docDuocROTABLES = false;
+    out.viTriHienTai.loi = e.message;
+  }
   if (!out.khopEventDuoc) {
     out.canhBao = 'Thiếu [event_perf] ở một trong hai bảng -> tiêu chí "Khớp event (WO)" TỰ TẮT, ' +
       'các cách ghép khác vẫn chạy bình thường.';

@@ -502,7 +502,7 @@ const REPORT_DEFS = {
   },
   'issued-not-installed': {
     title: 'Thiết bị xuất kho nhưng chưa lắp lên tàu',
-    desc: 'kho_ser1 vm=T (P-…) chưa lắp (on_off vm=YE) và chưa được return. TAT = hiện tại − giờ xuất kho.',
+    desc: 'kho_ser1 vm=T (P-…) chưa lắp (on_off vm=YE) và chưa được return. TAT = hiện tại − giờ xuất kho. Cột "Vị trí hiện tại" lấy từ ROTABLES (nối qua khóa psn) — cho biết thiết bị đang nằm ở đâu.',
     columns: [
       { title: 'Part No', field: 'partno', headerFilter: 'input' },
       { title: 'Serial No', field: 'serialno', headerFilter: 'input' },
@@ -516,6 +516,12 @@ const REPORT_DEFS = {
       { title: 'Phiếu xuất', field: 'voucher_issue', headerFilter: 'input'  },
       { title: 'Ngày Giờ xuất', field: 'issue_time_vn', formatter: fmtDateCell },
       { title: 'TAT (now)', field: 'tat_days', formatter: fmtTatCell, hozAlign: 'right', sorter: 'number' },
+      // Vi tri hien tai cua thiet bi (ROTABLES.location, noi qua psn)
+      { title: 'PSN', field: 'psn', headerFilter: 'input', formatter: fmtIntCell, hozAlign: 'right' },
+      {
+        title: 'Vị trí hiện tại', field: 'location', headerFilter: 'input', widthGrow: 1.5,
+        formatter: (cell) => cell.getValue() || '<span style="color:var(--text-muted)">—</span>',
+      },
     ],
   },
   'removed-not-returned': {
