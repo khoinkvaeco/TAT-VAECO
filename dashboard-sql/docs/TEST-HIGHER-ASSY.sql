@@ -127,16 +127,21 @@ ORDER BY k.[mutation] DESC;
 GO
 
 /* ===== PHAN 5: TU DONG DOI CHIEU (KHONG PHAI GO TAY PART/SERIAL) ===========
-   Chay MOT LAN duy nhat khoi nay - no lam tat ca:
-     (5a) Keo WO_PART_ON_OFF ve bang tam #wo MOT LAN (theo cua so ngay cua ky
-          +/- 30 ngay). KHONG hoi linked server theo tung dong -> nhanh.
-     (5b) In DANH SACH DAY DU CAC COT cua #wo theo chieu DOC (de chup man hinh).
-     (5c) Dung lai danh sach "Xuat kho chua lap" (nhu PHAN 4) vao bang tam.
-     (5d) Dem: bao nhieu cai co / khong co trong WO_PART_ON_OFF, bao nhieu cai
-          KHONG he co dong nao trong on_off.
-     (5e) In TOAN BO cac cot cua nhung dong khop -> nhin ra cot danh dau.
-     (5f) In TOAN BO cac cot cua mot thiet bi LAP LEN TAU BINH THUONG de SO SANH.
-   >>> CHI CAN SUA 2 DONG NGAY BEN DUOI <<< */
+   Chay MOT LAN duy nhat khoi nay - no lam tat ca.
+
+   >>> CHI CAN SUA 2 DONG NGAY BEN DUOI, roi boi den CA KHOI va F5 <<<
+
+   Ket qua ra theo thu tu nay (2 BANG QUAN TRONG NHAT nam O CUOI cho de xem):
+     (5a)  keo WO_PART_ON_OFF ve #wo  (mot lan, khong hoi linked server tung dong)
+     (5a2) keo ROTABLES ve #ro        (mot lan)
+     (5b)  danh sach DAY DU CAC COT cua WO_PART_ON_OFF (in doc)
+     (5c)  dung lai danh sach "Xuat kho chua lap" vao #chualap
+     (5e)  vai dong WO cua nhom "chua lap"                    (xem tham khao)
+     (5h)  cac thiet bi co higher_pn nhung KHONG khop WO      (xem tham khao)
+     (5f)  vai dong WO cua nhom lap len tau binh thuong       (xem tham khao)
+     (5g)  so sanh 2 nhom tren 3 cot LABELNO/AC_POSITION/LOCID_PK
+     (5i)  *** SO SANH TAT CA CAC COT giua 2 nhom, sap theo do chenh lech ***
+     (5d)  *** BANG TONG KET: 8 cach tim, cach nao bat duoc nhieu nhat ***     */
 DECLARE @tuNgay  date = '2026-07-01';   -- <<< SUA NGAY BAT DAU KY
 DECLARE @denNgay date = '2026-08-01';   -- <<< SUA NGAY KET THUC KY (khong bao gom)
 
@@ -213,35 +218,6 @@ WHERE k.[vm] = 'T'
                     AND tc.[labelno] = k.[labelno])
   AND k.[mutation] BETWEEN @fromDay AND @toDay;
 
--- (5d) BANG TONG KET - MOI DONG LA MOT CACH TIM, xem cach nao "bat" duoc
---      nhieu thiet bi nhat. Day la con so quan trong nhat de quyet dinh logic.
-SELECT 1 AS stt, 'Tong "Xuat kho chua lap" trong ky' AS tieu_chi,
-       COUNT(*) AS so_thiet_bi FROM #chualap
-UNION ALL SELECT 2, 'Trong do: CO higher_pn hoac higher_sn (ROTABLES)',
-       COUNT(*) FROM #chualap c WHERE c.higher_pn <> '' OR c.higher_sn <> ''
-UNION ALL SELECT 3, 'KHONG co dong nao trong on_off (moi vm)',
-       COUNT(*) FROM #chualap c
-       WHERE NOT EXISTS (SELECT 1 FROM [NQT].[dbo].[on_off] o2 WHERE o2.[labelno] = c.labelno)
-UNION ALL SELECT 4, 'Co dong on_off nhung KHONG phai YE',
-       COUNT(*) FROM #chualap c
-       WHERE EXISTS (SELECT 1 FROM [NQT].[dbo].[on_off] o2 WHERE o2.[labelno] = c.labelno)
-UNION ALL SELECT 5, 'Khop WO_PART_ON_OFF theo PARTNO + SERIALNO',
-       COUNT(*) FROM #chualap c
-       WHERE EXISTS (SELECT 1 FROM #wo w WHERE RTRIM(w.[PARTNO]) = c.partno
-                       AND RTRIM(w.[SERIALNO]) = c.serialno)
-UNION ALL SELECT 6, 'Khop WO_PART_ON_OFF chi theo SERIALNO',
-       COUNT(*) FROM #chualap c
-       WHERE EXISTS (SELECT 1 FROM #wo w WHERE RTRIM(w.[SERIALNO]) = c.serialno)
-UNION ALL SELECT 7, 'Khop WO_PART_ON_OFF theo LABELNO',
-       COUNT(*) FROM #chualap c
-       WHERE EXISTS (SELECT 1 FROM #wo w
-                     WHERE TRY_CONVERT(float, w.[LABELNO]) = TRY_CONVERT(float, c.labelno))
-UNION ALL SELECT 8, 'Khop WO_PART_ON_OFF o cot _OFF (thiet bi bi thao ra)',
-       COUNT(*) FROM #chualap c
-       WHERE EXISTS (SELECT 1 FROM #wo w WHERE RTRIM(w.[PARTNO_OFF]) = c.partno
-                       AND RTRIM(w.[SERIALNO_OFF]) = c.serialno)
-ORDER BY stt;
-
 -- (5e) TOAN BO cac cot cua cac dong KHOP  <<< NHIN CHO NAY DE TIM COT DANH DAU
 --      Da them c.labelno de doi chieu voi w.[LABELNO].
 SELECT TOP 30 c.partno AS x_partno, c.serialno AS x_serialno, c.labelno AS x_labelno,
@@ -294,6 +270,83 @@ WHERE EXISTS (SELECT 1 FROM [NQT].[dbo].[on_off] o4
                 AND RTRIM(o4.[serialno]) = RTRIM(w.[SERIALNO])
                 AND o4.[vm] = 'YE' AND o4.[higher_par] IS NULL
                 AND o4.[mutation] BETWEEN @fromDay AND @toDay);
+
+-- (5i) SO SANH TOAN BO CAC COT giua 2 nhom - KHONG PHAI DOAN TEN COT.
+--      Voi moi cot: bao nhieu % dong CO GIA TRI o nhom A va o nhom B.
+--      Cot nao chenh lech % lon nhat chinh la DAU HIEU phan biet.
+--      (Ky thuat: FOR XML bo qua cot NULL -> dem duoc cot nao co gia tri.)
+IF OBJECT_ID('tempdb..#ga') IS NOT NULL DROP TABLE #ga;
+IF OBJECT_ID('tempdb..#gb') IS NOT NULL DROP TABLE #gb;
+
+SELECT w.* INTO #ga
+FROM #chualap c
+INNER JOIN #wo w ON RTRIM(w.[PARTNO]) = c.partno AND RTRIM(w.[SERIALNO]) = c.serialno;
+
+SELECT TOP 2000 w.* INTO #gb
+FROM #wo w
+WHERE EXISTS (SELECT 1 FROM [NQT].[dbo].[on_off] o7
+              WHERE RTRIM(o7.[partno]) = RTRIM(w.[PARTNO])
+                AND RTRIM(o7.[serialno]) = RTRIM(w.[SERIALNO])
+                AND o7.[vm] = 'YE' AND o7.[higher_par] IS NULL
+                AND o7.[mutation] BETWEEN @fromDay AND @toDay);
+
+DECLARE @nA int = (SELECT COUNT(*) FROM #ga);
+DECLARE @nB int = (SELECT COUNT(*) FROM #gb);
+
+;WITH a AS (
+  SELECT n.c.value('local-name(.)', 'sysname') AS ten_cot, COUNT(*) AS so_dong
+  FROM #ga g
+  CROSS APPLY (SELECT g.* FOR XML PATH('r'), TYPE) t(x)
+  CROSS APPLY t.x.nodes('/r/*') n(c)
+  GROUP BY n.c.value('local-name(.)', 'sysname')
+), b AS (
+  SELECT n.c.value('local-name(.)', 'sysname') AS ten_cot, COUNT(*) AS so_dong
+  FROM #gb g
+  CROSS APPLY (SELECT g.* FOR XML PATH('r'), TYPE) t(x)
+  CROSS APPLY t.x.nodes('/r/*') n(c)
+  GROUP BY n.c.value('local-name(.)', 'sysname')
+)
+SELECT ISNULL(a.ten_cot, b.ten_cot) AS ten_cot,
+       ISNULL(a.so_dong, 0) AS A_so_dong_co_gia_tri, @nA AS A_tong,
+       CAST(ISNULL(a.so_dong, 0) * 100.0 / NULLIF(@nA, 0) AS decimal(5,1)) AS A_phan_tram,
+       ISNULL(b.so_dong, 0) AS B_so_dong_co_gia_tri, @nB AS B_tong,
+       CAST(ISNULL(b.so_dong, 0) * 100.0 / NULLIF(@nB, 0) AS decimal(5,1)) AS B_phan_tram,
+       CAST(ABS(ISNULL(a.so_dong, 0) * 100.0 / NULLIF(@nA, 0)
+              - ISNULL(b.so_dong, 0) * 100.0 / NULLIF(@nB, 0)) AS decimal(5,1)) AS chenh_lech
+FROM a FULL OUTER JOIN b ON b.ten_cot = a.ten_cot
+ORDER BY chenh_lech DESC;
+
+DROP TABLE #ga;
+DROP TABLE #gb;
+
+-- (5d) BANG TONG KET - MOI DONG LA MOT CACH TIM, xem cach nao "bat" duoc
+--      nhieu thiet bi nhat. Day la con so quan trong nhat de quyet dinh logic.
+SELECT 1 AS stt, 'Tong "Xuat kho chua lap" trong ky' AS tieu_chi,
+       COUNT(*) AS so_thiet_bi FROM #chualap
+UNION ALL SELECT 2, 'Trong do: CO higher_pn hoac higher_sn (ROTABLES)',
+       COUNT(*) FROM #chualap c WHERE c.higher_pn <> '' OR c.higher_sn <> ''
+UNION ALL SELECT 3, 'KHONG co dong nao trong on_off (moi vm)',
+       COUNT(*) FROM #chualap c
+       WHERE NOT EXISTS (SELECT 1 FROM [NQT].[dbo].[on_off] o2 WHERE o2.[labelno] = c.labelno)
+UNION ALL SELECT 4, 'Co dong on_off nhung KHONG phai YE',
+       COUNT(*) FROM #chualap c
+       WHERE EXISTS (SELECT 1 FROM [NQT].[dbo].[on_off] o2 WHERE o2.[labelno] = c.labelno)
+UNION ALL SELECT 5, 'Khop WO_PART_ON_OFF theo PARTNO + SERIALNO',
+       COUNT(*) FROM #chualap c
+       WHERE EXISTS (SELECT 1 FROM #wo w WHERE RTRIM(w.[PARTNO]) = c.partno
+                       AND RTRIM(w.[SERIALNO]) = c.serialno)
+UNION ALL SELECT 6, 'Khop WO_PART_ON_OFF chi theo SERIALNO',
+       COUNT(*) FROM #chualap c
+       WHERE EXISTS (SELECT 1 FROM #wo w WHERE RTRIM(w.[SERIALNO]) = c.serialno)
+UNION ALL SELECT 7, 'Khop WO_PART_ON_OFF theo LABELNO',
+       COUNT(*) FROM #chualap c
+       WHERE EXISTS (SELECT 1 FROM #wo w
+                     WHERE TRY_CONVERT(float, w.[LABELNO]) = TRY_CONVERT(float, c.labelno))
+UNION ALL SELECT 8, 'Khop WO_PART_ON_OFF o cot _OFF (thiet bi bi thao ra)',
+       COUNT(*) FROM #chualap c
+       WHERE EXISTS (SELECT 1 FROM #wo w WHERE RTRIM(w.[PARTNO_OFF]) = c.partno
+                       AND RTRIM(w.[SERIALNO_OFF]) = c.serialno)
+ORDER BY stt;
 
 DROP TABLE #wo;
 DROP TABLE #ro;
