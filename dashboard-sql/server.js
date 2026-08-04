@@ -4048,6 +4048,19 @@ app.get('/api/admin/diag/higher', h(async (req, res) => {
           (dist[k] = dist[k] || new Map()).set(s, (dist[k].get(s) || 0) + 1);
         }
       }
+      // Co dong nao trong on_off khong? (KHONG co dong nao = AMOS chi ghi lan
+      // lap o WO_PART_ON_OFF -> dung la nhom "lap vao cum cao hon")
+      const labels = [...new Set(rows.map((r) => Number(r.labelno)).filter(Number.isFinite))].slice(0, LIMIT);
+      if (labels.length) {
+        const lp = {}; const ln = [];
+        labels.forEach((v, i) => { lp['L' + i] = v; ln.push('@L' + i); });
+        const seenOff = await query(
+          `SELECT DISTINCT o.[labelno] AS labelno FROM [NQT].[dbo].[on_off] o
+           WHERE o.[labelno] IN (${ln.join(', ')})`, lp);
+        const has = new Set(seenOff.map((x) => Number(x.labelno)));
+        out.xuatKhoChuaLap.khongCoDongNaoTrongOnOff =
+          labels.filter((v) => !has.has(v)).length + '/' + labels.length;
+      }
       out.xuatKhoChuaLap.phanBoGiaTriCot = Object.fromEntries(
         Object.entries(dist).map(([k, m]) => [k, {
           soGiaTriKhacNhau: m.size,
