@@ -101,6 +101,25 @@
       <div id="rptOut" style="font-size:13px;margin-top:8px"></div>
     </div>
 
+    <!-- ===== Cap doi ung THU CONG da xac nhan ===== -->
+    <div class="panel" style="margin-bottom:14px">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <b style="font-size:14px">🔗 Cặp đối ứng thủ công đã xác nhận</b>
+        <span id="mpCount" style="font-size:13px;color:var(--muted)">…</span>
+        <span style="margin-left:auto;display:flex;gap:6px">
+          <button id="mpExport" class="ghost">⬇ Tải bản sao lưu</button>
+          <button id="mpReload" class="ghost">↻ Tải lại</button>
+        </span>
+      </div>
+      <div class="note" style="margin-top:8px">
+        Dữ liệu này <b>lưu trên máy chủ dashboard</b> (file JSON), <b>KHÔNG ghi vào SQL Server</b>
+        — nên tài khoản DB chỉ cần quyền <b>đọc</b>. File: <code id="mpFile">…</code><br>
+        ⚠️ File này không nằm trong git → <b>nên tải bản sao lưu định kỳ</b>, hoặc chép cùng thư mục
+        <code>data/</code> khi cài lại/đổi máy chủ. Gỡ một cặp = thiết bị quay lại "Chưa đối ứng".
+      </div>
+      <div id="mpList" style="margin-top:8px"></div>
+    </div>
+
     <div class="tabs">
       <button data-tab="unknown" class="active">Câu hỏi chưa hiểu</button>
       <button data-tab="all">Tất cả câu hỏi</button>
@@ -415,6 +434,45 @@
     $('#rptMonth').addEventListener('click', () => sendReport('month'));
     $('#rptNow').addEventListener('click', () => sendReport(''));
     loadRptStatus();
+
+    // ---- Cap doi ung thu cong ----
+    async function loadManualPairs() {
+      try {
+        const d = await getJSON('/api/admin/manual-pairs');
+        $('#mpCount').textContent = `${d.count} cặp · ${(d.bytes / 1024).toFixed(1)} KB`;
+        $('#mpFile').textContent = d.file || '(chưa tạo)';
+        $('#mpList').innerHTML = d.items.length ? `
+          <table style="width:100%;border-collapse:collapse;font-size:12.5px">
+            <tr style="background:var(--hover);text-align:left">
+              <th style="padding:5px">Phiếu xuất</th><th>Label</th><th>PN/SN xuất</th>
+              <th>PN/SN tháo</th><th>Cách ghép</th><th>Tin cậy</th><th>Lúc</th><th></th>
+            </tr>
+            ${d.items.map((x) => `
+              <tr style="border-bottom:1px dashed var(--hair)">
+                <td style="padding:5px">${esc(x.issueVoucher || '')}</td>
+                <td>${esc(x.issueLabel || '')}</td>
+                <td>${esc(x.issuePartno || '')} / ${esc(x.issueSerialno || '')}</td>
+                <td>${esc(x.offPartno || '')} / ${esc(x.offSerialno || '')}</td>
+                <td>${esc(x.matchMethod || '')}</td>
+                <td>${esc(x.confidence || '')}</td>
+                <td>${esc((x.confirmedAt || '').slice(0, 16).replace('T', ' '))}</td>
+                <td><button class="ghost danger" style="color:#fff;padding:2px 8px"
+                     data-mpdel="${esc(x.issueLabel || '')}" data-mpv="${esc(x.issueVoucher || '')}">Gỡ</button></td>
+              </tr>`).join('')}
+          </table>` : '<div class="note">Chưa xác nhận cặp nào.</div>';
+        $('#mpList').querySelectorAll('[data-mpdel]').forEach((b) => b.addEventListener('click', async () => {
+          if (!confirm('Gỡ cặp này? Thiết bị sẽ quay lại danh sách "Chưa đối ứng".')) return;
+          await fetch('/api/admin/manual-pair/delete', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ issueLabel: b.dataset.mpdel, issueVoucher: b.dataset.mpv }),
+          });
+          loadManualPairs();
+        }));
+      } catch (e) { $('#mpCount').textContent = 'Lỗi: ' + e.message; }
+    }
+    $('#mpReload').addEventListener('click', loadManualPairs);
+    $('#mpExport').addEventListener('click', () => { location.href = '/api/admin/manual-pairs/export'; });
+    loadManualPairs();
 
     load();
   </script>

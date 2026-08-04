@@ -133,6 +133,27 @@ Sau khi sửa code: `git pull` (hoặc copy) rồi `sc stop DashboardTAT & sc st
 - **Ghi log truy cập:** mọi request được ghi vào `logs/access-YYYY-MM-DD.log` (1 file/ngày, định dạng TSV — mở trực tiếp bằng Excel) gồm: thời gian, IP, tên máy, method, đường dẫn, mã trạng thái, thời gian xử lý. Thư mục `logs/` không commit lên git (`.gitignore`).
   - **Tra tên máy** theo 2 bước, cache 10 phút/IP: (1) reverse-DNS (PTR record) — chỉ có nếu DNS nội bộ khai báo; (2) nếu thất bại và server chạy trên **Windows**, thử `nbtstat -A <ip>` (NetBIOS qua UDP 137) — không phụ thuộc DNS, thường lấy được tên máy Windows trong cùng LAN. Nếu cả hai đều thất bại (mạng khác VLAN chặn UDP 137, máy tắt NetBIOS, hoặc server chạy Linux/macOS), cột tên máy ghi `N/A` — vẫn còn cột IP để tra thủ công.
 
+## 6b. Quyền tài khoản SQL Server (quan trọng)
+
+Dashboard chạy tốt với tài khoản **CHỈ ĐỌC (read-only)**. Cụ thể:
+
+| Việc | Ghi vào SQL Server? | Cần quyền gì |
+|---|---|---|
+| Toàn bộ KPI, biểu đồ, báo cáo, tra cứu | ❌ Không | `SELECT` trên `NQT.dbo.*` + `DWH_DB..STG_AMOS.*` |
+| Truy vấn ghép cặp (bảng tạm `#wo`, `#other`) | ❌ Không (chỉ `#temp` trong tempdb) | Mặc định mọi login đều tạo được `#temp` |
+| **Cặp đối ứng thủ công đã xác nhận** | ❌ **Không** — lưu **file JSON** trên máy chủ dashboard (`data/reconcile-manual.json`) | Không cần quyền DB |
+| Câu hỏi chatbot / KB đã học / log | ❌ Không — file trong `data/`, `logs/` | Không cần quyền DB |
+| `SIGN_CACHE` (tăng tốc, **tùy chọn**) | ✅ Có | `CREATE TABLE` + `INSERT` + `TRUNCATE` trên **riêng** bảng `[NQT].[dbo].[SIGN_CACHE]` |
+
+**Nếu tài khoản chỉ đọc:** app tự phát hiện thiếu quyền, **tắt SIGN_CACHE** và quay về đọc thẳng
+linked server — vẫn chạy đúng, chỉ **chậm hơn**. Đặt `SIGN_CACHE=false` trong `.env` để bỏ hẳn
+thông báo. Muốn nhanh thì nhờ DBA cấp quyền ghi cho **đúng một bảng** `SIGN_CACHE` (không đụng
+bảng nghiệp vụ nào).
+
+> ⚠️ **Sao lưu:** thư mục `data/` (cặp đối ứng thủ công + KB chatbot đã học) **không nằm trong git**.
+> Trang Admin có nút **⬇ Tải bản sao lưu**; nên tải định kỳ, hoặc chép cả thư mục `data/` khi
+> cài lại / đổi máy chủ. Mất file này = mất toàn bộ cặp đã xác nhận (thiết bị quay lại "Chưa đối ứng").
+
 ## 7. Bảo mật & performance
 
 - Mật khẩu chỉ nằm trong `.env` (không hardcode, không commit).
@@ -193,6 +214,7 @@ CREATE INDEX IX_SIGN_user ON [DWH_DB].[STG_AMOS].[SIGN] ([USER_SIGN]) INCLUDE ([
 | `GET /api/admin/llm-status` | Trạng thái LLM: provider, sẵn sàng/bị chặn, model, che dữ liệu, có API key hay chưa (không lộ khóa). **Chỉ IP quản trị.** |
 | `GET /api/admin/manual-pairs` | Danh sách cặp đối ứng thủ công đã xác nhận. **Chỉ IP quản trị.** |
 | `POST /api/admin/manual-pair/confirm` | Xác nhận 1 cặp (label lệch) → tính là đã đối ứng. **Chỉ IP quản trị.** |
+| `GET /api/admin/manual-pairs/export` | Tải bản sao lưu JSON các cặp đã xác nhận. **Chỉ IP quản trị.** |
 | `POST /api/admin/manual-pair/delete` | Gỡ 1 cặp đã xác nhận (thiết bị quay lại *Chưa đối ứng*). **Chỉ IP quản trị.** |
 | `GET /api/admin/diag/rbi` | Chẩn đoán báo cáo *Tháo trước lắp sau* (đếm theo từng điều kiện nới lỏng dần). **Chỉ IP quản trị.** |
 | `GET /api/admin/report-status` | Trạng thái báo cáo định kỳ Teams/SharePoint (lịch, kỳ, kênh đã bật). **Chỉ IP quản trị.** |

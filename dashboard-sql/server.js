@@ -195,7 +195,17 @@ async function refreshSignCache() {
   } catch (err) {
     // Khong co quyen tao bang / linked server loi -> dung duong cu (linked server)
     signCacheReady = false;
-    console.warn('[SIGN] Khong lam moi duoc SIGN_CACHE, tam dung linked server truc tiep:', err.message);
+    // Tai khoan DB chi co quyen DOC -> se KHONG BAO GIO tao duoc SIGN_CACHE.
+    // Tat han de khoi thu lai vo ich moi 6 tieng va log rac.
+    if (/permission|denied|CREATE TABLE|quyen|read-only|readonly/i.test(err.message || '')) {
+      CONFIG.signCache = false;
+      console.warn('[SIGN] Tai khoan SQL khong co quyen GHI -> tat SIGN_CACHE (dung linked server).');
+      console.warn('[SIGN] App van chay dung, chi CHAM hon. Muon nhanh: nho DBA cap quyen');
+      console.warn('[SIGN]   CREATE TABLE + INSERT + TRUNCATE tren rieng bang [NQT].[dbo].[SIGN_CACHE],');
+      console.warn('[SIGN]   hoac dat SIGN_CACHE=false trong .env de bo qua thong bao nay.');
+    } else {
+      console.warn('[SIGN] Khong lam moi duoc SIGN_CACHE, tam dung linked server truc tiep:', err.message);
+    }
   }
 }
 
@@ -3564,7 +3574,23 @@ app.post('/api/admin/report-now', h(async (req, res) => {
 //     Xac nhan 1 cap -> luu data/reconcile-manual.json; phieu xuat do se KHONG
 //     con nam trong "chua doi ung" va duoc tinh la DA doi ung trong KPI.
 app.get('/api/admin/manual-pairs', h(async (req, res) => {
-  res.json({ items: loadManualPairs() });
+  const items = loadManualPairs();
+  let size = 0;
+  try { size = fs.statSync(MANUAL_PAIR_FILE).size; } catch (_) { /* chua co file */ }
+  res.json({
+    items, count: items.length,
+    // Cho biet RO du lieu nam o dau (KHONG ghi vao SQL Server - tai khoan DB
+    // chi can quyen DOC). File nay khong nam trong git -> can tu sao luu.
+    file: MANUAL_PAIR_FILE, bytes: size,
+  });
+}));
+
+// Tai ve ban sao luu (JSON) - de phong cai lai server / doi may
+app.get('/api/admin/manual-pairs/export', h(async (req, res) => {
+  const day = new Date().toISOString().slice(0, 10);
+  res.setHeader('Content-Disposition', `attachment; filename="reconcile-manual-${day}.json"`);
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.send(JSON.stringify(loadManualPairs(), null, 2));
 }));
 
 app.post('/api/admin/manual-pair/confirm', h(async (req, res) => {
