@@ -416,6 +416,13 @@ const COL_EXCLUDE = {
   },
 };
 
+/** Nhãn cột "Nguồn trả" của bảng chi tiết TAT. */
+const RETURN_TYPE_LABEL = {
+  US: 'Trả unservice',
+  SERVICE: 'Trả service',
+  INSTALL: 'Chỉ lắp lên',   // lắp vào cụm cao hơn (higher assembly)
+};
+
 /** Cột chi tiết TAT theo thiết bị (checkbox "Bỏ qua" đặt ở CỘT CUỐI). */
 const COLS_TAT_DEPT = [
   { title: 'Event Perf', field: 'event_perf', headerFilter: 'input' },
@@ -440,12 +447,18 @@ const COLS_TAT_DEPT = [
   { title: 'Ngày Giờ trả', field: 'return_unservice_time', formatter: fmtDateCell },
   { title: 'TAT US return', field: 'tat_usreturn_days', formatter: fmtTatCell, hozAlign: 'right', sorter: 'number' },
   { title: 'TAT (tổng)', field: 'tat_days', formatter: fmtTatCell, hozAlign: 'right', sorter: 'number' },
-  // Nguồn đối ứng: US = trả unservice (real_us1); SERVICE = recertify (CI @SHOPLOC)
+  // Nguồn đối ứng: US = trả unservice (real_us1); SERVICE = recertify (CI @SHOPLOC);
+  // INSTALL = lắp vào CỤM CAO HƠN (higher assembly) — chỉ có chặng lắp lên,
+  // chưa tháo xuống nên không có ngày trả và không có TAT tổng.
   {
     title: 'Nguồn trả', field: 'return_type', hozAlign: 'center',
-    formatter: (cell) => (cell.getValue() === 'SERVICE' ? 'Trả service' : 'Trả unservice'),
+    formatter: (cell) => RETURN_TYPE_LABEL[cell.getValue()] || 'Trả unservice',
     headerFilter: 'list',
-    headerFilterParams: { values: { '': 'Tất cả', US: 'Trả unservice', SERVICE: 'Trả service' } },
+    headerFilterParams: {
+      values: {
+        '': 'Tất cả', US: 'Trả unservice', SERVICE: 'Trả service', INSTALL: 'Chỉ lắp lên',
+      },
+    },
   },
   COL_EXCLUDE, // checkbox "Bỏ qua" — cột cuối
 ];
@@ -502,7 +515,7 @@ const REPORT_DEFS = {
   },
   'issued-not-installed': {
     title: 'Thiết bị xuất kho nhưng chưa lắp lên tàu',
-    desc: 'kho_ser1 vm=T (P-…) chưa lắp (on_off vm=YE) và chưa được return. TAT = hiện tại − giờ xuất kho. Các cột "Vị trí hiện tại", "Higher PN", "Higher SN" lấy từ ROTABLES (nối qua khóa psn) — cho biết thiết bị đang nằm ở đâu và đang lắp trên thiết bị cấp trên nào.',
+    desc: 'kho_ser1 vm=T (P-…) chưa lắp (on_off vm=YE) và chưa được return. TAT = hiện tại − giờ xuất kho. Các cột "Vị trí hiện tại", "Higher PN", "Higher SN" lấy từ ROTABLES (nối qua khóa psn) — cho biết thiết bị đang nằm ở đâu và đang lắp trên thiết bị cấp trên nào. ĐÃ LOẠI những thiết bị lắp vào CỤM CAO HƠN (không lên tàu nên không có on_off YE, nhưng có bản ghi lắp trong WO_PART_ON_OFF) — nhóm đó chuyển sang bảng "Chi tiết TAT" với nhãn "Chỉ lắp lên".',
     columns: [
       { title: 'Part No', field: 'partno', headerFilter: 'input' },
       { title: 'Serial No', field: 'serialno', headerFilter: 'input' },
@@ -805,13 +818,19 @@ function setKpiCard(idx, value) {
 }
 
 /** Tính lại TAT install & US return, bỏ các dòng đã tích checkbox "Bỏ qua".
- *  LƯU Ý: loại luôn dòng CUVT khỏi trung bình — giống cách server tính 2 card
- *  KPI (TAT của CUVT đã có card "TAT CUVT" riêng). */
+ *  LƯU Ý 1: loại luôn dòng CUVT khỏi trung bình — giống cách server tính 2 card
+ *  KPI (TAT của CUVT đã có card "TAT CUVT" riêng).
+ *  LƯU Ý 2: loại luôn dòng "Chỉ lắp lên" (INSTALL — lắp vào cụm cao hơn). Các
+ *  card KPI do server tính bằng SQL aggregate CHƯA gồm nhóm này; nếu tính ở đây
+ *  thì con số sẽ NHẢY ngay khi người dùng tích ô "Bỏ qua" đầu tiên. Giữ 2 bên
+ *  khớp nhau; nhóm này vẫn hiện đầy đủ trong bảng chi tiết. */
 function recalcTat() {
   if (!mainTable) return;
   const all = mainTable.getData();
   const kept = all.filter(
-    (r) => !excludedKeys.has(rowKey(r)) && String(r.department || '').trim().toUpperCase() !== 'CUVT'
+    (r) => !excludedKeys.has(rowKey(r))
+      && String(r.department || '').trim().toUpperCase() !== 'CUVT'
+      && r.return_type !== 'INSTALL'
   );
   const newInstall = avgField(kept, 'tat_install_days');
   const newUsret = avgField(kept, 'tat_usreturn_days');

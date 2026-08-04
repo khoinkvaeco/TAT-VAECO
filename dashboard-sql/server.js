@@ -916,7 +916,18 @@ async function qTatDepartments(range, f) {
       ${whereSvc}
     ) u
     ORDER BY u.tat_days DESC`;
-  return query(text, params);
+  const rows = await query(text, params);
+  // (3) NHOM "CHI LAP LEN": thiet bi lap vao CUM CAO HON (khong len tau nen
+  //     khong co su kien on_off YE). Lay tu WO_PART_ON_OFF - xem chi tiet o
+  //     qInstalledIntoHigher(). Chi co chang LAP LEN: khong ngay thao/ngay tra.
+  //     Loi o nhanh nay KHONG duoc lam vo bao cao chinh.
+  try {
+    const onlyInstall = await qInstalledIntoHigher(range, f);
+    if (onlyInstall.length) rows.push(...onlyInstall);
+  } catch (e) {
+    console.warn('[TAT] Khong lay duoc nhom "chi lap len" (bo qua):', e.message);
+  }
+  return rows;
 }
 
 /**
@@ -1068,7 +1079,165 @@ async function attachRotableInfo(rows) {
   return rows.map((r) => ({ ...r, ...(map.get(psnKey(r.psn)) || EMPTY) }));
 }
 
+/**
+ * "LAP VAO CUM CAO HON" (higher assembly).
+ * ---------------------------------------------------------------------------
+ * NGHIEP VU: co thiet bi KHONG lap len tau (khong sinh su kien on_off vm='YE')
+ * ma duoc gan vao mot CUM CAO HON - ROTABLES.PARTNONEW/SERIALNONEW cua no co
+ * gia tri. Lan lap do CHI duoc ghi o [DWH_DB]..[STG_AMOS].WO_PART_ON_OFF.
+ * Truoc day chung bi liet ke NHAM vao bao cao "Xuat kho chua lap".
+ *
+ * SO LIEU THUC DO tren 1 thang (docs/TEST-HIGHER-ASSY.sql, muc 5d):
+ *   110 thiet bi "xuat kho chua lap"  ->  18 cai CO ban ghi lap trong
+ *   WO_PART_ON_OFF (13 trong so do co higher_pn/higher_sn) = 16%.
+ *
+ * CACH NHAN DIEN (khong dua vao cot "danh dau" nao ca - da do thuc te khong
+ * co cot nao nhu vay): thiet bi khong co su kien YE trong on_off NHUNG CO dong
+ * WO_PART_ON_OFF voi (PARTNO, SERIALNO) trung va thoi diem lap SAU gio xuat kho
+ * -> tuc la NO DA DUOC LAP (vao cum), khong con la "chua lap".
+ *
+ * LINKED SERVER: hoi THEO LO (SERIALNO IN (...), moi lo 400) sau khi truy van
+ * chinh da tra ve - KHONG hoi tung dong.
+ */
+function woKey(pn, sn) {
+  return String(pn || '').trim().toUpperCase() + '|' + String(sn || '').trim().toUpperCase();
+}
+
+/** Lay cac lan LAP trong WO_PART_ON_OFF cho danh sach thiet bi (theo lo).
+ *  @returns Map<'PARTNO|SERIALNO', Array<{install_time_vn, ...}>> */
+async function fetchWoInstalls(rows) {
+  const out = new Map();
+  const serials = [...new Set(
+    rows.map((r) => String(r.serialno || '').trim().toUpperCase()).filter(Boolean)
+  )];
+  if (!serials.length) return out;
+  // MUTATION = so ngay AMOS, MUTATION_TIME = so ms tu 0h (giong on_off) -> gio VN
+  const mutVN =
+    `DATEADD(HOUR, @tzOffset, DATEADD(MILLISECOND,
+       TRY_CONVERT(int, TRY_CONVERT(bigint, TRY_CONVERT(float, w.[MUTATION_TIME])) % 86400000),
+       DATEADD(DAY, TRY_CONVERT(int, TRY_CONVERT(float, w.[MUTATION])), TRY_CONVERT(datetime, @amosEpoch))))`;
+  const CHUNK = 400;
+  for (let i = 0; i < serials.length; i += CHUNK) {
+    const part = serials.slice(i, i + CHUNK);
+    const params = {};
+    const names = [];
+    part.forEach((s, j) => { params['s' + j] = s; names.push('@s' + j); });
+    try {
+      const res = await query(
+        `SELECT RTRIM(w.[PARTNO])       AS partno,
+                RTRIM(w.[SERIALNO])     AS serialno,
+                ${mutVN}                AS install_time_vn,
+                TRY_CONVERT(bigint, w.[EVENT_PERFNO_I]) AS event_perf,
+                RTRIM(w.[AC_POSITION])  AS ac_position,
+                RTRIM(w.[PARTNO_OFF])   AS partno_off,
+                RTRIM(w.[SERIALNO_OFF]) AS serialno_off
+         FROM [DWH_DB]..[STG_AMOS].[WO_PART_ON_OFF] w
+         WHERE w.[SERIALNO] IN (${names.join(', ')})`,
+        params
+      );
+      for (const r of res) {
+        const k = woKey(r.partno, r.serialno);
+        if (!out.has(k)) out.set(k, []);
+        out.get(k).push(r);
+      }
+    } catch (e) {
+      // Loi linked server -> KHONG lam vo bao cao: coi nhu khong tim thay lan lap
+      console.warn('[WO_PART_ON_OFF] Khong lay duoc lan lap (bo qua):', e.message);
+      return out;
+    }
+  }
+  return out;
+}
+
+/** Tach danh sach "xuat kho chua co su kien YE" thanh 2 nhom:
+ *   chuaLap   - thuc su chua lap (giu nguyen trong bao cao cu)
+ *   lapVaoCum - da lap (vao cum cao hon), kem gio lap + TAT install */
+async function splitIssuedByWoInstall(rows) {
+  const chuaLap = [];
+  const lapVaoCum = [];
+  if (!rows.length) return { chuaLap, lapVaoCum };
+  const map = await fetchWoInstalls(rows);
+  for (const r of rows) {
+    const issue = r.issue_time_vn ? new Date(r.issue_time_vn) : null;
+    let best = null;
+    for (const c of map.get(woKey(r.partno, r.serialno)) || []) {
+      if (!c.install_time_vn) continue;
+      const t = new Date(c.install_time_vn);
+      // Chi nhan lan lap SAU gio xuat kho (tranh dinh lan lap cu cua ky truoc)
+      if (issue && !(t >= issue)) continue;
+      if (!best || t < new Date(best.install_time_vn)) best = c; // lan lap SOM NHAT
+    }
+    if (!best) { chuaLap.push(r); continue; }
+    const inst = new Date(best.install_time_vn);
+    lapVaoCum.push({
+      ...r,
+      installed_time_vn: best.install_time_vn,
+      wo_event_perf: best.event_perf,
+      wo_ac_position: best.ac_position,
+      partno_off: best.partno_off || null,
+      serialno_off: best.serialno_off || null,
+      tat_install_days: issue ? (inst - issue) / 86400000 : null,
+    });
+  }
+  return { chuaLap, lapVaoCum };
+}
+
+// Chay 1 lan cho ca 2 bao cao ("Xuat kho chua lap" va "Chi tiet TAT") trong
+// vong 60s - tranh goi lai truy van nang + linked server hai lan.
+const _issuedSplitMemo = new Map();
+async function getIssuedSplit(range, f) {
+  const key = JSON.stringify([range.from, range.to, f]);
+  const hit = _issuedSplitMemo.get(key);
+  if (hit && Date.now() - hit.t < 60 * 1000) return hit.p;
+  const p = (async () => splitIssuedByWoInstall(await qIssuedNotInstalledRaw(range, f)))();
+  p.catch(() => _issuedSplitMemo.delete(key)); // loi thi khong giu cache hong
+  _issuedSplitMemo.set(key, { t: Date.now(), p });
+  if (_issuedSplitMemo.size > 20) {
+    const oldest = [..._issuedSplitMemo.entries()].sort((a, b) => a[1].t - b[1].t)[0];
+    if (oldest) _issuedSplitMemo.delete(oldest[0]);
+  }
+  return p;
+}
+
+/** BAO CAO: thiet bi da xuat kho nhung CHUA LAP (da loai nhom lap vao cum). */
 async function qIssuedNotInstalled(range, f) {
+  return (await getIssuedSplit(range, f)).chuaLap;
+}
+
+/** Cac thiet bi LAP VAO CUM CAO HON - dua vao "Chi tiet TAT", CHI the hien
+ *  chang LAP LEN (khong co ngay thao / ngay tra / TAT tong). */
+async function qInstalledIntoHigher(range, f) {
+  const { lapVaoCum } = await getIssuedSplit(range, f);
+  return lapVaoCum.map((r) => ({
+    event_perf: r.event_perf ?? r.wo_event_perf ?? null,
+    partno: r.partno,
+    serialno: r.serialno,
+    labelno: r.labelno,
+    description: r.description,
+    receiver: r.receiver ?? null,
+    station: r.station,
+    store: r.store1 ?? r.store,
+    voucher_issue: r.voucher_issue,
+    picking_li: r.picking_li ?? null,
+    partno_off: r.partno_off ?? null,
+    serialno_off: r.serialno_off ?? null,
+    staff: r.staff,
+    department: r.department,
+    issue_time_vn: r.issue_time_vn,
+    installed_time_vn: r.installed_time_vn,
+    removed_time_vn: null,           // chua thao xuong
+    return_unservice_time: null,     // chua tra
+    tat_days: null,                  // chua co TAT tong (chua tra)
+    tat_install_days: r.tat_install_days,
+    tat_usreturn_days: null,
+    return_type: 'INSTALL',          // "Chi lap len" (lap vao cum cao hon)
+    higher_pn: r.higher_pn || '',
+    higher_sn: r.higher_sn || '',
+    ac_position: r.wo_ac_position || '',
+  }));
+}
+
+async function qIssuedNotInstalledRaw(range, f) {
   const params = { from: range.from, to: range.to, tzOffset: CONFIG.tzOffset, top: CONFIG.maxRows, ...amosDayParams(range) };
   const dept = deptFromStaff('k.[created_b2]', 'sm');
   // [psn] = khoa noi sang ROTABLES de lay VI TRI HIEN TAI. Uu tien lay tu
@@ -1104,6 +1273,12 @@ async function qIssuedNotInstalled(range, f) {
       ${dept} AS department,
       ${amosToVN('k')} AS issue_time_vn,
       ${psnSelect} AS psn,
+      -- Cac cot duoi CHI dung khi dong nay duoc chuyen sang "Chi tiet TAT"
+      -- (nhom lap vao cum cao hon) - bao cao "Xuat kho chua lap" khong hien.
+      k.[event_perf] AS event_perf,
+      k.[receiver]   AS receiver,
+      k.[picking_li] AS picking_li,
+      k.[store1]     AS store1,
       -- TAT ton dong = tu luc xuat kho den HIEN TAI (ngay)
       CAST(DATEDIFF(MINUTE, ${amosToVN('k')}, GETDATE()) AS float) / 1440.0 AS tat_days
     FROM [NQT].[dbo].[kho_ser1] k
@@ -3998,7 +4173,25 @@ app.get('/api/admin/diag/higher', h(async (req, res) => {
   //        Neu thiet bi "chua lap" thuc ra CO trong WO_PART_ON_OFF thi cac cot
   //        cua dong do se cho biet no duoc lap vao dau.
   try {
-    const rows = await qIssuedNotInstalled(range, f);
+    // DUNG BAN GOC (chua loai nhom "lap vao cum") - de con do duoc bao nhieu cai
+    // bi loai va vi sao.
+    const rows = await qIssuedNotInstalledRaw(range, f);
+    const split = await splitIssuedByWoInstall(rows);
+    out.ketQuaTach = {
+      truocKhiLoai: rows.length,
+      conLaiChuaLap: split.chuaLap.length,
+      lapVaoCumCaoHon: split.lapVaoCum.length,
+      trongDoCoHigherPnSn: split.lapVaoCum.filter(
+        (r) => (r.higher_pn || '').trim() || (r.higher_sn || '').trim()
+      ).length,
+      viDu: split.lapVaoCum.slice(0, 5).map((r) => ({
+        partno: r.partno, serialno: r.serialno, labelno: r.labelno,
+        voucher_issue: r.voucher_issue,
+        issue_time_vn: r.issue_time_vn, installed_time_vn: r.installed_time_vn,
+        tat_install_days: r.tat_install_days == null ? null : Math.round(r.tat_install_days * 100) / 100,
+        higher_pn: r.higher_pn, higher_sn: r.higher_sn,
+      })),
+    };
     const coHigher = rows.filter((r) => (r.higher_pn || '').trim() || (r.higher_sn || '').trim());
     out.xuatKhoChuaLap = {
       soDong: rows.length,
