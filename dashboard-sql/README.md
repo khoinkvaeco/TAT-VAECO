@@ -150,6 +150,23 @@ linked server — vẫn chạy đúng, chỉ **chậm hơn**. Đặt `SIGN_CACHE
 thông báo. Muốn nhanh thì nhờ DBA cấp quyền ghi cho **đúng một bảng** `SIGN_CACHE` (không đụng
 bảng nghiệp vụ nào).
 
+### Ai được XEM, ai được SỬA
+
+Dữ liệu đối ứng thủ công nằm trên **máy backend**; quyền tách làm 2 mức, chặn ở **server**
+(dựa trên IP socket thật, không tin header → không giả mạo được):
+
+| Thao tác | Máy quản trị (localhost + `ADMIN_IPS`) | Máy khác |
+|---|---|---|
+| Xem dashboard, KPI, mọi báo cáo | ✅ | ✅ |
+| Xem tab *Đối ứng thủ công* (ứng viên + gợi ý cặp) | ✅ | ✅ |
+| Xem tab *✔ Đã đối ứng thủ công* (các cặp đã chốt) + xuất Excel | ✅ | ✅ |
+| **Xác nhận / gỡ cặp đối ứng** | ✅ | 🚫 **403** |
+| Trang `/admin` (LLM, log, KB, quản lý cặp) | ✅ | 🚫 **403** |
+
+Trên tab *Đối ứng thủ công*, máy không có quyền thấy **🔒 Chỉ xem** thay cho nút *✔ Xác nhận*
+(kèm IP của máy đó trong tooltip). Đây chỉ là gợi ý giao diện — chặn thật nằm ở server, nên
+gọi thẳng API từ máy khác vẫn bị từ chối.
+
 ### Nên đặt thư mục dữ liệu Ở ĐÂU
 
 File JSON **bắt buộc nằm trên máy chạy backend** (chỉ backend đọc/ghi được — trình duyệt
@@ -234,6 +251,8 @@ CREATE INDEX IX_SIGN_user ON [DWH_DB].[STG_AMOS].[SIGN] ([USER_SIGN]) INCLUDE ([
 | `GET /api/admin/llm-status` | Trạng thái LLM: provider, sẵn sàng/bị chặn, model, che dữ liệu, có API key hay chưa (không lộ khóa). **Chỉ IP quản trị.** |
 | `GET /api/admin/manual-pairs` | Danh sách cặp đối ứng thủ công đã xác nhận. **Chỉ IP quản trị.** |
 | `POST /api/admin/manual-pair/confirm` | Xác nhận 1 cặp (label lệch) → tính là đã đối ứng. **Chỉ IP quản trị.** |
+| `GET /api/whoami` | Máy đang gọi có quyền sửa không → `{ ip, isAdmin }`. **Mọi máy gọi được** (frontend dùng để ẩn/hiện nút). |
+| `GET /api/manual-pairs` | **Chỉ đọc** danh sách cặp đã xác nhận. **Mọi máy xem được.** |
 | `GET /api/admin/manual-pairs/export` | Tải bản sao lưu JSON các cặp đã xác nhận. **Chỉ IP quản trị.** |
 | `POST /api/admin/manual-pair/delete` | Gỡ 1 cặp đã xác nhận (thiết bị quay lại *Chưa đối ứng*). **Chỉ IP quản trị.** |
 | `GET /api/admin/diag/rbi` | Chẩn đoán báo cáo *Tháo trước lắp sau* (đếm theo từng điều kiện nới lỏng dần). **Chỉ IP quản trị.** |

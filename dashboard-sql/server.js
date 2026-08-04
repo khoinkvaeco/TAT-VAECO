@@ -3163,6 +3163,21 @@ app.post(
   })
 );
 
+// --- May dang xem CO QUYEN SUA khong? (khong chan IP - ai goi cung duoc)
+//     Frontend dung de an/hien nut "Xac nhan doi ung". Day CHI la goi y giao
+//     dien; chan that su van o adminGuard phia server (khong the gia mao). ---
+app.get('/api/whoami', h(async (req, res) => {
+  const ip = String(req.socket.remoteAddress || '').replace(/^::ffff:/, '') || 'unknown';
+  res.json({ ip, isAdmin: isAdminAllowed(ip) });
+}));
+
+// --- XEM danh sach cap doi ung thu cong (CHI DOC - moi may deu xem duoc).
+//     Sua/xoa van phai tu IP quan tri (/api/admin/manual-pair/*). ---
+app.get('/api/manual-pairs', h(async (req, res) => {
+  const items = loadManualPairs();
+  res.json({ items, count: items.length });
+}));
+
 // --- Danh sach gia tri cho cac filter (station/store/department) ---
 //     Cache 10 phut: danh muc it thay doi, do 3 lan DISTINCT scan moi luot mo trang.
 app.get(
@@ -3365,6 +3380,8 @@ const REPORTS = {
   'returned-unservice': { live: qReturnedUnservice, demo: 'returnedUnservice' },
   'not-reconciled': { live: qNotReconciled, demo: 'notReconciled' },
   'manual-pair': { live: qManualPairCandidates, demo: 'manualPairCandidates' },
+  // Doc tu FILE (khong query DB) -> khong can nhanh demo rieng
+  'manual-pair-done': { live: async (range, f) => manualPairsInRange(range, f) },
   'removed-before-installed': { live: qRemovedBeforeInstalled, demo: 'removedBeforeInstalled' },
   other: { live: qOther, demo: 'other' },
   'return-store-tat': { live: qTatReturnStore, demo: 'returnStoreTat' },
@@ -3377,7 +3394,7 @@ app.get(
     if (!def) return res.status(404).json({ error: true, message: 'Bao cao khong ton tai.' });
     const range = resolveRange(req.query);
     const f = readFilters(req.query);
-    const data = CONFIG.demoMode ? DEMO[def.demo](range, f) : await def.live(range, f);
+    const data = (CONFIG.demoMode && def.demo) ? DEMO[def.demo](range, f) : await def.live(range, f);
     res.json({ rows: data, count: data.length, range });
   })
 );

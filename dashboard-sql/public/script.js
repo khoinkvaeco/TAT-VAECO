@@ -69,6 +69,8 @@ const state = {
   store: '',
   department: '',
   excludeCC: false, // checkbox "Bo qua xuat costcenter" (receiver la so, khong phai so tau)
+  isAdmin: false,   // may nay co quyen SUA (xac nhan doi ung) khong - hoi server
+  clientIp: '',
   currentReport: 'returned-unservice',
 };
 
@@ -602,10 +604,38 @@ const REPORT_DEFS = {
         formatter: (cell) => {
           const d = cell.getRow().getData();
           if (!d.sug_serialno_off) return '<span style="color:var(--text-muted)">—</span>';
+          if (!state.isAdmin) {
+            return `<span title="Chỉ máy quản trị mới xác nhận được (IP của bạn: ${state.clientIp})" style="color:var(--text-muted)">🔒 Chỉ xem</span>`;
+          }
           return '<button class="btn-accent" style="padding:2px 8px;font-size:11px">✔ Xác nhận</button>';
         },
-        cellClick: (e, cell) => confirmManualPair(cell.getRow()),
+        cellClick: (e, cell) => { if (state.isAdmin) confirmManualPair(cell.getRow()); },
       },
+    ],
+  },
+  'manual-pair-done': {
+    title: 'Cặp đối ứng thủ công ĐÃ xác nhận (chỉ xem)',
+    desc: 'Các cặp thiết bị tháo ↔ phiếu xuất đã được quản trị viên xác nhận trong kỳ — đã được tính là ĐÃ đối ứng trong KPI. Mọi máy đều xem/xuất Excel được; chỉ máy quản trị mới thêm/gỡ được (trang Admin).',
+    columns: [
+      { title: 'Phiếu xuất', field: 'issueVoucher', headerFilter: 'input' },
+      { title: 'Label xuất', field: 'issueLabel', headerFilter: 'input' },
+      { title: 'PN xuất', field: 'issuePartno', headerFilter: 'input' },
+      { title: 'SN xuất', field: 'issueSerialno', headerFilter: 'input' },
+      { title: 'Ngày Giờ xuất', field: 'issueTimeVn', formatter: fmtDateCell },
+      { title: 'PN tháo', field: 'offPartno', headerFilter: 'input' },
+      { title: 'SN tháo', field: 'offSerialno', headerFilter: 'input' },
+      { title: 'Label trả', field: 'retLabelno', headerFilter: 'input' },
+      { title: 'Giờ trả US', field: 'retDelTime', formatter: fmtDateCell },
+      { title: 'TAT (ngày)', field: 'tatDays', formatter: fmtTatCell, hozAlign: 'right', sorter: 'number' },
+      { title: 'Cách ghép', field: 'matchMethod', headerFilter: 'input', widthGrow: 2 },
+      { title: 'Tin cậy', field: 'confidence', hozAlign: 'center' },
+      { title: 'Center', field: 'department', headerFilter: 'input' },
+      { title: 'Station', field: 'station', headerFilter: 'input' },
+      {
+        title: 'Xác nhận lúc', field: 'confirmedAt',
+        formatter: (cell) => String(cell.getValue() || '').slice(0, 16).replace('T', ' '),
+      },
+      { title: 'Bởi (IP)', field: 'confirmedBy' },
     ],
   },
   'removed-before-installed': {
@@ -1159,6 +1189,13 @@ async function init() {
 
   // Report sub-tabs
   $$('.reportTab').forEach((b) => b.addEventListener('click', () => loadReport(b.dataset.report)));
+
+  // Hoi server: may nay co quyen SUA khong (an/hien nut xac nhan doi ung)
+  try {
+    const who = await fetch('/api/whoami').then((r) => r.json());
+    state.isAdmin = !!who.isAdmin;
+    state.clientIp = who.ip || '';
+  } catch (_) { state.isAdmin = false; }
 
   // Khoi tao
   initTheme();
