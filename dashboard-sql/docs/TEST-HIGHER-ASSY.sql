@@ -213,24 +213,54 @@ WHERE k.[vm] = 'T'
                     AND tc.[labelno] = k.[labelno])
   AND k.[mutation] BETWEEN @fromDay AND @toDay;
 
--- (5d) BANG TONG KET - day la con so quan trong nhat
-SELECT
-  (SELECT COUNT(*) FROM #chualap) AS tong_xuat_kho_chua_lap,
-  (SELECT COUNT(*) FROM #chualap c
-    WHERE c.higher_pn <> '' OR c.higher_sn <> '')                 AS co_higher_pn_sn,
-  (SELECT COUNT(*) FROM #chualap c
-    WHERE EXISTS (SELECT 1 FROM #wo w
-                  WHERE RTRIM(w.[PARTNO]) = c.partno
-                    AND RTRIM(w.[SERIALNO]) = c.serialno))        AS co_trong_WO_PART_ON_OFF,
-  (SELECT COUNT(*) FROM #chualap c
-    WHERE NOT EXISTS (SELECT 1 FROM [NQT].[dbo].[on_off] o2
-                      WHERE o2.[labelno] = c.labelno))            AS khong_co_dong_nao_trong_on_off;
+-- (5d) BANG TONG KET - MOI DONG LA MOT CACH TIM, xem cach nao "bat" duoc
+--      nhieu thiet bi nhat. Day la con so quan trong nhat de quyet dinh logic.
+SELECT 1 AS stt, 'Tong "Xuat kho chua lap" trong ky' AS tieu_chi,
+       COUNT(*) AS so_thiet_bi FROM #chualap
+UNION ALL SELECT 2, 'Trong do: CO higher_pn hoac higher_sn (ROTABLES)',
+       COUNT(*) FROM #chualap c WHERE c.higher_pn <> '' OR c.higher_sn <> ''
+UNION ALL SELECT 3, 'KHONG co dong nao trong on_off (moi vm)',
+       COUNT(*) FROM #chualap c
+       WHERE NOT EXISTS (SELECT 1 FROM [NQT].[dbo].[on_off] o2 WHERE o2.[labelno] = c.labelno)
+UNION ALL SELECT 4, 'Co dong on_off nhung KHONG phai YE',
+       COUNT(*) FROM #chualap c
+       WHERE EXISTS (SELECT 1 FROM [NQT].[dbo].[on_off] o2 WHERE o2.[labelno] = c.labelno)
+UNION ALL SELECT 5, 'Khop WO_PART_ON_OFF theo PARTNO + SERIALNO',
+       COUNT(*) FROM #chualap c
+       WHERE EXISTS (SELECT 1 FROM #wo w WHERE RTRIM(w.[PARTNO]) = c.partno
+                       AND RTRIM(w.[SERIALNO]) = c.serialno)
+UNION ALL SELECT 6, 'Khop WO_PART_ON_OFF chi theo SERIALNO',
+       COUNT(*) FROM #chualap c
+       WHERE EXISTS (SELECT 1 FROM #wo w WHERE RTRIM(w.[SERIALNO]) = c.serialno)
+UNION ALL SELECT 7, 'Khop WO_PART_ON_OFF theo LABELNO',
+       COUNT(*) FROM #chualap c
+       WHERE EXISTS (SELECT 1 FROM #wo w
+                     WHERE TRY_CONVERT(float, w.[LABELNO]) = TRY_CONVERT(float, c.labelno))
+UNION ALL SELECT 8, 'Khop WO_PART_ON_OFF o cot _OFF (thiet bi bi thao ra)',
+       COUNT(*) FROM #chualap c
+       WHERE EXISTS (SELECT 1 FROM #wo w WHERE RTRIM(w.[PARTNO_OFF]) = c.partno
+                       AND RTRIM(w.[SERIALNO_OFF]) = c.serialno)
+ORDER BY stt;
 
 -- (5e) TOAN BO cac cot cua cac dong KHOP  <<< NHIN CHO NAY DE TIM COT DANH DAU
-SELECT TOP 30 c.partno AS x_partno, c.serialno AS x_serialno,
+--      Da them c.labelno de doi chieu voi w.[LABELNO].
+SELECT TOP 30 c.partno AS x_partno, c.serialno AS x_serialno, c.labelno AS x_labelno,
        c.higher_pn AS x_higher_pn, c.higher_sn AS x_higher_sn, w.*
 FROM #chualap c
 INNER JOIN #wo w ON RTRIM(w.[PARTNO]) = c.partno AND RTRIM(w.[SERIALNO]) = c.serialno;
+
+-- (5h) NHUNG CAI CO higher_pn NHUNG KHONG KHOP WO_PART_ON_OFF thi trong ra sao?
+--      Neu nhom nay dong -> WO_PART_ON_OFF KHONG du de nhan dien, phai dung
+--      nguon khac (vd chinh ROTABLES) de xac dinh "da gan vao cum".
+SELECT TOP 30 c.partno, c.serialno, c.labelno, c.voucher_xuat, c.ac_registr,
+       c.psn, c.vi_tri_hien_tai, c.higher_pn, c.higher_sn, c.gio_xuat_vn,
+       (SELECT COUNT(*) FROM [NQT].[dbo].[on_off] o5 WHERE o5.[labelno] = c.labelno) AS so_dong_on_off,
+       (SELECT TOP 1 RTRIM(o6.[vm]) FROM [NQT].[dbo].[on_off] o6
+         WHERE o6.[labelno] = c.labelno ORDER BY o6.[mutation] DESC) AS vm_moi_nhat
+FROM #chualap c
+WHERE (c.higher_pn <> '' OR c.higher_sn <> '')
+  AND NOT EXISTS (SELECT 1 FROM #wo w WHERE RTRIM(w.[PARTNO]) = c.partno
+                    AND RTRIM(w.[SERIALNO]) = c.serialno);
 
 -- (5f) DE SO SANH: cac dong WO cua thiet bi LAP LEN TAU BINH THUONG
 --      (co su kien on_off vm='YE' va higher_par IS NULL)
