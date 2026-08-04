@@ -1174,8 +1174,10 @@ async function splitIssuedByWoInstall(rows) {
       installed_time_vn: best.install_time_vn,
       wo_event_perf: best.event_perf,
       wo_ac_position: best.ac_position,
-      partno_off: best.partno_off || null,
-      serialno_off: best.serialno_off || null,
+      // THIET BI CU bi thay ra khoi cum - la thiet bi KHAC, khong phai thiet bi
+      // cua dong nay bi thao xuong (dat ten wo_* de khong lan voi partno_off).
+      wo_partno_off: best.partno_off || null,
+      wo_serialno_off: best.serialno_off || null,
       tat_install_days: issue ? (inst - issue) / 86400000 : null,
     });
   }
@@ -1205,7 +1207,18 @@ async function qIssuedNotInstalled(range, f) {
 }
 
 /** Cac thiet bi LAP VAO CUM CAO HON - dua vao "Chi tiet TAT", CHI the hien
- *  chang LAP LEN (khong co ngay thao / ngay tra / TAT tong). */
+ *  chang LAP LEN (khong co ngay thao / ngay tra / TAT tong).
+ *
+ *  VE 2 COT "Part No (off)" / "Serial No (off)":
+ *  Trong WO_PART_ON_OFF, moi dong la 1 lan THAY THE tren cum: thiet bi cu ra
+ *  (PARTNO_OFF/SERIALNO_OFF), thiet bi moi vao (PARTNO/SERIALNO). Nhung thiet
+ *  bi cu do la MOT THIET BI KHAC - khong phai thiet bi cua dong nay bi thao
+ *  xuong. Neu do vao 2 cot "(off)" thi dong "Chi lap len" lai hien du lieu thao
+ *  (trong khi cot "Ngay thao" rong) -> mau thuan, va nguoi doc de tuong thiet
+ *  bi nay da duoc doi ung.
+ *  -> DE TRONG 2 cot do. Van giu gia tri o wo_partno_off / wo_serialno_off
+ *     (khong hien tren bang) de con dung cho doi chieu ve sau.
+ */
 async function qInstalledIntoHigher(range, f) {
   const { lapVaoCum } = await getIssuedSplit(range, f);
   return lapVaoCum.map((r) => ({
@@ -1219,8 +1232,10 @@ async function qInstalledIntoHigher(range, f) {
     store: r.store1 ?? r.store,
     voucher_issue: r.voucher_issue,
     picking_li: r.picking_li ?? null,
-    partno_off: r.partno_off ?? null,
-    serialno_off: r.serialno_off ?? null,
+    partno_off: null,                // xem chu thich tren: KHONG phai thiet bi
+    serialno_off: null,              // nay bi thao xuong
+    wo_partno_off: r.wo_partno_off ?? null,     // thiet bi CU bi thay ra khoi cum
+    wo_serialno_off: r.wo_serialno_off ?? null, // (giu lai, khong hien tren bang)
     staff: r.staff,
     department: r.department,
     issue_time_vn: r.issue_time_vn,
@@ -4190,7 +4205,11 @@ app.get('/api/admin/diag/higher', h(async (req, res) => {
         issue_time_vn: r.issue_time_vn, installed_time_vn: r.installed_time_vn,
         tat_install_days: r.tat_install_days == null ? null : Math.round(r.tat_install_days * 100) / 100,
         higher_pn: r.higher_pn, higher_sn: r.higher_sn,
+        // Thiet bi CU bi thay ra khoi cum (thiet bi KHAC) - khong hien tren
+        // bang "Chi tiet TAT" de tranh hieu nham la dong nay da thao xuong.
+        wo_partno_off: r.wo_partno_off, wo_serialno_off: r.wo_serialno_off,
       })),
+      soCoThayThe: split.lapVaoCum.filter((r) => r.wo_serialno_off).length,
     };
     const coHigher = rows.filter((r) => (r.higher_pn || '').trim() || (r.higher_sn || '').trim());
     out.xuatKhoChuaLap = {
