@@ -4743,6 +4743,47 @@ app.get('/api/admin/diag/dept', h(async (req, res) => {
     out.viDuDaDoiUng = { loi: e.message };
   }
 
+  // 2b) QUY MO VAN DE: bao nhieu dong co real_us1.department KHAC voi SIGN?
+  //     real_us1.department dang duoc UU TIEN hon SIGN (xem deptFromReal), nen
+  //     dong nao lech se lay theo real_us1 - ke ca khi SIGN moi hon/dung hon.
+  try {
+    const params = { from: range.from, to: range.to, ...amosDayParams(range) };
+    const where = buildFilterClause(f, { station: 'k.[station]', store: 'k.[store]', department: null }, params);
+    const rDept = cleanDept('r.[department]');
+    const sDept = cleanDept('sm.[DEPARTMENT]');
+    const from = `
+      FROM [NQT].[dbo].[kho_ser1] k
+      INNER JOIN [NQT].[dbo].[real_us1] r
+        ON k.[labelno] = r.[labelno] AND k.[voucherno] = r.[voucher_s]
+      ${signJoin('r.[action_per]', 'sm')}
+      WHERE ${khoBase}
+        AND LTRIM(RTRIM(ISNULL(k.[receiver], ''))) <> ''
+        AND r.[del_time] >= @from AND r.[del_time] < @to
+        ${usPairDedup()}
+        ${where}`;
+    const sets = await queryMulti(`
+      SELECT COUNT(*) AS tongDong,
+             SUM(CASE WHEN ${rDept} IS NOT NULL AND ${sDept} IS NOT NULL
+                       AND ${rDept} <> ${sDept} THEN 1 ELSE 0 END) AS soDongLech,
+             SUM(CASE WHEN ${rDept} IS NULL THEN 1 ELSE 0 END) AS soDongThieuDeptRealUs1
+      ${from};
+
+      SELECT TOP 20 ${rDept} AS dept_real_us1, ${sDept} AS dept_SIGN, COUNT(*) AS so_dong
+      ${from}
+        AND ${rDept} IS NOT NULL AND ${sDept} IS NOT NULL AND ${rDept} <> ${sDept}
+      GROUP BY ${rDept}, ${sDept}
+      ORDER BY COUNT(*) DESC;`, params);
+    const sum = (sets.find((s) => s.length && 'tongDong' in s[0]) || [])[0] || {};
+    out.quyMoLechNguon = {
+      ...sum,
+      giaiThich: 'real_us1.department dang duoc UU TIEN hon SIGN. Cac cap duoi day '
+        + 'la nhung dong ma 2 nguon KHAC nhau -> hien tai bieu do lay cot dept_real_us1.',
+      cacCapLech: sets.find((s) => s.length && 'dept_real_us1' in s[0]) || [],
+    };
+  } catch (e) {
+    out.quyMoLechNguon = { loi: e.message };
+  }
+
   // 3) Doi chieu so luong 2 nhanh theo tung Trung tam (voi bo loc dang chon)
   try {
     const agg = await qDashboardAgg(range, f);
