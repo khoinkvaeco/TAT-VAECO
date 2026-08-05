@@ -856,11 +856,14 @@ const REPORT_DEFS = {
   // --- REPAIR ADMIN: ton dong tai cac vi tri UNSERVICEABLE (location_type=-4) ---
   'repair-admin': {
     title: 'Repair Admin — tồn đọng tại vị trí Unserviceable (theo Station)',
-    desc: 'Đếm số item đang nằm ở các vị trí U/S (LOCATION.location_type = -4), tách theo tuổi tồn đọng: dưới 30 ngày / từ 30 ngày trở lên. '
+    desc: 'Đếm số item đang nằm ở các vị trí U/S (LOCATION.location_type = -4) và có đơn sửa chữa OD_DETAIL với status = 0, '
+      + 'tách theo tuổi tồn đọng: dưới 30 ngày / từ 30 ngày trở lên. '
+      + 'CHỈ đếm các dòng có OD_DETAIL.backorder = 1 VÀ state = \'O\' — dòng không đạt vẫn nằm đầy đủ trong tab "Repair Admin (chi tiết)" với cột "Tính tổng hợp" = Không. '
       + 'Đây là ẢNH CHỤP HIỆN TRẠNG nên KHÔNG phụ thuộc kỳ báo cáo — chỉ lọc theo Station/Store đang chọn. '
-      + 'Rotables tính tuổi theo ROTABLES.orderdate. Vật tư tiêu hao (CONSUMABLES) chưa có cột ngày trong câu SQL nên nằm ở cột "Không rõ ngày".',
+      + 'Tuổi tính theo ROTABLES.orderdate. Vật tư tiêu hao (CONSUMABLES) không nối được sang OD_DETAIL (không có psn) nên không xuất hiện ở bảng này.',
     columns: [
       { title: 'Station', field: 'station', headerFilter: 'input', width: 100 },
+      { title: 'Store', field: 'store', headerFilter: 'input', width: 110 },
       { title: 'Vị trí (U/S)', field: 'location', headerFilter: 'input', widthGrow: 2 },
       { title: '< 30 ngày', field: 'less30', hozAlign: 'right', sorter: 'number', formatter: fmtCountCell },
       { title: '≥ 30 ngày', field: 'over30', hozAlign: 'right', sorter: 'number', formatter: fmtCountWarnCell },
@@ -870,14 +873,22 @@ const REPORT_DEFS = {
         formatter: fmtCountCell,
       },
       { title: 'Tổng', field: 'total', hozAlign: 'right', sorter: 'number', formatter: fmtCountBoldCell },
-      { title: 'Rotable', field: 'rotable', hozAlign: 'right', sorter: 'number', formatter: fmtCountCell },
-      { title: 'Tiêu hao', field: 'consumable', hozAlign: 'right', sorter: 'number', formatter: fmtCountCell },
     ],
   },
   'repair-admin-detail': {
     title: 'Repair Admin — chi tiết từng item tại vị trí Unserviceable',
-    desc: 'Danh sách item đứng sau bảng tổng hợp. Nguồn: LOCATION × ROTABLES và LOCATION × CONSUMABLES, đều lọc location_type = -4.',
+    desc: 'Danh sách item đứng sau bảng tổng hợp. Nguồn: LOCATION × ROTABLES × OD_DETAIL (status = 0) và LOCATION × CONSUMABLES, đều lọc location_type = -4. '
+      + 'Cột "Tính tổng hợp" cho biết dòng đó có được đếm vào bảng tổng hợp hay không (điều kiện: backorder = 1 và state = O).',
     columns: [
+      {
+        title: 'Tính tổng hợp', field: 'tinh_tong_hop', hozAlign: 'center', width: 120,
+        headerTooltip: 'Có = được đếm vào bảng Repair Admin (backorder = 1 và state = O)',
+        formatter: (cell) => (cell.getValue()
+          ? `<span style="color:${cssVar('--good')};font-weight:700">Có</span>`
+          : '<span style="color:var(--text-muted)">Không</span>'),
+        headerFilter: 'list',
+        headerFilterParams: { values: { '': 'Tất cả', true: 'Có', false: 'Không' } },
+      },
       {
         title: 'Loại', field: 'loai', hozAlign: 'center', width: 100,
         formatter: (cell) => (cell.getValue() === 'ROTABLE' ? 'Rotable' : 'Tiêu hao'),
@@ -902,6 +913,11 @@ const REPORT_DEFS = {
           return `<span class="tat-badge" style="background:${color}22;color:${color}">${v}</span>`;
         },
       },
+      // --- OD_DETAIL (don sua chua) ---
+      { title: 'Status', field: 'od_status', hozAlign: 'center', width: 90, headerFilter: 'input' },
+      { title: 'State', field: 'od_state', hozAlign: 'center', width: 90, headerFilter: 'input' },
+      { title: 'Backorder', field: 'od_backorder', hozAlign: 'center', width: 100, headerFilter: 'input' },
+      { title: 'Ext state', field: 'od_ext_state', hozAlign: 'center', width: 100, headerFilter: 'input' },
       { title: 'Owner', field: 'owner', headerFilter: 'input' },
       { title: 'Batch No', field: 'batchno', headerFilter: 'input' },
       { title: 'SL (qty)', field: 'qty', hozAlign: 'right', sorter: 'number' },

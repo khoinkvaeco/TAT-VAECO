@@ -1953,6 +1953,18 @@ const REPAIR_LOCATION_TYPE = -4;   // vi tri UNSERVICEABLE trong AMOS
 const REPAIR_AGE_DAYS = 30;        // nguong chia < 30 ngay / >= 30 ngay
 
 /**
+ * Dong nao duoc TINH VAO BANG TONG HOP: OD_DETAIL.backorder = 1 VA state = 'O'.
+ * (status = 0 da loc san trong cau SQL.)
+ * So sanh chiu duoc ca so lan chuoi ('1' / 1) va khoang trang / chu thuong.
+ * Dong KHONG dat dieu kien VAN NAM trong bang chi tiet, co cot danh dau rieng
+ * -> nguoi dung thay duoc cai gi bi loai chu khong bien mat am tham.
+ */
+function isRepairCounted(backorder, state) {
+  return Number(backorder) === 1
+    && String(state == null ? '' : state).trim().toUpperCase() === 'O';
+}
+
+/**
  * Doi 1 gia tri ngay cua AMOS sang Date.
  * KHONG doan kieu du lieu: quyet dinh theo KIEU THAT driver tra ve.
  *   - Date  -> dung luon (cot Oracle kieu DATE)
@@ -2002,7 +2014,11 @@ async function loadRepairAdmin(f) {
   if (f.station) { params.fStation = f.station; where += ' AND l.[station] = @fStation'; }
   if (f.store) { params.fStore = f.store; where += ' AND l.[store] = @fStore'; }
 
-  // [1] ROTABLES - co orderdate nen tinh duoc tuoi ton dong
+  // [1] ROTABLES x OD_DETAIL - co orderdate nen tinh duoc tuoi ton dong.
+  //     OD_DETAIL noi qua (psn, labelno); WHERE loc san status = 0.
+  //     Cot labelno KHONG co trong cau SQL nguoi dung dua nhung van lay ve vi
+  //     no da la khoa join va bang chi tiet dang co cot Label - bo di thi cot
+  //     do trong tron, ma khong nhanh hon chut nao.
   const rot = await query(
     `SELECT l.[locationno_i]     AS locationno_i,
             RTRIM(l.[station])   AS station,
@@ -2013,10 +2029,16 @@ async function loadRepairAdmin(f) {
             r.[psn]              AS psn,
             RTRIM(r.[orderno])   AS orderno,
             r.[orderdate]        AS orderdate,
-            r.[labelno]          AS labelno
+            r.[labelno]          AS labelno,
+            d.[status]           AS od_status,
+            RTRIM(d.[state])     AS od_state,
+            d.[backorder]        AS od_backorder,
+            RTRIM(d.[ext_state]) AS od_ext_state
      FROM [DWH_DB]..[STG_AMOS].[LOCATION] l
      JOIN [DWH_DB]..[STG_AMOS].[ROTABLES] r ON l.[locationno_i] = r.[locationno_i]
-     WHERE l.[location_type] = @locType ${where}`,
+     JOIN [DWH_DB]..[STG_AMOS].[OD_DETAIL] d
+       ON r.[psn] = d.[psn] AND r.[labelno] = d.[labelno]
+     WHERE l.[location_type] = @locType AND d.[status] = 0 ${where}`,
     params
   );
 
@@ -2050,8 +2072,13 @@ async function loadRepairAdmin(f) {
       labelno: r.labelno ?? null, psn: r.psn ?? null,
       orderno: r.orderno || '', order_date_vn: d ? d.toISOString() : null,
       owner: '', batchno: '', qty: null,
+      od_status: r.od_status ?? null,
+      od_state: r.od_state || '',
+      od_backorder: r.od_backorder ?? null,
+      od_ext_state: r.od_ext_state || '',
       age_days: age,
       nhom: age === null ? 'unknown' : (age < REPAIR_AGE_DAYS ? 'less30' : 'over30'),
+      tinh_tong_hop: isRepairCounted(r.od_backorder, r.od_state),
     });
   }
   for (const c of con) {
@@ -2062,31 +2089,39 @@ async function loadRepairAdmin(f) {
       labelno: c.labelno ?? null, psn: null,
       orderno: '', order_date_vn: null,
       owner: c.owner || '', batchno: c.batchno || '', qty: c.qty ?? null,
+      od_status: null, od_state: '', od_backorder: null, od_ext_state: '',
       age_days: null,
       nhom: 'unknown',   // chua co cot ngay cho vat tu tieu hao
+      // CONSUMABLES khong noi duoc sang OD_DETAIL (khong co psn) -> khong co
+      // backorder/state -> KHONG duoc tinh vao bang tong hop.
+      tinh_tong_hop: false,
     });
   }
   return items;
 }
 
-/** BAO CAO TONG HOP kieu pivot: dong = Station + Vi tri, cot = nhom tuoi. */
+/**
+ * BAO CAO TONG HOP kieu pivot: dong = Station + Store + Vi tri, cot = nhom tuoi.
+ * CHI dem cac dong dat OD_DETAIL.backorder = 1 AND state = 'O' (isRepairCounted);
+ * cac dong khac van con nguyen trong bao cao CHI TIET.
+ */
 async function qRepairAdmin(range, f) {
   const items = await getRepairAdmin(f);
   const map = new Map();
+  let boQua = 0;
   for (const it of items) {
-    const key = it.station + ' ' + it.location;
+    if (!it.tinh_tong_hop) { boQua++; continue; }
+    const key = it.station + '|' + it.store + '|' + it.location;
     let g = map.get(key);
     if (!g) {
       g = {
-        station: it.station, location: it.location,
+        station: it.station, store: it.store, location: it.location,
         less30: 0, over30: 0, unknown: 0, total: 0,
-        rotable: 0, consumable: 0,
       };
       map.set(key, g);
     }
     g[it.nhom]++;
     g.total++;
-    if (it.loai === 'ROTABLE') g.rotable++; else g.consumable++;
   }
   const rows = [...map.values()].sort(
     (a, b) => a.station.localeCompare(b.station) || b.total - a.total
@@ -2095,9 +2130,9 @@ async function qRepairAdmin(range, f) {
     // Dong TONG CONG o cuoi (giong dong "Grand Total" cua pivot Excel)
     const sum = (k) => rows.reduce((s, r) => s + r[k], 0);
     rows.push({
-      station: '', location: 'TỔNG CỘNG', isTotal: true,
+      station: '', store: '', location: 'TỔNG CỘNG', isTotal: true,
       less30: sum('less30'), over30: sum('over30'), unknown: sum('unknown'),
-      total: sum('total'), rotable: sum('rotable'), consumable: sum('consumable'),
+      total: sum('total'), boQua,
     });
   }
   return rows;
