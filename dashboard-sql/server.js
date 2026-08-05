@@ -2365,12 +2365,33 @@ async function qDashboardAgg(range, f) {
         ${usPairDedup()}
         ${wDept}
       UNION ALL
+      -- (b) da doi ung kieu TRA SERVICE (recertify)
       SELECT k.[station]
       FROM [NQT].[dbo].[kho_ser1] k
       ${recertApply('k')}
       ${signJoin('k.[created_b2]', 'sm')}
       WHERE ${khoBase}
         ${svcWhere}
+      UNION ALL
+      -- (c) CHUA doi ung - phai co mat thi bieu do tron moi dem CUNG MOT TAP
+      --     voi bieu do cot "So luong xuat kho" (da tra + chua tra). Dieu kien
+      --     giong het [3] Chua doi ung theo Trung tam.
+      SELECT k.[station]
+      FROM [NQT].[dbo].[kho_ser1] k
+      LEFT JOIN [NQT].[dbo].[real_us1] r
+        ON k.[labelno] = r.[labelno] AND k.[voucherno] = r.[voucher_s]
+      ${signJoin('k.[created_b2]', 'sm')}
+      WHERE ${khoBase} AND ${deptK} <> 'CUVT'
+        AND r.[partno] IS NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM [NQT].[dbo].[kho_ser1] tc
+          WHERE tc.[vm] = 'TC' AND tc.[voucherno] LIKE 'P-CA-%'
+            AND tc.[partno] = k.[partno] AND tc.[serialno] = k.[serialno] AND tc.[labelno] = k.[labelno])
+        AND NOT ${recertExists('k')}
+        ${manualPairExclude('k', params, range)}
+        AND k.[mutation] BETWEEN @fromDay AND @toDay
+        AND ${amosToVN('k')} >= @from AND ${amosToVN('k')} < @to
+        ${wNotRec}
     ) s
     GROUP BY s.station;`;
 
@@ -2492,20 +2513,19 @@ function buildDashboardFromAgg(range, agg, f) {
   // 1 mieng) nen chuyen sang chia theo TRUNG TAM trong station do.
   // Truong groupBy cho frontend biet de doi tieu de va khoa drill-down.
   //
-  // CA HAI che do dem CUNG MOT TAP = thiet bi DA DOI UNG (ke ca cap doi ung thu
-  // cong) -> so lieu khong "nhay" khi nguoi dung bat/tat bo loc station.
-  // (agg.stationAgg chi gom nhanh tra US + tra service, chua co cap thu cong nen
-  //  cong them o day.)
+  // CA HAI che do dem CUNG MOT TAP = TAT CA thiet bi xuat kho trong ky
+  // (da tra + chua tra) -> khop voi bieu do cot "So luong xuat kho theo Trung
+  // tam" va voi KPI "Thiet bi xuat kho". agg.stationAgg da gom 3 nhanh
+  // (tra US + tra service + chua doi ung); cap doi ung THU CONG khong nam
+  // trong nhanh nao nen cong them o day.
   let pieStation;
   if (f && f.station) {
-    // Sap theo so luong giam dan (volLabels sap theo TONG, khong hop cho tron)
-    const pieLabels = volLabels
-      .filter((k) => (daTraCnt.get(k) || 0) > 0)
-      .sort((a, b) => daTraCnt.get(b) - daTraCnt.get(a));
+    // Sap theo so luong giam dan (volLabels da sap theo TONG nhung loc lai cho chac)
+    const pieLabels = volLabels.filter((k) => tong(k) > 0).sort((a, b) => tong(b) - tong(a));
     pieStation = {
       groupBy: 'department',
       labels: pieLabels,
-      values: pieLabels.map((k) => daTraCnt.get(k) || 0),
+      values: pieLabels.map(tong),   // = daTra + chuaTra, khop bieu do cot
     };
   } else {
     const stMap = new Map(MAIN_STATIONS.map((s) => [s, 0]));

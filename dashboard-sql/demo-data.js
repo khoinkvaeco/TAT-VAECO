@@ -362,7 +362,8 @@ function dashboard(range, f) {
   const byRet = groupAvg(ret, 'department', 'tat_days').sort((a, b) => b.avg - a.avg);
   const MAIN = ['HAN', 'SGN', 'DAD'];
   const stMap = new Map([...MAIN, 'OTHER'].map((s) => [s, 0]));
-  dept.forEach((r) => {
+  // Dem TAT CA thiet bi xuat kho (da doi ung + chua doi ung) de khop bieu do cot
+  [...dept, ...nr].forEach((r) => {
     const k = MAIN.includes((r.station || '').toUpperCase()) ? r.station.toUpperCase() : 'OTHER';
     stMap.set(k, (stMap.get(k) || 0) + 1);
   });
@@ -379,10 +380,8 @@ function dashboard(range, f) {
   const volLabels = [...new Set([...daTraCnt.keys(), ...chuaTraCnt.keys()])].sort(
     (a, b) => tongVol(b) - tongVol(a)
   );
-  // Bieu do tron theo trung tam: sap theo so luong DA DOI UNG giam dan
-  const pieDeptLabels = volLabels
-    .filter((k) => daTraCnt.get(k))
-    .sort((a, b) => daTraCnt.get(b) - daTraCnt.get(a));
+  // Bieu do tron theo trung tam: TAT CA thiet bi xuat kho (khop bieu do cot)
+  const pieDeptLabels = volLabels.filter((k) => tongVol(k)).sort((a, b) => tongVol(b) - tongVol(a));
 
   // TAT CUVT theo tung trung tam (chang 3) - de xep chong vao bieu do cot
   const cuvtByDept = new Map();
@@ -429,7 +428,7 @@ function dashboard(range, f) {
       // Chua chon station -> chia theo STATION; da chon 1 station -> chia theo
       // TRUNG TAM (chia theo station luc do chi con 1 mieng, khong co y nghia).
       pieStation: (f && f.station)
-        ? { groupBy: 'department', labels: pieDeptLabels, values: pieDeptLabels.map((k) => daTraCnt.get(k)) }
+        ? { groupBy: 'department', labels: pieDeptLabels, values: pieDeptLabels.map(tongVol) }
         : { groupBy: 'station', labels: pieOrder.map((s) => (s === 'OTHER' ? 'Khác' : s)), values: pieOrder.map((s) => stMap.get(s) || 0) },
       deptVolume: {
         labels: volLabels,
