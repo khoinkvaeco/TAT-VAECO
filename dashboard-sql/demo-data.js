@@ -555,6 +555,81 @@ function manualPairCandidates(range, f) {
   });
 }
 
+// --- REPAIR ADMIN: ton dong tai vi tri UNSERVICEABLE (location_type = -4) ---
+const REPAIR_LOCS = {
+  HAN: ['HAN VNA U/S', 'HAN 3RD U/S', 'HAN CAB U/S', 'HAN LINE U/S', 'HAN MAIN U/S'],
+  SGN: ['SGN VNA U/S', 'SGN 3RD U/S', 'SGN CAB U/S', 'SGN LINE U/S', 'SGN BASE U/S', 'SGN MAIN U/S'],
+  DAD: ['DAD VNA U/S', 'DAD LINE U/S', 'DAD CAB U/S'],
+};
+
+/** Danh sach item dang nam o vi tri U/S (dung chung cho 2 bao cao). */
+function repairAdminItems(f) {
+  const items = [];
+  const stations = f && f.station ? [f.station] : Object.keys(REPAIR_LOCS);
+  for (const st of stations) {
+    for (const loc of REPAIR_LOCS[st] || []) {
+      for (let i = 0; i < rndInt(2, 18); i++) {
+        const isRot = rndInt(0, 4) > 0;   // phan lon la rotable
+        if (isRot) {
+          const age = rndInt(1, 200);
+          items.push({
+            loai: 'ROTABLE', station: st, store: rnd(STORES), location: loc,
+            partno: 'PN-' + pad(rndInt(100, 999)), serialno: 'SN' + rndInt(10000, 99999),
+            labelno: rndInt(100000, 299999), psn: rndInt(1000000, 1999999),
+            orderno: 'O-' + rndInt(100000, 999999),
+            order_date_vn: new Date(Date.now() - age * 86400000).toISOString(),
+            owner: '', batchno: '', qty: null,
+            age_days: age, nhom: age < 30 ? 'less30' : 'over30',
+          });
+        } else {
+          items.push({
+            loai: 'CONSUMABLE', station: st, store: rnd(STORES), location: loc,
+            partno: 'PN-' + pad(rndInt(100, 999)), serialno: '',
+            labelno: rndInt(100000, 299999), psn: null,
+            orderno: '', order_date_vn: null,
+            owner: rnd(['VNA', 'VAECO', '']), batchno: 'B' + rndInt(1000, 9999),
+            qty: rndInt(1, 25),
+            age_days: null, nhom: 'unknown',
+          });
+        }
+      }
+    }
+  }
+  return items;
+}
+
+function repairAdmin(range, f) {
+  const map = new Map();
+  for (const it of repairAdminItems(f)) {
+    const key = it.station + ' ' + it.location;
+    let g = map.get(key);
+    if (!g) {
+      g = { station: it.station, location: it.location, less30: 0, over30: 0, unknown: 0, total: 0, rotable: 0, consumable: 0 };
+      map.set(key, g);
+    }
+    g[it.nhom]++; g.total++;
+    if (it.loai === 'ROTABLE') g.rotable++; else g.consumable++;
+  }
+  const rows = [...map.values()].sort((a, b) => a.station.localeCompare(b.station) || b.total - a.total);
+  if (rows.length) {
+    const sum = (k) => rows.reduce((s, r) => s + r[k], 0);
+    rows.push({
+      station: '', location: 'TỔNG CỘNG', isTotal: true,
+      less30: sum('less30'), over30: sum('over30'), unknown: sum('unknown'),
+      total: sum('total'), rotable: sum('rotable'), consumable: sum('consumable'),
+    });
+  }
+  return rows;
+}
+
+function repairAdminDetail(range, f) {
+  return repairAdminItems(f).sort(
+    (a, b) => a.station.localeCompare(b.station)
+      || a.location.localeCompare(b.location)
+      || (b.age_days ?? -1) - (a.age_days ?? -1)
+  );
+}
+
 module.exports = {
   filters,
   manualPairCandidates,
@@ -572,4 +647,6 @@ module.exports = {
   notReconciled,
   removedBeforeInstalled,
   other,
+  repairAdmin,
+  repairAdminDetail,
 };

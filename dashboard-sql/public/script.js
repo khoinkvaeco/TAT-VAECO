@@ -558,6 +558,25 @@ const fmtIntCell = (cell) => {
   const n = Number(cell.getValue());
   return isFinite(n) ? String(Math.round(n)) : (cell.getValue() ?? '');
 };
+/** O DEM cua bang pivot: 0 hien nhat de mat tap trung vao o co so lieu.
+ *  Dong TONG CONG (isTotal) luon in dam. */
+const fmtCountCell = (cell) => {
+  const v = Number(cell.getValue()) || 0;
+  const bold = cell.getRow().getData().isTotal ? 'font-weight:700;' : '';
+  if (!v) return `<span style="color:var(--text-muted);${bold}">0</span>`;
+  return `<span style="${bold}">${v}</span>`;
+};
+/** Nhu fmtCountCell nhung to mau canh bao (cot "tu 30 ngay tro len"). */
+const fmtCountWarnCell = (cell) => {
+  const v = Number(cell.getValue()) || 0;
+  const bold = cell.getRow().getData().isTotal ? 'font-weight:700;' : '';
+  if (!v) return `<span style="color:var(--text-muted);${bold}">0</span>`;
+  const c = cssVar('--warning');
+  return `<span class="tat-badge" style="background:${c}22;color:${c};${bold}">${v}</span>`;
+};
+/** Cot TONG - luon in dam. */
+const fmtCountBoldCell = (cell) => `<b>${Number(cell.getValue()) || 0}</b>`;
+
 /** Chi hien NGAY (dd/mm/yyyy) - cho cot chi co ngay, khong co gio. */
 const fmtDateOnlyCell = (cell) => {
   const s = fmtDateTime(cell.getValue());
@@ -828,6 +847,61 @@ const REPORT_DEFS = {
       { title: 'Ngày Giờ xuất', field: 'issue_time_vn', formatter: fmtDateCell },
       { title: 'Ngày Giờ hoàn', field: 'return_store_time_vn', formatter: fmtDateCell },
       { title: 'TAT (ngày)', field: 'tat_days', formatter: fmtTatCell, hozAlign: 'right', sorter: 'number' },
+    ],
+  },
+
+  // --- REPAIR ADMIN: ton dong tai cac vi tri UNSERVICEABLE (location_type=-4) ---
+  'repair-admin': {
+    title: 'Repair Admin — tồn đọng tại vị trí Unserviceable (theo Station)',
+    desc: 'Đếm số item đang nằm ở các vị trí U/S (LOCATION.location_type = -4), tách theo tuổi tồn đọng: dưới 30 ngày / từ 30 ngày trở lên. '
+      + 'Đây là ẢNH CHỤP HIỆN TRẠNG nên KHÔNG phụ thuộc kỳ báo cáo — chỉ lọc theo Station/Store đang chọn. '
+      + 'Rotables tính tuổi theo ROTABLES.orderdate. Vật tư tiêu hao (CONSUMABLES) chưa có cột ngày trong câu SQL nên nằm ở cột "Không rõ ngày".',
+    columns: [
+      { title: 'Station', field: 'station', headerFilter: 'input', width: 100 },
+      { title: 'Vị trí (U/S)', field: 'location', headerFilter: 'input', widthGrow: 2 },
+      { title: '< 30 ngày', field: 'less30', hozAlign: 'right', sorter: 'number', formatter: fmtCountCell },
+      { title: '≥ 30 ngày', field: 'over30', hozAlign: 'right', sorter: 'number', formatter: fmtCountWarnCell },
+      {
+        title: 'Không rõ ngày', field: 'unknown', hozAlign: 'right', sorter: 'number',
+        headerTooltip: 'Chưa xác định được tuổi tồn đọng (vật tư tiêu hao chưa có cột ngày)',
+        formatter: fmtCountCell,
+      },
+      { title: 'Tổng', field: 'total', hozAlign: 'right', sorter: 'number', formatter: fmtCountBoldCell },
+      { title: 'Rotable', field: 'rotable', hozAlign: 'right', sorter: 'number', formatter: fmtCountCell },
+      { title: 'Tiêu hao', field: 'consumable', hozAlign: 'right', sorter: 'number', formatter: fmtCountCell },
+    ],
+  },
+  'repair-admin-detail': {
+    title: 'Repair Admin — chi tiết từng item tại vị trí Unserviceable',
+    desc: 'Danh sách item đứng sau bảng tổng hợp. Nguồn: LOCATION × ROTABLES và LOCATION × CONSUMABLES, đều lọc location_type = -4.',
+    columns: [
+      {
+        title: 'Loại', field: 'loai', hozAlign: 'center', width: 100,
+        formatter: (cell) => (cell.getValue() === 'ROTABLE' ? 'Rotable' : 'Tiêu hao'),
+        headerFilter: 'list',
+        headerFilterParams: { values: { '': 'Tất cả', ROTABLE: 'Rotable', CONSUMABLE: 'Tiêu hao' } },
+      },
+      { title: 'Station', field: 'station', headerFilter: 'input', width: 100 },
+      { title: 'Store', field: 'store', headerFilter: 'input' },
+      { title: 'Vị trí (U/S)', field: 'location', headerFilter: 'input', widthGrow: 1.5 },
+      { title: 'Part No', field: 'partno', headerFilter: 'input' },
+      { title: 'Serial No', field: 'serialno', headerFilter: 'input' },
+      { title: 'Label', field: 'labelno', formatter: fmtIntCell, hozAlign: 'right', headerFilter: 'input' },
+      { title: 'PSN', field: 'psn', formatter: fmtIntCell, hozAlign: 'right', headerFilter: 'input' },
+      { title: 'Order No', field: 'orderno', headerFilter: 'input' },
+      { title: 'Ngày order', field: 'order_date_vn', formatter: fmtDateOnlyCell },
+      {
+        title: 'Tuổi (ngày)', field: 'age_days', hozAlign: 'right', sorter: 'number',
+        formatter: (cell) => {
+          const v = cell.getValue();
+          if (v === null || v === undefined) return '<span style="color:var(--text-muted)">—</span>';
+          const color = Number(v) >= 30 ? cssVar('--warning') : cssVar('--good');
+          return `<span class="tat-badge" style="background:${color}22;color:${color}">${v}</span>`;
+        },
+      },
+      { title: 'Owner', field: 'owner', headerFilter: 'input' },
+      { title: 'Batch No', field: 'batchno', headerFilter: 'input' },
+      { title: 'SL (qty)', field: 'qty', hozAlign: 'right', sorter: 'number' },
     ],
   },
 };
