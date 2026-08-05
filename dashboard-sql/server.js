@@ -793,17 +793,17 @@ async function qTatDepartments(range, f) {
   // amosDayParams: loc tho sargable theo [mutation] cho nhanh "tra service"
   // (nhanh nay xet PHIEU XUAT trong ky, khong quet toan bo lich su)
   const params = { from: range.from, to: range.to, tzOffset: CONFIG.tzOffset, top: CONFIG.maxRows, ...amosDayParams(range) };
-  // Trung tam: 'PA' -> SIGN(action_per) -> real_us1.department -> 'PA'
-  //            (SIGN la nguon chuan - xem deptFromReal).
-  const dept = deptFromReal('r', 'sm');
+  // Trung tam: theo NGUOI LAP PHIEU XUAT (kho_ser1.created_b2) tra qua SIGN.
+  // Truoc day nhanh nay lay theo nguoi TRA US (real_us1.action_per) -> cung mot
+  // phieu xuat co the bi quy ve 2 trung tam khac nhau tuy da tra hay chua.
+  // Gio CA HAI nhanh (da tra / chua tra) deu quy ve NGUOI LAP PHIEU XUAT.
   let where = buildFilterClause(
     f,
     { station: 'k.[station]', store: 'k.[store]', department: dept },
     params
   );
-  // Nhanh "tra service" (recertify): khong co dong real_us1 -> Trung tam tra
-  // theo nguoi lap phieu xuat (created_b2), giong cac bao cao kho_ser1 khac.
   const deptSvc = deptFromStaff('k.[created_b2]', 'sm');
+  const dept = deptSvc;   // ca 2 nhanh dung chung mot cach xac dinh Trung tam
   const whereSvc = buildFilterClause(
     f,
     { station: 'k.[station]', store: 'k.[store]', department: deptSvc },
@@ -825,7 +825,8 @@ async function qTatDepartments(range, f) {
       k.[picking_li]  AS picking_li,
       r.[partno_off]  AS partno_off,    -- thiet bi thao (tu real_us1)
       r.[serialno_o]  AS serialno_off,
-      r.[action_per]  AS staff,
+      k.[created_b2]  AS staff,          -- nguoi LAP PHIEU XUAT (khop voi Trung tam)
+      r.[action_per]  AS return_staff,   -- nguoi TRA US (giu de doi chieu)
       ${dept} AS department,
       ${amosToVN('k')}                       AS issue_time_vn,
       ye.install_time                        AS installed_time_vn,   -- ngay lap len tau
@@ -857,7 +858,7 @@ async function qTatDepartments(range, f) {
       WHERE o.[historyno_] = r.[historyno_] AND o.[vm] = 'YA'
       ORDER BY o.[mutation] ASC, o.[mutation_t] ASC
     ) ya
-    ${signJoin('r.[action_per]', 'sm')}
+    ${signJoin('k.[created_b2]', 'sm')}
     WHERE k.[vm] = 'T'
       AND k.[voucherno] LIKE 'P-%'
       -- Bo qua ban ghi receiver rong; bo qua costcenter 'VN-SPL'
@@ -881,6 +882,7 @@ async function qTatDepartments(range, f) {
       rc.[partno_off],                   -- thiet bi thao (tu dong YA cua chuoi recertify)
       rc.[serialno_off],
       k.[created_b2],                    -- staff = nguoi lap phieu xuat
+      NULL,                              -- return_staff: nhanh nay khong co dong tra US
       ${deptSvc},
       ${amosToVN('k')},
       ye.install_time,
@@ -1250,6 +1252,7 @@ async function qInstalledIntoHigher(range, f) {
     wo_partno_off: r.wo_partno_off ?? null,     // thiet bi CU bi thay ra khoi cum
     wo_serialno_off: r.wo_serialno_off ?? null, // (giu lai, khong hien tren bang)
     staff: r.staff,
+    return_staff: null,              // nhom nay chua tra US
     department: r.department,
     issue_time_vn: r.issue_time_vn,
     installed_time_vn: r.installed_time_vn,
@@ -2178,7 +2181,9 @@ async function qDashboardAgg(range, f) {
       AND UPPER(LTRIM(RTRIM(ISNULL(k.[condition], '')))) <> 'US'
       ${excludeCostcenterClause(f, 'k')}`;
 
-  const wDept = buildFilterClause(f, { station: 'k.[station]', store: 'k.[store]', department: deptR }, params);
+  // [0] va [6] deu co phieu xuat (kho_ser1 k) -> Trung tam quy ve NGUOI LAP
+  // PHIEU XUAT (deptK), giong nhanh 'tra service' va bao cao 'chua doi ung'.
+  const wDept = buildFilterClause(f, { station: 'k.[station]', store: 'k.[store]', department: deptK }, params);
   const wCuvt = buildFilterClause(f, { station: 'r.[station]', store: 'r.[store]', department: deptR }, params);
   const wRet = buildFilterClause(f, { station: 'tc.[station]', store: 'tc.[store]', department: deptT }, params);
   const wNotRec = buildFilterClause(f, { station: 'k.[station]', store: 'k.[store]', department: deptK }, params);
@@ -2218,7 +2223,7 @@ async function qDashboardAgg(range, f) {
            AVG(x.tat_install) AS avg_install, COUNT(x.tat_install) AS cnt_install,
            AVG(x.tat_usret)   AS avg_usret,   COUNT(x.tat_usret)   AS cnt_usret
     FROM (
-      SELECT ${deptR} AS department,
+      SELECT ${deptK} AS department,
              CAST(DATEDIFF(MINUTE, ${amosToVN('k')}, ye.install_time) AS float) / 1440.0 AS tat_install,
              CAST(DATEDIFF(MINUTE, ya.removal_time, r.[del_time]) AS float) / 1440.0    AS tat_usret
       FROM [NQT].[dbo].[kho_ser1] k
@@ -2237,7 +2242,7 @@ async function qDashboardAgg(range, f) {
         WHERE o.[historyno_] = r.[historyno_] AND o.[vm] = 'YA'
         ORDER BY o.[mutation] ASC, o.[mutation_t] ASC
       ) ya
-      ${signJoin('r.[action_per]', 'sm')}
+      ${signJoin('k.[created_b2]', 'sm')}
       WHERE ${khoBase}
         AND LTRIM(RTRIM(ISNULL(k.[receiver], ''))) <> ''
         AND r.[del_time] >= @from AND r.[del_time] < @to
@@ -2353,7 +2358,7 @@ async function qDashboardAgg(range, f) {
       FROM [NQT].[dbo].[kho_ser1] k
       INNER JOIN [NQT].[dbo].[real_us1] r
         ON k.[labelno] = r.[labelno] AND k.[voucherno] = r.[voucher_s]
-      ${signJoin('r.[action_per]', 'sm')}
+      ${signJoin('k.[created_b2]', 'sm')}
       WHERE ${khoBase}
         AND LTRIM(RTRIM(ISNULL(k.[receiver], ''))) <> ''
         AND r.[del_time] >= @from AND r.[del_time] < @to
@@ -4704,7 +4709,8 @@ app.get('/api/admin/diag/dept', h(async (req, res) => {
   const target = String(req.query.department || '').trim().toUpperCase();
   const out = { range, locDangLoc: { station: f.station || '(tat ca)', store: f.store || '(tat ca)' }, trungTamCanSoi: target || '(chua chon)' };
 
-  const deptR = deptFromReal('r', 'sm');
+  const deptR = deptFromReal('r', 'sm');                  // cach CU (theo nguoi tra US)
+  const deptK = deptFromStaff('k.[created_b2]', 'smK');   // cach DANG DUNG
   const khoBase = `k.[vm] = 'T' AND k.[voucherno] LIKE 'P-%'
       AND LTRIM(RTRIM(ISNULL(k.[costcenter], ''))) <> 'VN-SPL'
       AND UPPER(LTRIM(RTRIM(ISNULL(k.[store], '')))) NOT IN ('MAIN','3RD')
@@ -4713,19 +4719,19 @@ app.get('/api/admin/diag/dept', h(async (req, res) => {
 
   // 1) Hai nhanh dang dung 2 cach suy ra Trung tam khac nhau -> neu ro
   out.cachXacDinhTrungTam = {
-    daTra_deptAgg: 'PA-prefix -> SIGN(real_us1.action_per) -> real_us1.department -> PA',
+    daTra_deptAgg: 'PA-prefix -> SIGN(kho_ser1.created_b2 = nguoi LAP PHIEU XUAT) -> PA',
     chuaTra_notRecAgg: 'SIGN(kho_ser1.created_b2 = nguoi LAP PHIEU XUAT) -> PA',
     station: 'LUON lay tu kho_ser1.station (phieu xuat)',
-    ghiChu: 'Ca 2 nhanh gio deu lay tu SIGN (cung mot nguon chuan), nhung theo 2 NGUOI khac nhau: '
-      + 'da tra -> nguoi TRA US; chua tra -> nguoi LAP PHIEU XUAT. Day la dung nghiep vu '
-      + '(ai lam viec do), nhung 2 doan cua cung 1 cot xep chong van co the thuoc 2 trung tam.',
+    ghiChu: 'CA HAI nhanh gio deu quy ve NGUOI LAP PHIEU XUAT tra qua SIGN -> cung mot '
+      + 'phieu xuat luon thuoc DUNG MOT trung tam, du da tra hay chua. Cot dept_theo_nguoi_tra_US '
+      + 'ben duoi la cach CU, giu lai de doi chieu.',
   };
 
   // 2) Cac dong DA DOI UNG trong ky, kem DU cac nguon de biet dept den tu dau
   try {
     const params = { from: range.from, to: range.to, ...amosDayParams(range) };
     let where = buildFilterClause(f, { station: 'k.[station]', store: 'k.[store]', department: null }, params);
-    if (target) { params.fTarget = target; where += ` AND UPPER(${deptR}) = @fTarget`; }
+    if (target) { params.fTarget = target; where += ` AND UPPER(${deptK}) = @fTarget`; }
     const rows = await query(`
       SELECT TOP 30
         RTRIM(k.[station])      AS station_phieu_xuat,
@@ -4737,11 +4743,14 @@ app.get('/api/admin/diag/dept', h(async (req, res) => {
         RTRIM(r.[action_per])   AS nguoi_tra_us,
         RTRIM(r.[department])   AS dept_ghi_trong_real_us1,
         RTRIM(sm.[DEPARTMENT])  AS dept_tu_SIGN_theo_nguoi_tra,
-        ${deptR}                AS dept_dung_de_ve_bieu_do
+        RTRIM(smK.[DEPARTMENT]) AS dept_tu_SIGN_theo_nguoi_lap_phieu,
+        ${deptR}                AS dept_theo_nguoi_tra_US,
+        ${deptK}                AS dept_dung_de_ve_bieu_do
       FROM [NQT].[dbo].[kho_ser1] k
       INNER JOIN [NQT].[dbo].[real_us1] r
         ON k.[labelno] = r.[labelno] AND k.[voucherno] = r.[voucher_s]
       ${signJoin('r.[action_per]', 'sm')}
+      ${signJoin('k.[created_b2]', 'smK')}
       WHERE ${khoBase}
         AND LTRIM(RTRIM(ISNULL(k.[receiver], ''))) <> ''
         AND r.[del_time] >= @from AND r.[del_time] < @to
@@ -4750,8 +4759,8 @@ app.get('/api/admin/diag/dept', h(async (req, res) => {
       ORDER BY r.[del_time] DESC`, params);
     out.viDuDaDoiUng = {
       soDongLay: rows.length,
-      giaiThich: 'Xem cot dept_ghi_trong_real_us1 va dept_tu_SIGN_theo_nguoi_tra: '
-        + 'cot nao co gia tri thi do chinh la nguon sinh ra Trung tam, du station cua PHIEU XUAT la khac.',
+      giaiThich: 'dept_dung_de_ve_bieu_do = SIGN theo NGUOI LAP PHIEU XUAT. '
+        + 'So sanh voi dept_theo_nguoi_tra_US (cach cu) de thay dong nao bi doi trung tam.',
       rows,
     };
   } catch (e) {

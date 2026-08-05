@@ -91,6 +91,8 @@ function tatDepartments(range, f) {
       serialno_off: 'SN' + rndInt(10000, 99999),
       voucher_issue: 'P-' + rndInt(10000, 99999),
       picking_li: 'PL-' + rndInt(10000, 99999),
+      // staff (tu baseDevice) = nguoi LAP PHIEU XUAT; return_staff = nguoi TRA US
+      return_staff: 'VAE' + rndInt(10000, 99999),
       department: rnd(DEPARTMENTS),
       issue_time_vn: issue.toISOString(),
       installed_time_vn: install ? install.toISOString() : null,
