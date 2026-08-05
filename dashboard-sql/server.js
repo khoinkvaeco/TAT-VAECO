@@ -4716,7 +4716,9 @@ app.get('/api/admin/diag/dept', h(async (req, res) => {
     daTra_deptAgg: 'PA-prefix -> SIGN(real_us1.action_per) -> real_us1.department -> PA',
     chuaTra_notRecAgg: 'SIGN(kho_ser1.created_b2 = nguoi LAP PHIEU XUAT) -> PA',
     station: 'LUON lay tu kho_ser1.station (phieu xuat)',
-    canhBao: 'Hai cach khac nhau -> CUNG mot phieu xuat co the duoc quy ve 2 trung tam khac nhau tuy no da tra hay chua.',
+    ghiChu: 'Ca 2 nhanh gio deu lay tu SIGN (cung mot nguon chuan), nhung theo 2 NGUOI khac nhau: '
+      + 'da tra -> nguoi TRA US; chua tra -> nguoi LAP PHIEU XUAT. Day la dung nghiep vu '
+      + '(ai lam viec do), nhung 2 doan cua cung 1 cot xep chong van co the thuoc 2 trung tam.',
   };
 
   // 2) Cac dong DA DOI UNG trong ky, kem DU cac nguon de biet dept den tu dau
