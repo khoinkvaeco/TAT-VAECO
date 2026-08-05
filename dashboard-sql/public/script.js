@@ -344,7 +344,18 @@ function renderCharts(c) {
     plugins: [stackTotalLabel], // ve so tong tren dinh moi cot
   });
 
-  // 4.2 Bieu do tron - phan bo theo station (categorical theo thu tu)
+  // 4.2 Bieu do tron - phan bo thiet bi.
+  //     CHUA chon Station -> chia theo STATION.
+  //     DA chon 1 Station  -> chia theo TRUNG TAM (chia theo station luc do chi
+  //     con dung 1 mieng, khong noi len dieu gi). Server bao qua truong groupBy;
+  //     drill-down cung phai doi khoa loc theo do.
+  const pieBy = c.pieStation.groupBy === 'department' ? 'department' : 'station';
+  const pieTitle = $('#pieStationTitle');
+  if (pieTitle) {
+    pieTitle.innerHTML = pieBy === 'department'
+      ? `Phân bổ thiết bị theo Trung tâm <span class="unit">(station ${state.station})</span>`
+      : 'Phân bổ thiết bị theo Station';
+  }
   destroyChart('pie');
   charts.pie = new Chart($('#chartPieStation'), {
     type: 'doughnut',
@@ -354,8 +365,21 @@ function renderCharts(c) {
     },
     options: {
       responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { position: 'right', labels: { color: cssVar('--text-secondary') } } },
-      onClick: chartDrill(c.pieStation.labels, 'station'),
+      plugins: {
+        legend: { position: 'right', labels: { color: cssVar('--text-secondary') } },
+        tooltip: {
+          callbacks: {
+            // Them ty le % cho de doc (bieu do tron khong co truc so)
+            label: (it) => {
+              const v = Number(it.parsed) || 0;
+              const t = it.dataset.data.reduce((s, x) => s + (Number(x) || 0), 0);
+              const pct = t ? Math.round((v / t) * 1000) / 10 : 0;
+              return `${it.label}: ${v} thiết bị (${pct}%)`;
+            },
+          },
+        },
+      },
+      onClick: chartDrill(c.pieStation.labels, pieBy),
     },
   });
 

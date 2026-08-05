@@ -2297,18 +2297,44 @@ function buildDashboardFromAgg(range, agg, f) {
     returned: volLabels.map((k) => returnedCnt.get(k) || 0),
   };
 
-  // Station: gom HAN/SGN/DAD + Khac
-  const stMap = new Map(MAIN_STATIONS.map((s) => [s, 0]));
-  stMap.set('OTHER', 0);
-  for (const x of agg.stationAgg) {
-    const k = normalizeStation(x.station);
-    stMap.set(k, (stMap.get(k) || 0) + x.cnt);
+  // Bieu do tron: KHI CHUA CHON STATION -> chia theo STATION (HAN/SGN/DAD/Khac).
+  // KHI DA CHON 1 STATION cu the -> chia theo STATION khong con y nghia (chi con
+  // 1 mieng) nen chuyen sang chia theo TRUNG TAM trong station do.
+  // Truong groupBy cho frontend biet de doi tieu de va khoa drill-down.
+  //
+  // CA HAI che do dem CUNG MOT TAP = thiet bi DA DOI UNG (ke ca cap doi ung thu
+  // cong) -> so lieu khong "nhay" khi nguoi dung bat/tat bo loc station.
+  // (agg.stationAgg chi gom nhanh tra US + tra service, chua co cap thu cong nen
+  //  cong them o day.)
+  let pieStation;
+  if (f && f.station) {
+    // Sap theo so luong giam dan (volLabels sap theo TONG, khong hop cho tron)
+    const pieLabels = volLabels
+      .filter((k) => (daTraCnt.get(k) || 0) > 0)
+      .sort((a, b) => daTraCnt.get(b) - daTraCnt.get(a));
+    pieStation = {
+      groupBy: 'department',
+      labels: pieLabels,
+      values: pieLabels.map((k) => daTraCnt.get(k) || 0),
+    };
+  } else {
+    const stMap = new Map(MAIN_STATIONS.map((s) => [s, 0]));
+    stMap.set('OTHER', 0);
+    for (const x of agg.stationAgg) {
+      const k = normalizeStation(x.station);
+      stMap.set(k, (stMap.get(k) || 0) + x.cnt);
+    }
+    for (const p of manualPairsInRange(range, f)) {
+      const k = normalizeStation(p.station);
+      stMap.set(k, (stMap.get(k) || 0) + 1);
+    }
+    const pieOrder = [...MAIN_STATIONS, 'OTHER'];
+    pieStation = {
+      groupBy: 'station',
+      labels: pieOrder.map((s) => (s === 'OTHER' ? 'Khác' : s)),
+      values: pieOrder.map((s) => stMap.get(s) || 0),
+    };
   }
-  const pieOrder = [...MAIN_STATIONS, 'OTHER'];
-  const pieStation = {
-    labels: pieOrder.map((s) => (s === 'OTHER' ? 'Khác' : s)),
-    values: pieOrder.map((s) => stMap.get(s) || 0),
-  };
 
   return {
     range: { from: range.from, to: range.to, label: range.label },
@@ -2369,6 +2395,7 @@ function buildDashboard(range, dept, cuvt, retStore, issuedNI, notRec, returned)
   }
   const pieOrder = [...MAIN_STATIONS, 'OTHER'];
   const pieStation = {
+    groupBy: 'station',
     labels: pieOrder.map((s) => (s === 'OTHER' ? 'Khác' : s)),
     values: pieOrder.map((s) => stMap.get(s) || 0),
   };

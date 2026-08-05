@@ -376,6 +376,10 @@ function dashboard(range, f) {
   const volLabels = [...new Set([...daTraCnt.keys(), ...chuaTraCnt.keys()])].sort(
     (a, b) => tongVol(b) - tongVol(a)
   );
+  // Bieu do tron theo trung tam: sap theo so luong DA DOI UNG giam dan
+  const pieDeptLabels = volLabels
+    .filter((k) => daTraCnt.get(k))
+    .sort((a, b) => daTraCnt.get(b) - daTraCnt.get(a));
 
   // TAT CUVT theo tung trung tam (chang 3) - de xep chong vao bieu do cot
   const cuvtByDept = new Map();
@@ -419,7 +423,11 @@ function dashboard(range, f) {
         total: byDeptStack.map((x) => r1(stackTotal(x))),
         counts: byDeptStack.map((x) => x.count),
       },
-      pieStation: { labels: pieOrder.map((s) => (s === 'OTHER' ? 'Khác' : s)), values: pieOrder.map((s) => stMap.get(s) || 0) },
+      // Chua chon station -> chia theo STATION; da chon 1 station -> chia theo
+      // TRUNG TAM (chia theo station luc do chi con 1 mieng, khong co y nghia).
+      pieStation: (f && f.station)
+        ? { groupBy: 'department', labels: pieDeptLabels, values: pieDeptLabels.map((k) => daTraCnt.get(k)) }
+        : { groupBy: 'station', labels: pieOrder.map((s) => (s === 'OTHER' ? 'Khác' : s)), values: pieOrder.map((s) => stMap.get(s) || 0) },
       deptVolume: {
         labels: volLabels,
         daTra: volLabels.map((k) => daTraCnt.get(k) || 0),
