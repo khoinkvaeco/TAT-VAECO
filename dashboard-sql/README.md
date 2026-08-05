@@ -255,6 +255,7 @@ CREATE INDEX IX_SIGN_user ON [DWH_DB].[STG_AMOS].[SIGN] ([USER_SIGN]) INCLUDE ([
 |----------|-------|
 | `GET /api/health` | Kiểm tra kết nối DB / chế độ (live/demo) |
 | `GET /api/filters` | Danh sách station/store/department cho dropdown |
+| `GET /api/health` | Kiểm tra kết nối DB **và phiên bản code đang chạy**: `commit` (7 ký tự), `branch`, `startedAt`, kèm `diagRoutes`. Dùng để biết service đã nạp bản mới sau `git pull` hay chưa. |
 | `GET /api/dashboard` | KPI + dữ liệu biểu đồ |
 | `GET /api/tat/departments` | Bảng chi tiết TAT theo đơn vị |
 | `GET /api/tat/cuvt` | Chi tiết TAT CUVT |

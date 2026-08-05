@@ -3676,15 +3676,45 @@ function readFilters(q) {
   };
 }
 
-// --- Health check: kiem tra ket noi DB ---
+/**
+ * PHIEN BAN CODE DANG CHAY (doc 1 lan luc khoi dong).
+ * Muc dich: sau khi `git pull` ma quen restart service thi route/tinh nang moi
+ * se bao "Cannot GET ..." - rat kho doan. Mo /api/health la biet ngay ban dang
+ * chay la commit nao va chay tu bao gio.
+ * Doc truc tiep tu thu muc .git (khong can cai git, khong chay lenh ngoai).
+ */
+const BUILD_INFO = (() => {
+  const startedAt = new Date().toISOString();
+  try {
+    const gitDir = path.join(__dirname, '..', '.git');
+    let head = fs.readFileSync(path.join(gitDir, 'HEAD'), 'utf8').trim();
+    let branch = null;
+    if (head.startsWith('ref:')) {
+      const ref = head.slice(4).trim();
+      branch = ref.replace(/^refs\/heads\//, '');
+      head = fs.readFileSync(path.join(gitDir, ref), 'utf8').trim();
+    }
+    return { commit: head.slice(0, 7), branch, startedAt };
+  } catch (_) {
+    return { commit: null, branch: null, startedAt };
+  }
+})();
+
+// --- Health check: kiem tra ket noi DB + PHIEN BAN code dang chay ---
 app.get(
   '/api/health',
   h(async (req, res) => {
+    const base = {
+      status: 'ok',
+      ...BUILD_INFO,
+      // Liet ke cac route chan doan de biet ban dang chay da co chua
+      diagRoutes: ['/api/admin/diag/dept', '/api/admin/diag/higher', '/api/admin/diag/pairing', '/api/admin/diag/rbi'],
+    };
     if (CONFIG.demoMode) {
-      return res.json({ status: 'ok', mode: 'demo', message: 'Dang chay DEMO_MODE (du lieu mau).' });
+      return res.json({ ...base, mode: 'demo', message: 'Dang chay DEMO_MODE (du lieu mau).' });
     }
     await query('SELECT 1 AS ok');
-    res.json({ status: 'ok', mode: 'live', message: 'Ket noi SQL Server OK.' });
+    res.json({ ...base, mode: 'live', message: 'Ket noi SQL Server OK.' });
   })
 );
 
