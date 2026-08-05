@@ -4647,6 +4647,89 @@ app.get('/api/admin/diag/higher', h(async (req, res) => {
   res.json(out);
 }));
 
+// --- ADMIN: SOI CACH XAC DINH TRUNG TAM (vi sao 1 trung tam la lai xuat hien
+//     duoi 1 station khac). Nguyen nhan co the la: 2 nhanh so lieu dung 2 CACH
+//     KHAC NHAU de suy ra Trung tam.
+//       - DA doi ung (deptAgg)   : real_us1.department -> SIGN(nguoi TRA US) -> 'PA'
+//       - CHUA doi ung (notRecAgg): SIGN(nguoi LAP PHIEU XUAT)              -> 'PA'
+//     Con Station thi LUON lay tu phieu xuat (kho_ser1.station).
+//     Endpoint CHI DOC.
+app.get('/api/admin/diag/dept', h(async (req, res) => {
+  if (CONFIG.demoMode) return res.json({ note: 'Dang o DEMO_MODE, khong co du lieu that.' });
+  const range = resolveRange(req.query);
+  const f = readFilters(req.query);
+  const target = String(req.query.department || '').trim().toUpperCase();
+  const out = { range, locDangLoc: { station: f.station || '(tat ca)', store: f.store || '(tat ca)' }, trungTamCanSoi: target || '(chua chon)' };
+
+  const deptR = deptFromReal('r', 'sm');
+  const khoBase = `k.[vm] = 'T' AND k.[voucherno] LIKE 'P-%'
+      AND LTRIM(RTRIM(ISNULL(k.[costcenter], ''))) <> 'VN-SPL'
+      AND UPPER(LTRIM(RTRIM(ISNULL(k.[store], '')))) NOT IN ('MAIN','3RD')
+      AND UPPER(LTRIM(RTRIM(ISNULL(k.[condition], '')))) <> 'US'
+      ${excludeCostcenterClause(f, 'k')}`;
+
+  // 1) Hai nhanh dang dung 2 cach suy ra Trung tam khac nhau -> neu ro
+  out.cachXacDinhTrungTam = {
+    daTra_deptAgg: 'real_us1.department -> SIGN(real_us1.action_per) -> PA',
+    chuaTra_notRecAgg: 'SIGN(kho_ser1.created_b2 = nguoi LAP PHIEU XUAT) -> PA',
+    station: 'LUON lay tu kho_ser1.station (phieu xuat)',
+    canhBao: 'Hai cach khac nhau -> CUNG mot phieu xuat co the duoc quy ve 2 trung tam khac nhau tuy no da tra hay chua.',
+  };
+
+  // 2) Cac dong DA DOI UNG trong ky, kem DU cac nguon de biet dept den tu dau
+  try {
+    const params = { from: range.from, to: range.to, ...amosDayParams(range) };
+    let where = buildFilterClause(f, { station: 'k.[station]', store: 'k.[store]', department: null }, params);
+    if (target) { params.fTarget = target; where += ` AND UPPER(${deptR}) = @fTarget`; }
+    const rows = await query(`
+      SELECT TOP 30
+        RTRIM(k.[station])      AS station_phieu_xuat,
+        RTRIM(k.[store])        AS store_phieu_xuat,
+        RTRIM(k.[created_b2])   AS nguoi_lap_phieu,
+        RTRIM(k.[voucherno])    AS voucher,
+        k.[labelno]             AS labelno,
+        RTRIM(r.[station])      AS station_tra_us,
+        RTRIM(r.[action_per])   AS nguoi_tra_us,
+        RTRIM(r.[department])   AS dept_ghi_trong_real_us1,
+        RTRIM(sm.[DEPARTMENT])  AS dept_tu_SIGN_theo_nguoi_tra,
+        ${deptR}                AS dept_dung_de_ve_bieu_do
+      FROM [NQT].[dbo].[kho_ser1] k
+      INNER JOIN [NQT].[dbo].[real_us1] r
+        ON k.[labelno] = r.[labelno] AND k.[voucherno] = r.[voucher_s]
+      ${signJoin('r.[action_per]', 'sm')}
+      WHERE ${khoBase}
+        AND LTRIM(RTRIM(ISNULL(k.[receiver], ''))) <> ''
+        AND r.[del_time] >= @from AND r.[del_time] < @to
+        ${usPairDedup()}
+        ${where}
+      ORDER BY r.[del_time] DESC`, params);
+    out.viDuDaDoiUng = {
+      soDongLay: rows.length,
+      giaiThich: 'Xem cot dept_ghi_trong_real_us1 va dept_tu_SIGN_theo_nguoi_tra: '
+        + 'cot nao co gia tri thi do chinh la nguon sinh ra Trung tam, du station cua PHIEU XUAT la khac.',
+      rows,
+    };
+  } catch (e) {
+    out.viDuDaDoiUng = { loi: e.message };
+  }
+
+  // 3) Doi chieu so luong 2 nhanh theo tung Trung tam (voi bo loc dang chon)
+  try {
+    const agg = await qDashboardAgg(range, f);
+    const m = new Map();
+    for (const x of agg.deptAgg) m.set(x.department, { department: x.department, daTra: x.cnt, chuaTra: 0 });
+    for (const x of agg.notRecAgg) {
+      const g = m.get(x.department) || { department: x.department, daTra: 0, chuaTra: 0 };
+      g.chuaTra = x.cnt;
+      m.set(x.department, g);
+    }
+    out.theoTrungTam = [...m.values()].sort((a, b) => (b.daTra + b.chuaTra) - (a.daTra + a.chuaTra));
+  } catch (e) {
+    out.theoTrungTam = { loi: e.message };
+  }
+  res.json(out);
+}));
+
 // --- ADMIN: TRANG THAI LLM (de kiem tra cau hinh da dung chua) ---
 app.get('/api/admin/llm-status', h(async (req, res) => {
   res.json({
