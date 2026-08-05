@@ -233,6 +233,47 @@ const stackTotalLabel = {
   },
 };
 
+/** Ve SO LUONG vao GIUA tung doan cua cot xep chong.
+ *  Bo qua doan qua thap (< 16px) de chu khong de len nhau, va bo qua gia tri 0.
+ *  Mau chu trang/den chon theo do sang cua nen doan -> luon doc duoc o ca 2 theme. */
+const segmentValueLabel = {
+  id: 'segmentValueLabel',
+  afterDatasetsDraw(chart) {
+    const ctx = chart.ctx;
+    ctx.save();
+    ctx.font = '700 11px system-ui, -apple-system, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    chart.data.datasets.forEach((ds, di) => {
+      if (!chart.isDatasetVisible(di)) return;
+      const meta = chart.getDatasetMeta(di);
+      ctx.fillStyle = isLightColor(ds.backgroundColor) ? '#1a1a1a' : '#ffffff';
+      meta.data.forEach((bar, i) => {
+        const v = Number(ds.data[i]) || 0;
+        if (!v) return;
+        const { y, base } = bar.getProps(['y', 'base'], true);
+        if (Math.abs(base - y) < 16) return;   // doan qua mong -> khong ve
+        ctx.fillText(String(v), bar.x, (y + base) / 2);
+      });
+    });
+    ctx.restore();
+  },
+};
+
+/** Mau nen sang hay toi (de chon mau chu tuong phan). Nhan '#rgb'/'#rrggbb'. */
+function isLightColor(hex) {
+  const s = String(hex || '').trim();
+  const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(s);
+  if (!m) return false;
+  let h = m[1];
+  if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  // Do sang cam nhan (ITU-R BT.601)
+  return (r * 299 + g * 587 + b * 114) / 1000 > 150;
+}
+
 function destroyChart(key) {
   if (charts[key]) {
     charts[key].destroy();
@@ -318,19 +359,44 @@ function renderCharts(c) {
     },
   });
 
-  // 4.3 Bieu do cot nhom - So luong xuat kho & tra unservice theo Trung tam
-  //     (2 series -> co legend; mau theo thu tu co dinh series-1/series-2)
+  // 4.3 Bieu do cot XEP CHONG - So luong xuat kho theo Trung tam
+  //     Da tra (xanh) + Chua tra (vang) = tong so thiet bi xuat kho.
+  //     So luong hien o GIUA tung doan, tong hien tren dinh cot.
   destroyChart('line');
   charts.line = new Chart($('#chartLineDay'), {
     type: 'bar',
     data: {
       labels: c.deptVolume.labels,
       datasets: [
-        { label: 'Xuất kho', data: c.deptVolume.issued, backgroundColor: cssVar('--series-1'), borderRadius: 4 },
-        { label: 'Trả unservice', data: c.deptVolume.returned, backgroundColor: cssVar('--series-2'), borderRadius: 4 },
+        { label: 'Đã trả', data: c.deptVolume.daTra || [], backgroundColor: cssVar('--good') },
+        { label: 'Chưa trả', data: c.deptVolume.chuaTra || [], backgroundColor: cssVar('--warning'), borderRadius: 4 },
       ],
     },
-    options: { ...d.common, onClick: chartDrill(c.deptVolume.labels, 'department') },
+    options: {
+      ...d.common,
+      // mode 'index': tooltip gom CA 2 lop tai cot dang tro (mac dinh chi lay
+      // lop duoi con tro -> dong "Tong" se thieu lop con lai).
+      interaction: { mode: 'index', intersect: false },
+      scales: {
+        x: { ...d.common.scales.x, stacked: true },
+        y: { ...d.common.scales.y, stacked: true, grace: '8%' }, // chua cho so tong
+      },
+      plugins: {
+        ...d.common.plugins,
+        tooltip: {
+          mode: 'index',
+          intersect: false,
+          callbacks: {
+            footer: (items) => {
+              const t = items.reduce((s, it) => s + (Number(it.parsed.y) || 0), 0);
+              return `Tổng xuất kho: ${t} thiết bị`;
+            },
+          },
+        },
+      },
+      onClick: chartDrill(c.deptVolume.labels, 'department'),
+    },
+    plugins: [segmentValueLabel, stackTotalLabel],
   });
 
   // 4.4 TAT hoan kho trung binh theo Trung tam (1 series -> series-5)

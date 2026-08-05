@@ -2271,17 +2271,29 @@ function buildDashboardFromAgg(range, agg, f) {
     counts: byRet.map((x) => x.cnt),
   };
 
-  // So luong xuat kho (doi ung + chua doi ung) va tra US theo Trung tam
-  const issuedCnt = new Map();
-  for (const x of agg.deptAgg) issuedCnt.set(x.department, (issuedCnt.get(x.department) || 0) + x.cnt);
-  for (const x of agg.notRecAgg) issuedCnt.set(x.department, (issuedCnt.get(x.department) || 0) + x.cnt);
+  // So luong xuat kho theo Trung tam, TACH LAM 2 phan de xep chong:
+  //   daTra   = da doi ung (deptAgg) + cap doi ung THU CONG cua trung tam do
+  //   chuaTra = chua doi ung (notRecAgg)
+  // Cong lai = tong so thiet bi xuat kho, khop voi KPI countIssued.
+  const daTraCnt = new Map();
+  for (const x of agg.deptAgg) daTraCnt.set(x.department, (daTraCnt.get(x.department) || 0) + x.cnt);
+  for (const p of manualPairsInRange(range, f)) {
+    const k = String(p.department || 'PA').trim() || 'PA';
+    daTraCnt.set(k, (daTraCnt.get(k) || 0) + 1);
+  }
+  const chuaTraCnt = new Map(agg.notRecAgg.map((x) => [x.department, x.cnt]));
   const returnedCnt = new Map(agg.retUSAgg.map((x) => [x.department, x.cnt]));
-  const volLabels = [...new Set([...issuedCnt.keys(), ...returnedCnt.keys()])].sort(
-    (a, b) => (issuedCnt.get(b) || 0) - (issuedCnt.get(a) || 0)
+  const tong = (k) => (daTraCnt.get(k) || 0) + (chuaTraCnt.get(k) || 0);
+  const volLabels = [...new Set([...daTraCnt.keys(), ...chuaTraCnt.keys()])].sort(
+    (a, b) => tong(b) - tong(a)
   );
   const deptVolume = {
     labels: volLabels,
-    issued: volLabels.map((k) => issuedCnt.get(k) || 0),
+    daTra: volLabels.map((k) => daTraCnt.get(k) || 0),
+    chuaTra: volLabels.map((k) => chuaTraCnt.get(k) || 0),
+    // Giu 2 truong cu (tong xuat kho / so dong tra US trong ky) de khong lam vo
+    // cac cho khac dang dung; bieu do chinh dung daTra + chuaTra.
+    issued: volLabels.map(tong),
     returned: volLabels.map((k) => returnedCnt.get(k) || 0),
   };
 
@@ -2361,24 +2373,32 @@ function buildDashboard(range, dept, cuvt, retStore, issuedNI, notRec, returned)
     values: pieOrder.map((s) => stMap.get(s) || 0),
   };
 
-  // --- Bieu do cot nhom: SO LUONG XUAT KHO va TRA UNSERVICE theo Trung tam ---
-  //     Xuat kho = dept (da doi ung) + notRec (chua doi ung); tra US = returned.
-  const issuedCnt = new Map();
-  for (const r of [...dept, ...notRec]) {
+  // --- Bieu do cot XEP CHONG: SO LUONG XUAT KHO theo Trung tam ---
+  //     daTra (da doi ung) + chuaTra (chua doi ung) = tong xuat kho.
+  const daTraCnt = new Map();
+  for (const r of dept) {
     const k = r.department || 'PA';
-    issuedCnt.set(k, (issuedCnt.get(k) || 0) + 1);
+    daTraCnt.set(k, (daTraCnt.get(k) || 0) + 1);
+  }
+  const chuaTraCnt = new Map();
+  for (const r of notRec) {
+    const k = r.department || 'PA';
+    chuaTraCnt.set(k, (chuaTraCnt.get(k) || 0) + 1);
   }
   const returnedCnt = new Map();
   for (const r of returned || []) {
     const k = r.department || 'PA';
     returnedCnt.set(k, (returnedCnt.get(k) || 0) + 1);
   }
-  const volLabels = [...new Set([...issuedCnt.keys(), ...returnedCnt.keys()])].sort(
-    (a, b) => (issuedCnt.get(b) || 0) - (issuedCnt.get(a) || 0)
+  const tong = (k) => (daTraCnt.get(k) || 0) + (chuaTraCnt.get(k) || 0);
+  const volLabels = [...new Set([...daTraCnt.keys(), ...chuaTraCnt.keys()])].sort(
+    (a, b) => tong(b) - tong(a)
   );
   const deptVolume = {
     labels: volLabels,
-    issued: volLabels.map((k) => issuedCnt.get(k) || 0),
+    daTra: volLabels.map((k) => daTraCnt.get(k) || 0),
+    chuaTra: volLabels.map((k) => chuaTraCnt.get(k) || 0),
+    issued: volLabels.map(tong),
     returned: volLabels.map((k) => returnedCnt.get(k) || 0),
   };
 

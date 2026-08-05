@@ -365,12 +365,16 @@ function dashboard(range, f) {
   });
   const pieOrder = [...MAIN, 'OTHER'];
   // So luong xuat kho & tra unservice theo trung tam
-  const issuedCnt = new Map();
-  [...dept, ...nr].forEach((r) => issuedCnt.set(r.department, (issuedCnt.get(r.department) || 0) + 1));
+  // Cot xep chong: da tra (dept) + chua tra (nr) = tong xuat kho
+  const daTraCnt = new Map();
+  dept.forEach((r) => daTraCnt.set(r.department, (daTraCnt.get(r.department) || 0) + 1));
+  const chuaTraCnt = new Map();
+  nr.forEach((r) => chuaTraCnt.set(r.department, (chuaTraCnt.get(r.department) || 0) + 1));
   const returnedCnt = new Map();
   retUS.forEach((r) => returnedCnt.set(r.department, (returnedCnt.get(r.department) || 0) + 1));
-  const volLabels = [...new Set([...issuedCnt.keys(), ...returnedCnt.keys()])].sort(
-    (a, b) => (issuedCnt.get(b) || 0) - (issuedCnt.get(a) || 0)
+  const tongVol = (k) => (daTraCnt.get(k) || 0) + (chuaTraCnt.get(k) || 0);
+  const volLabels = [...new Set([...daTraCnt.keys(), ...chuaTraCnt.keys()])].sort(
+    (a, b) => tongVol(b) - tongVol(a)
   );
 
   // TAT CUVT theo tung trung tam (chang 3) - de xep chong vao bieu do cot
@@ -418,7 +422,9 @@ function dashboard(range, f) {
       pieStation: { labels: pieOrder.map((s) => (s === 'OTHER' ? 'Khác' : s)), values: pieOrder.map((s) => stMap.get(s) || 0) },
       deptVolume: {
         labels: volLabels,
-        issued: volLabels.map((k) => issuedCnt.get(k) || 0),
+        daTra: volLabels.map((k) => daTraCnt.get(k) || 0),
+        chuaTra: volLabels.map((k) => chuaTraCnt.get(k) || 0),
+        issued: volLabels.map(tongVol),
         returned: volLabels.map((k) => returnedCnt.get(k) || 0),
       },
       retStoreDept: { labels: byRet.map((x) => x.key), values: byRet.map((x) => r1(x.avg)), counts: byRet.map((x) => x.count) },
