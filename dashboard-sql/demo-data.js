@@ -224,32 +224,31 @@ function notReconciled(range, f) {
   return applyFilter(rows, f);
 }
 
+/** Thiet bi CHI CO MOT PHIA trong WO_PART_ON_OFF (chi ON hoac chi OFF). */
 function removedBeforeInstalled(range, f) {
   const rows = [];
   for (let i = 0; i < 25; i++) {
     const d = baseDevice(i);
-    // Logic "thao truoc lap sau": THAO -> LAP -> XUAT KHO (phieu lam sau)
-    const removal = rndDate(range.from, range.to);
-    const install = new Date(removal.getTime() + rndInt(0, 2) * 86400000 + 3600000);
-    const issue = new Date(install.getTime() + rndInt(1, 10) * 86400000);
-    const ret = new Date(removal.getTime() + rndInt(1, 3) * 86400000);
+    const phia = i % 2 === 0 ? 'OFF' : 'ON';
+    const t = rndDate(range.from, range.to);
+    const coOnOff = rndInt(0, 3) > 0; // phan lon co su kien on_off
+    const coPhieuXuat = phia === 'ON' && rndInt(0, 2) > 0;
+    const daTraUS = phia === 'OFF' && rndInt(0, 3) === 0;
     rows.push({
-      labelno: d.labelno,
+      phia,
       partno: d.partno,
       serialno: d.serialno,
-      description: d.description,
-      staff: d.staff,
-      partno_removed: 'PN-' + pad(rndInt(100, 999)),
-      serialno_removed: 'SN' + rndInt(10000, 99999),
-      ac_registr: d.ac_registr,
+      labelno: d.labelno,
+      event_perf: rndInt(8600000, 8800000),
+      ac_position: rnd(['AP25', 'AP44', '28WR', '3DN', null]),
+      thoi_diem_vn: t.toISOString(),
+      created_by: d.staff,
+      co_su_kien_on_off: coOnOff ? 'Có' : 'Không',
+      voucher_issue: coPhieuXuat ? 'P-' + rndInt(300000, 399999) : null,
+      issue_time_vn: coPhieuXuat ? new Date(t.getTime() - rndInt(1, 10) * 86400000).toISOString() : null,
+      return_unservice_time: daTraUS ? new Date(t.getTime() + rndInt(1, 5) * 86400000).toISOString() : null,
       department: rnd(DEPARTMENTS),
       station: d.station,
-      issue_time_vn: issue.toISOString(),
-      installed_time_vn: install.toISOString(),
-      removed_time_vn: removal.toISOString(),
-      return_unservice_time: ret.toISOString(),
-      tat_issue_install_days: +((issue - install) / 86400000).toFixed(1),
-      tat_removal_return_days: +((ret - removal) / 86400000).toFixed(1),
     });
   }
   return applyFilter(rows, f);

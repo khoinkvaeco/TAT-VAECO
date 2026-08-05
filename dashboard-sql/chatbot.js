@@ -141,7 +141,7 @@ const USAGE = [
   {
     keys: ['tab', 'bao cao', 'man hinh', 'trang'],
     answer:
-      'Cấu trúc: tab "Tổng quan" (KPI + biểu đồ + bảng Chi tiết TAT); tab "Các Báo cáo khác" gồm Trả unservice, Xuất kho chưa lắp, Tháo chưa trả US, Chưa đối ứng, Tháo trước lắp sau, Other (on_ac), TAT hoàn kho — mỗi báo cáo lọc/tìm/xuất Excel độc lập.',
+      'Cấu trúc: tab "Tổng quan" (KPI + biểu đồ + bảng Chi tiết TAT); tab "Các Báo cáo khác" gồm Trả unservice, Xuất kho chưa lắp, Tháo chưa trả US, Chưa đối ứng, Chỉ lắp / Chỉ tháo, Other (on_ac), TAT hoàn kho — mỗi báo cáo lọc/tìm/xuất Excel độc lập.',
   },
   {
     keys: ['ky bao cao', 'thang', 'tuan', 'chon ky'],

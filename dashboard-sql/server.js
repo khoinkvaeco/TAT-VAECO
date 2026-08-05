@@ -1701,74 +1701,157 @@ async function qManualPairCandidates(range, f) {
 }
 
 /**
- * BAO CAO 4: THAO TRUOC, LAP SAU (thiet bi thao ra truoc, phieu xuat kho lam sau).
- * Lien ket theo [labelno] (cung 1 label giao dich):
- *   - Thiet bi LAP (YE) va thiet bi THAO (YA) lay tu on_off theo labelno cua
- *     phieu xuat kho_ser1 (vm='T', P-...).
- *   - "Dung logic" khi NGAY XUAT KHO > NGAY LAP -> chi lay cac dong nay.
- *   - The hien RO thiet bi thao (partno/serial thao) vs thiet bi xuat (partno/serial xuat).
- *   - 2 TAT: xuat sau lap bao nhieu ngay (issue - install) va thao -> tra US.
+ * BAO CAO 4: THIET BI CHI CO MOT PHIA TRONG WO_PART_ON_OFF.
+ * ---------------------------------------------------------------------------
+ * Trong WO_PART_ON_OFF, mot dong BINH THUONG la 1 lan THAY THE: thiet bi cu ra
+ * (PARTNO_OFF/SERIALNO_OFF) va thiet bi moi vao (PARTNO/SERIALNO). Nhung co
+ * nhung dong CHI CO MOT PHIA:
+ *   - CHI ON  (lap ma khong thao): gan them thiet bi, khong go cai nao ra.
+ *   - CHI OFF (thao ma khong lap): go thiet bi ra, chua gan cai nao vao.
+ * Day chinh la 2 dau cua nghiep vu "thao truoc - lap sau": lan THAO va lan LAP
+ * duoc ghi thanh 2 dong rieng, khong ghep duoc voi nhau bang label.
+ *
+ * SO LIEU THUC DO (docs/TEST-HIGHER-ASSY.sql PHAN 7, 1 thang): trong 4.861 thiet
+ * bi bi thay ra khoi cum co 154 cai KHONG co su kien on_off vm='YA' (22 da tra
+ * unservice, 132 chua) -> cac bao cao dua tren on_off khong nhin thay chung.
+ *
+ * Moi dong tra ve kem: co su kien on_off tuong ung khong (YE cho phia ON, YA
+ * cho phia OFF), co phieu xuat kho khong, va da tra unservice chua -> nhin ra
+ * ngay dong nao dang bi bo sot.
+ *
+ * LINKED SERVER: keo WO_PART_ON_OFF ve #temp MOT LAN roi join noi bo.
  */
-async function qRemovedBeforeInstalled(range, f) {
-  const params = { from: range.from, to: range.to, top: CONFIG.maxRows, ...amosDayParams(range) };
-  const dept = deptFromStaff('k.[created_b2]', 'sm');
-  let where = buildFilterClause(
-    f,
-    { station: 'k.[station]', store: 'k.[store]', department: dept },
-    params
-  );
+async function qOneSidedWoParts(range, f) {
+  const d = amosDayParams(range);
+  const params = {
+    from: range.from, to: range.to, top: CONFIG.maxRows, ...d,
+    // Cua so tra cuu phieu xuat / tra US quanh ky (thao va xuat co the lech ky)
+    backDay: d.fromDay - 90,
+  };
+  // MUTATION = so ngay AMOS, MUTATION_TIME = so ms tu 0h -> gio VN
+  const mutVN =
+    `DATEADD(HOUR, @tzOffset, DATEADD(MILLISECOND,
+       TRY_CONVERT(int, TRY_CONVERT(bigint, TRY_CONVERT(float, x.[MUTATION_TIME])) % 86400000),
+       DATEADD(DAY, TRY_CONVERT(int, TRY_CONVERT(float, x.[MUTATION])), TRY_CONVERT(datetime, @amosEpoch))))`;
+  const hasOn = `(x.[SERIALNO]     IS NOT NULL AND LTRIM(RTRIM(x.[SERIALNO]))     <> '')`;
+  const hasOff = `(x.[SERIALNO_OFF] IS NOT NULL AND LTRIM(RTRIM(x.[SERIALNO_OFF])) <> '')`;
+
+  // Bo loc station/department: WO_PART_ON_OFF khong co 2 cot nay -> lay tu ban
+  // ghi noi bo tim duoc (phieu xuat / dong tra US). Dong KHONG tra ra duoc gia
+  // tri thi VAN HIEN (khong am tham giau di) - da ghi ro trong mo ta bao cao.
+  const deptExpr = `COALESCE(
+      NULLIF(NULLIF(LTRIM(RTRIM(ret.department)), ''), 'UNKNOWN'),
+      CASE WHEN LEFT(LTRIM(RTRIM(iss.staff)), 2) = 'PA' THEN 'PA' END,
+      ${cleanDept('sm.[DEPARTMENT]')})`;
+  const stationExpr = `COALESCE(NULLIF(LTRIM(RTRIM(iss.station)), ''), NULLIF(LTRIM(RTRIM(ret.station)), ''))`;
+  let where = '';
+  if (f.station) { params.fStation = f.station; where += `\n      AND (${stationExpr} IS NULL OR ${stationExpr} = @fStation)`; }
+  if (f.store) { params.fStore = f.store; where += `\n      AND (iss.store IS NULL OR iss.store = @fStore)`; }
+  if (f.department) { params.fDepartment = f.department; where += `\n      AND (${deptExpr} IS NULL OR ${deptExpr} = @fDepartment)`; }
+
+  // TOI UU: cac bang NQT duoc keo ve #temp CO INDEX theo (partno, serialno) roi
+  // moi join. Neu APPLY thang vao kho_ser1/real_us1/on_off voi RTRIM(...) =
+  // ... thi khong dung duoc index (non-sargable) va phai quet lai bang cho
+  // TUNG dong cua #w1 (co the vai nghin dong) -> rat cham.
   const text = `
-    SELECT TOP (@top)
-      k.[labelno]    AS labelno,
-      k.[partno]     AS partno,          -- thiet bi XUAT KHO (xuat sau)
-      k.[serialno]   AS serialno,
-      k.[descriptio] AS description,
-      ya.partno      AS partno_removed,  -- thiet bi THAO (thao truoc)
-      ya.serialno    AS serialno_removed,
-      k.[ac_registr] AS ac_registr,
-      k.[created_b2] AS staff,
-      k.[station]    AS station,
-      ${dept} AS department,
-      ya.removal_time       AS removed_time_vn,     -- ngay thao
-      ye.install_time       AS installed_time_vn,   -- ngay lap
-      ${amosToVN('k')}      AS issue_time_vn,       -- ngay xuat kho (sau ngay lap)
-      r.[del_time]          AS return_unservice_time,
-      CAST(DATEDIFF(MINUTE, ye.install_time, ${amosToVN('k')}) AS float) / 1440.0 AS tat_issue_install_days,
-      CAST(DATEDIFF(MINUTE, ya.removal_time, r.[del_time]) AS float) / 1440.0    AS tat_removal_return_days
+    IF OBJECT_ID('tempdb..#w1')  IS NOT NULL DROP TABLE #w1;
+    IF OBJECT_ID('tempdb..#iss') IS NOT NULL DROP TABLE #iss;
+    IF OBJECT_ID('tempdb..#ret') IS NOT NULL DROP TABLE #ret;
+    IF OBJECT_ID('tempdb..#oo')  IS NOT NULL DROP TABLE #oo;
+
+    -- Keo ve MOT LAN: chi giu dong co DUNG MOT phia
+    SELECT
+      CASE WHEN ${hasOn} THEN 'ON' ELSE 'OFF' END                                AS phia,
+      CASE WHEN ${hasOn} THEN RTRIM(x.[PARTNO])   ELSE RTRIM(x.[PARTNO_OFF])   END AS partno,
+      CASE WHEN ${hasOn} THEN RTRIM(x.[SERIALNO]) ELSE RTRIM(x.[SERIALNO_OFF]) END AS serialno,
+      TRY_CONVERT(bigint, x.[LABELNO])         AS labelno,
+      TRY_CONVERT(bigint, x.[EVENT_PERFNO_I])  AS event_perf,
+      RTRIM(x.[AC_POSITION])                   AS ac_position,
+      ${mutVN}                                 AS thoi_diem_vn,
+      RTRIM(x.[CREATED_BY])                    AS created_by
+    INTO #w1
+    FROM [DWH_DB]..[STG_AMOS].[WO_PART_ON_OFF] x
+    WHERE x.[MUTATION] BETWEEN @fromDay AND @toDay
+      AND ((${hasOn} AND NOT ${hasOff}) OR (${hasOff} AND NOT ${hasOn}));
+    CREATE INDEX IX_w1 ON #w1 (partno, serialno);
+
+    -- Phieu xuat kho trong cua so [ky - 90 ngay, het ky]
+    SELECT RTRIM(k.[partno]) AS partno, RTRIM(k.[serialno]) AS serialno,
+           RTRIM(k.[voucherno]) AS voucher_issue, ${amosToVN('k')} AS issue_time_vn,
+           RTRIM(k.[station]) AS station, RTRIM(k.[store]) AS store,
+           k.[created_b2] AS staff
+    INTO #iss
     FROM [NQT].[dbo].[kho_ser1] k
-    -- Su kien LAP (YE): lan lap GAN NHAT TRUOC ngay xuat kho (cung labelno;
-    --  khong yeu cau cung part/serial - thiet bi lap co the khac phieu xuat)
+    WHERE k.[vm] = 'T' AND k.[voucherno] LIKE 'P-%'
+      AND k.[mutation] BETWEEN @backDay AND @toDay;
+    CREATE INDEX IX_iss ON #iss (partno, serialno);
+
+    -- Dong tra unservice trong cua so quanh ky
+    SELECT RTRIM(r.[partno]) AS partno, RTRIM(r.[serialno]) AS serialno,
+           r.[del_time] AS return_unservice_time,
+           RTRIM(r.[department]) AS department, RTRIM(r.[station]) AS station
+    INTO #ret
+    FROM [NQT].[dbo].[real_us1] r
+    WHERE r.[del_time] >= DATEADD(DAY, -30, @from) AND r.[del_time] < DATEADD(DAY, 60, @to);
+    CREATE INDEX IX_ret ON #ret (partno, serialno);
+
+    -- Su kien on_off (YE/YA) trong cung cua so - de biet dong nao bi BO SOT
+    SELECT DISTINCT RTRIM(o.[partno]) AS partno, RTRIM(o.[serialno]) AS serialno,
+           RTRIM(o.[vm]) AS vm
+    INTO #oo
+    FROM [NQT].[dbo].[on_off] o
+    WHERE o.[vm] IN ('YE','YA')
+      AND o.[mutation] BETWEEN @backDay AND @toDay;
+    CREATE INDEX IX_oo ON #oo (partno, serialno, vm);
+
+    SELECT TOP (@top)
+      w.phia          AS phia,
+      w.partno        AS partno,
+      w.serialno      AS serialno,
+      w.labelno       AS labelno,
+      w.event_perf    AS event_perf,
+      w.ac_position   AS ac_position,
+      w.thoi_diem_vn  AS thoi_diem_vn,
+      w.created_by    AS created_by,
+      -- Co su kien on_off tuong ung khong? (khong co = cac bao cao dua tren
+      -- on_off dang BO SOT thiet bi nay)
+      CASE WHEN EXISTS (
+             SELECT 1 FROM #oo o
+             WHERE o.partno = w.partno AND o.serialno = w.serialno
+               AND o.vm = CASE WHEN w.phia = 'ON' THEN 'YE' ELSE 'YA' END)
+           THEN N'Có' ELSE N'Không' END       AS co_su_kien_on_off,
+      iss.voucher_issue  AS voucher_issue,
+      iss.issue_time_vn  AS issue_time_vn,
+      ret.return_unservice_time AS return_unservice_time,
+      ${stationExpr}  AS station,
+      ${deptExpr}     AS department
+    FROM #w1 w
+    -- Phieu xuat kho gan nhat TRUOC thoi diem (neu co)
     OUTER APPLY (
-      SELECT TOP 1 ${amosToVN('o')} AS install_time
-      FROM [NQT].[dbo].[on_off] o
-      WHERE o.[labelno] = k.[labelno] AND o.[vm] = 'YE'
-        AND ${amosToVN('o')} < ${amosToVN('k')}     -- lap TRUOC xuat (dung logic)
-      ORDER BY o.[mutation] DESC, o.[mutation_t] DESC
-    ) ye
-    -- Su kien THAO (YA): lan thao gan nhat TRUOC/luc lap (trinh tu thao -> lap)
+      SELECT TOP 1 i.voucher_issue, i.issue_time_vn, i.station, i.store, i.staff
+      FROM #iss i
+      WHERE i.partno = w.partno AND i.serialno = w.serialno
+        AND i.issue_time_vn <= w.thoi_diem_vn
+      ORDER BY i.issue_time_vn DESC
+    ) iss
+    -- Dong tra unservice DAU TIEN tu thoi diem do tro di (neu co)
     OUTER APPLY (
-      SELECT TOP 1 ${amosToVN('o')} AS removal_time, o.[historyno_] AS historyno,
-             o.[partno] AS partno, o.[serialno] AS serialno
-      FROM [NQT].[dbo].[on_off] o
-      WHERE o.[labelno] = k.[labelno] AND o.[vm] = 'YA'
-        AND ${amosToVN('o')} <= ye.install_time
-      ORDER BY o.[mutation] DESC, o.[mutation_t] DESC
-    ) ya
-    LEFT JOIN [NQT].[dbo].[real_us1] r ON r.[historyno_] = ya.historyno
-    ${signJoin('k.[created_b2]', 'sm')}
-    WHERE k.[vm] = 'T'
-      AND k.[voucherno] LIKE 'P-%'
-      AND LTRIM(RTRIM(ISNULL(k.[costcenter], ''))) <> 'VN-SPL'  -- bo qua costcenter VN-SPL
-      AND UPPER(LTRIM(RTRIM(ISNULL(k.[store], '')))) NOT IN ('MAIN','3RD')  -- bo qua store MAIN/3RD
-      AND UPPER(LTRIM(RTRIM(ISNULL(k.[condition], '')))) <> 'US'  -- bo qua condition US
-      AND ye.install_time IS NOT NULL
-      -- "Thao truoc lap sau" dung logic: NGAY XUAT KHO > NGAY LAP
-      AND ${amosToVN('k')} > ye.install_time
-      AND k.[mutation] BETWEEN @fromDay AND @toDay
-      AND ${amosToVN('k')} >= @from AND ${amosToVN('k')} < @to
-      ${where}
-    ORDER BY k.[mutation] DESC`;
-  return query(text, params);
+      SELECT TOP 1 t.return_unservice_time, t.department, t.station
+      FROM #ret t
+      WHERE t.partno = w.partno AND t.serialno = w.serialno
+        AND t.return_unservice_time >= DATEADD(DAY, -30, w.thoi_diem_vn)
+      ORDER BY t.return_unservice_time ASC
+    ) ret
+    ${signJoin('iss.staff', 'sm')}
+    WHERE 1 = 1 ${where}
+    ORDER BY w.thoi_diem_vn DESC;
+
+    DROP TABLE #w1;
+    DROP TABLE #iss;
+    DROP TABLE #ret;
+    DROP TABLE #oo;`;
+  const sets = await queryMulti(text, params);
+  return sets.find((s) => s.length && 'phia' in s[0]) || [];
 }
 
 /**
@@ -3675,7 +3758,7 @@ const REPORTS = {
   'manual-pair': { live: qManualPairCandidates, demo: 'manualPairCandidates' },
   // Doc tu FILE (khong query DB) -> khong can nhanh demo rieng
   'manual-pair-done': { live: async (range, f) => manualPairsInRange(range, f) },
-  'removed-before-installed': { live: qRemovedBeforeInstalled, demo: 'removedBeforeInstalled' },
+  'removed-before-installed': { live: qOneSidedWoParts, demo: 'removedBeforeInstalled' },
   other: { live: qOther, demo: 'other' },
   'return-store-tat': { live: qTatReturnStore, demo: 'returnStoreTat' },
 };
