@@ -83,6 +83,19 @@ npm run service:uninstall    :: gỡ service
 ```
 Sau khi sửa code: `git pull` (hoặc copy) rồi `sc stop DashboardTAT & sc start DashboardTAT` để nạp bản mới.
 
+### Kiểm tra nhanh trước khi triển khai (`npm run smoke`)
+
+```bash
+npm run smoke
+```
+
+Bật server ở chế độ **live** nhưng trỏ vào một địa chỉ DB không tồn tại, rồi gọi lần lượt **17 endpoint** có chạy truy vấn. Mỗi endpoint sẽ chạy **hết** phần dựng câu SQL rồi mới chết ở bước kết nối:
+
+- báo **lỗi kết nối** → ĐẠT (code chạy tốt)
+- báo **bất kỳ lỗi nào khác** → TRƯỢT, in rõ endpoint và thông báo lỗi
+
+Cần thiết vì `DEMO_MODE=true` **không hề gọi** các hàm dựng câu SQL (chúng bị thay bằng dữ liệu mẫu), còn `node --check` chỉ kiểm cú pháp — nên lỗi kiểu *"Cannot access 'dept' before initialization"* lọt qua cả hai, đến lúc chạy thật mới vỡ.
+
 ### Chạy thử không cần SQL Server (DEMO)
 
 Đặt `DEMO_MODE=true` trong `.env` rồi `npm start` — toàn bộ giao diện chạy với dữ liệu mẫu để bạn xem trước.

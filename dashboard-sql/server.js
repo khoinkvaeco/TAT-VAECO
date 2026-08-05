@@ -797,13 +797,14 @@ async function qTatDepartments(range, f) {
   // Truoc day nhanh nay lay theo nguoi TRA US (real_us1.action_per) -> cung mot
   // phieu xuat co the bi quy ve 2 trung tam khac nhau tuy da tra hay chua.
   // Gio CA HAI nhanh (da tra / chua tra) deu quy ve NGUOI LAP PHIEU XUAT.
+  // KHAI BAO TRUOC khi dung o buildFilterClause ben duoi.
+  const dept = deptFromStaff('k.[created_b2]', 'sm');
+  const deptSvc = dept;   // ca 2 nhanh dung chung mot cach xac dinh Trung tam
   let where = buildFilterClause(
     f,
     { station: 'k.[station]', store: 'k.[store]', department: dept },
     params
   );
-  const deptSvc = deptFromStaff('k.[created_b2]', 'sm');
-  const dept = deptSvc;   // ca 2 nhanh dung chung mot cach xac dinh Trung tam
   const whereSvc = buildFilterClause(
     f,
     { station: 'k.[station]', store: 'k.[store]', department: deptSvc },
