@@ -524,9 +524,10 @@ const COLS_TAT_DEPT = [
   { title: 'Description', field: 'description' },
   { title: 'Receiver', field: 'receiver', headerFilter: 'input' },
   { title: 'Center', field: 'department', headerFilter: 'input' },
-  // 'Nhân viên' = NGƯỜI LẬP PHIẾU XUẤT — cũng chính là căn cứ xác định Trung tâm
-  { title: 'Nhân viên', field: 'staff', headerFilter: 'input', headerTooltip: 'Người lập phiếu xuất (kho_ser1.created_b2) — căn cứ xác định Trung tâm' },
-  { title: 'Người trả US', field: 'return_staff', headerFilter: 'input', headerTooltip: 'Người trả unservice (real_us1.action_per) — chỉ để đối chiếu, KHÔNG dùng để xác định Trung tâm' },
+  // 'Nhân viên' = NGƯỜI TRẢ US — cùng nguồn với Trung tâm (real_us1).
+  // Dòng "Trả service" / "Chỉ lắp lên" không có người trả US → hiển thị người lập phiếu.
+  { title: 'Nhân viên', field: 'staff', headerFilter: 'input', headerTooltip: 'Người trả unservice (real_us1.action_per) — cùng nguồn với Trung tâm. Dòng Trả service / Chỉ lắp lên: người lập phiếu xuất.' },
+  { title: 'Người lập phiếu', field: 'issue_staff', headerFilter: 'input', headerTooltip: 'Người lập phiếu xuất (kho_ser1.created_b2) — chỉ để đối chiếu, KHÔNG dùng để xác định Trung tâm' },
   { title: 'Station', field: 'station', headerFilter: 'input' },
   { title: 'Store', field: 'store', headerFilter: 'input' },
   { title: 'Pickslip', field: 'voucher_issue', headerFilter: 'input' },
