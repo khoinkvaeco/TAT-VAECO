@@ -303,17 +303,29 @@ function signJoin(staffCol, alias) {
 }
 
 /**
- * Trung tam (department) cho bang real_us1:
- *   1) real_us1.department (bo '' / 'UNKNOWN')
- *   2) neu action_per bat dau bang 'PA' -> 'PA'
- *   3) tra SIGN theo action_per
+ * Trung tam (department) cho bang real_us1. Thu tu uu tien:
+ *   1) action_per bat dau bang 'PA' -> 'PA'
+ *   2) SIGN theo action_per        <-- NGUON CHUAN (bang nhan su cua AMOS)
+ *   3) real_us1.department          (chi dung khi SIGN khong co nguoi do)
  *   4) mac dinh 'PA'
+ *
+ * VI SAO SIGN DUNG TRUOC:
+ * SIGN la bang nhan su - don vi HIEN TAI cua nhan vien. Con
+ * real_us1.department chi la ban SAO CHEP luc ghi giao dich, co the cu/sai.
+ * Do thuc te 1 thang (/api/admin/diag/dept): 2.438 dong da doi ung thi 51 dong
+ * (2,1%) co 2 nguon LECH nhau, vi du nhan vien VAE02315 co SIGN = NTHN, lam
+ * viec tai HAN, nhung real_us1.department ghi NGTHCM -> bieu do hien mot trung
+ * tam mien Nam duoi station HAN.
+ *
+ * LUU Y: truoc day ham nay uu tien real_us1.department, TRAI voi thiet ke da
+ * ghi o docstring cua qTatDepartments ("uu tien bang SIGN... SIGN la nguon
+ * chuan"). Day la sua cho code khop lai voi thiet ke, khong phai doi nghiep vu.
  */
 function deptFromReal(rAlias, smAlias) {
   return `COALESCE(
-      ${cleanDept(`${rAlias}.[department]`)},
       CASE WHEN LEFT(LTRIM(RTRIM(${rAlias}.[action_per])), 2) = 'PA' THEN 'PA' END,
       ${cleanDept(`${smAlias}.[DEPARTMENT]`)},
+      ${cleanDept(`${rAlias}.[department]`)},
       'PA')`;
 }
 
@@ -781,7 +793,8 @@ async function qTatDepartments(range, f) {
   // amosDayParams: loc tho sargable theo [mutation] cho nhanh "tra service"
   // (nhanh nay xet PHIEU XUAT trong ky, khong quet toan bo lich su)
   const params = { from: range.from, to: range.to, tzOffset: CONFIG.tzOffset, top: CONFIG.maxRows, ...amosDayParams(range) };
-  // Trung tam: real_us1.department -> mutator('PA'/SIGN) -> 'PA'.
+  // Trung tam: 'PA' -> SIGN(action_per) -> real_us1.department -> 'PA'
+  //            (SIGN la nguon chuan - xem deptFromReal).
   const dept = deptFromReal('r', 'sm');
   let where = buildFilterClause(
     f,
@@ -4700,7 +4713,7 @@ app.get('/api/admin/diag/dept', h(async (req, res) => {
 
   // 1) Hai nhanh dang dung 2 cach suy ra Trung tam khac nhau -> neu ro
   out.cachXacDinhTrungTam = {
-    daTra_deptAgg: 'real_us1.department -> SIGN(real_us1.action_per) -> PA',
+    daTra_deptAgg: 'PA-prefix -> SIGN(real_us1.action_per) -> real_us1.department -> PA',
     chuaTra_notRecAgg: 'SIGN(kho_ser1.created_b2 = nguoi LAP PHIEU XUAT) -> PA',
     station: 'LUON lay tu kho_ser1.station (phieu xuat)',
     canhBao: 'Hai cach khac nhau -> CUNG mot phieu xuat co the duoc quy ve 2 trung tam khac nhau tuy no da tra hay chua.',
@@ -4744,8 +4757,8 @@ app.get('/api/admin/diag/dept', h(async (req, res) => {
   }
 
   // 2b) QUY MO VAN DE: bao nhieu dong co real_us1.department KHAC voi SIGN?
-  //     real_us1.department dang duoc UU TIEN hon SIGN (xem deptFromReal), nen
-  //     dong nao lech se lay theo real_us1 - ke ca khi SIGN moi hon/dung hon.
+  //     Tu ban sua nay SIGN duoc uu tien hon real_us1.department (xem
+  //     deptFromReal), nen dong lech se lay theo SIGN. Van do de theo doi.
   try {
     const params = { from: range.from, to: range.to, ...amosDayParams(range) };
     const where = buildFilterClause(f, { station: 'k.[station]', store: 'k.[store]', department: null }, params);
@@ -4776,8 +4789,8 @@ app.get('/api/admin/diag/dept', h(async (req, res) => {
     const sum = (sets.find((s) => s.length && 'tongDong' in s[0]) || [])[0] || {};
     out.quyMoLechNguon = {
       ...sum,
-      giaiThich: 'real_us1.department dang duoc UU TIEN hon SIGN. Cac cap duoi day '
-        + 'la nhung dong ma 2 nguon KHAC nhau -> hien tai bieu do lay cot dept_real_us1.',
+      giaiThich: 'SIGN dang duoc UU TIEN hon real_us1.department. Cac cap duoi day '
+        + 'la nhung dong ma 2 nguon KHAC nhau -> bieu do lay cot dept_SIGN.',
       cacCapLech: sets.find((s) => s.length && 'dept_real_us1' in s[0]) || [],
     };
   } catch (e) {
