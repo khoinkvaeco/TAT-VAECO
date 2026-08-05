@@ -605,8 +605,13 @@ const REPORT_DEFS = {
   },
   'issued-not-installed': {
     title: 'Thiết bị xuất kho nhưng chưa lắp lên tàu',
-    desc: 'kho_ser1 vm=T (P-…) chưa lắp (on_off vm=YE) và chưa được return. TAT = hiện tại − giờ xuất kho. Các cột "Vị trí hiện tại", "Higher PN", "Higher SN" lấy từ ROTABLES (nối qua khóa psn) — cho biết thiết bị đang nằm ở đâu và đang lắp trên thiết bị cấp trên nào. ĐÃ LOẠI những thiết bị lắp vào CỤM CAO HƠN (không lên tàu nên không có on_off YE, nhưng có bản ghi lắp trong WO_PART_ON_OFF) — nhóm đó chuyển sang bảng "Chi tiết TAT" với nhãn "Chỉ lắp lên".',
+    desc: 'kho_ser1 vm=T (P-…) chưa lắp (on_off vm=YE) và chưa được return. TAT = hiện tại − giờ xuất kho. Cột "Event (WO)" là số work order của phiếu xuất (kho_ser1.event_perf); "Vị trí hiện tại" lấy từ ROTABLES (nối qua khóa psn) — cho biết thiết bị đang nằm ở đâu. ĐÃ LOẠI những thiết bị lắp vào CỤM CAO HƠN (không lên tàu nên không có on_off YE, nhưng có bản ghi lắp trong WO_PART_ON_OFF) — nhóm đó chuyển sang bảng "Chi tiết TAT" với nhãn "Chỉ lắp lên".',
     columns: [
+      {
+        title: 'Event (WO)', field: 'event_perf', formatter: fmtIntCell,
+        hozAlign: 'right', sorter: 'number', headerFilter: 'input',
+        headerTooltip: 'kho_ser1.event_perf — số work order của phiếu xuất',
+      },
       { title: 'Part No', field: 'partno', headerFilter: 'input' },
       { title: 'Serial No', field: 'serialno', headerFilter: 'input' },
       { title: 'Label', field: 'labelno', headerFilter: 'input'  },
@@ -619,20 +624,10 @@ const REPORT_DEFS = {
       { title: 'Phiếu xuất', field: 'voucher_issue', headerFilter: 'input'  },
       { title: 'Ngày Giờ xuất', field: 'issue_time_vn', formatter: fmtDateCell },
       { title: 'TAT (now)', field: 'tat_days', formatter: fmtTatCell, hozAlign: 'right', sorter: 'number' },
-      // Thong tin tu ROTABLES (noi qua psn): vi tri + thiet bi CAP TREN
+      // Thong tin tu ROTABLES (noi qua psn): vi tri hien tai cua thiet bi
       { title: 'PSN', field: 'psn', headerFilter: 'input', formatter: fmtIntCell, hozAlign: 'right' },
       {
         title: 'Vị trí hiện tại', field: 'location', headerFilter: 'input', widthGrow: 1.5,
-        formatter: (cell) => cell.getValue() || '<span style="color:var(--text-muted)">—</span>',
-      },
-      {
-        title: 'Higher PN', field: 'higher_pn', headerFilter: 'input',
-        headerTooltip: 'ROTABLES.PARTNONEW — Part No của thiết bị cấp trên đang lắp thiết bị này',
-        formatter: (cell) => cell.getValue() || '<span style="color:var(--text-muted)">—</span>',
-      },
-      {
-        title: 'Higher SN', field: 'higher_sn', headerFilter: 'input',
-        headerTooltip: 'ROTABLES.SERIALNONEW — Serial No của thiết bị cấp trên',
         formatter: (cell) => cell.getValue() || '<span style="color:var(--text-muted)">—</span>',
       },
     ],

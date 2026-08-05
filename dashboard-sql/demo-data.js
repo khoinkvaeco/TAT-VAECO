@@ -151,11 +151,12 @@ function issuedNotInstalled(range, f) {
     const issue = rndDate(range.from, range.to);
     rows.push({
       ...d,
+      event_perf: rndInt(8600000, 8800000),   // so work order cua phieu xuat
       voucher_issue: 'P-' + rndInt(10000, 99999),
       department: rnd(DEPARTMENTS),
       issue_time_vn: issue.toISOString(),
       tat_days: +((Date.now() - issue.getTime()) / 86400000).toFixed(1),
-      // ROTABLES (noi qua psn): vi tri hien tai + thiet bi CAP TREN
+      // ROTABLES (noi qua psn): vi tri hien tai (higher_pn/sn giu de dung noi bo)
       psn: rndInt(1000000, 1999999),
       location: rnd(['SHOPLOC', 'HANSTORE', 'SGNSTORE', 'AOG-DAD', 'WORKSHOP-01', '']),
       higher_pn: rnd(['', 'HPN-' + pad(rndInt(100, 999)), 'C20500100', '183304-0A07E']),
