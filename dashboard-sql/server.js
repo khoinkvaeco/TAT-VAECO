@@ -4718,8 +4718,13 @@ app.get('/api/admin/diag/rnr', h(async (req, res) => {
       AND o.[mutation] BETWEEN @fromDay AND @toDay
       AND ${amosToVN('o')} >= @from AND ${amosToVN('o')} < @to
       ${where}`;
+  // Cach bao cao dang dung: khong co dong real_us1 nao CUNG LABEL
   const noUs = `AND NOT EXISTS (SELECT 1 FROM [NQT].[dbo].[real_us1] r
                     WHERE r.[labelno] = o.[labelno])`;
+  // Cach CHINH XAC hon: khop dung dong tra US cua CHINH lan thao nay
+  // (historyno_ - la khoa ma docstring va qTatDepartments deu dung)
+  const noUsHist = `AND NOT EXISTS (SELECT 1 FROM [NQT].[dbo].[real_us1] r
+                    WHERE r.[historyno_] = o.[historyno_])`;
   const noHigher = 'AND o.[higher_par] IS NULL';
   const joinRo = 'INNER JOIN [DWH_DB]..[STG_AMOS].ROTABLES RO ON o.PSN = RO.PSN';
 
@@ -4744,6 +4749,16 @@ app.get('/api/admin/diag/rnr', h(async (req, res) => {
     `SELECT COUNT(*) AS cnt FROM [NQT].[dbo].[on_off] o ${joinRo}
      WHERE ${inPeriod} ${noUs} ${noHigher} AND RO.MUTATION > @fromDay AND RO.condition = 'US'`));
 
+  // So sanh 2 cach xac dinh "chua tra US": theo labelno (dang dung) va theo
+  // historyno_ (khop dung lan thao nay). Chenh lech = so dong co the dang bi
+  // loai OAN vi cung labelno do da tung co mot lan tra US KHAC.
+  buoc.push(await step('2b. [doi chieu] chua tra US - khop theo historyno_',
+    `SELECT COUNT(*) AS cnt FROM [NQT].[dbo].[on_off] o WHERE ${inPeriod} ${noUsHist}`));
+  buoc.push(await step('2c. [doi chieu] bi loai theo labelno NHUNG con theo historyno_',
+    `SELECT COUNT(*) AS cnt FROM [NQT].[dbo].[on_off] o
+     WHERE ${inPeriod} ${noUsHist}
+       AND EXISTS (SELECT 1 FROM [NQT].[dbo].[real_us1] r WHERE r.[labelno] = o.[labelno])`));
+
   // Cac thiet bi bi loai o buoc 6: hien nay condition la gi?
   let theoCondition = null;
   try {
@@ -4757,10 +4772,14 @@ app.get('/api/admin/diag/rnr', h(async (req, res) => {
 
   res.json({
     range,
-    canhBao: 'Buoc 5 va 6 loc theo TRANG THAI HIEN TAI cua thiet bi trong ROTABLES, '
-      + 'khong phai trang thai luc thao. Thiet bi da duoc nhan/xu ly thi condition doi '
-      + 'khac US va BIEN MAT khoi bao cao - ke ca khi xem lai ky cu. Do la ly do so dong '
-      + 'giam dan theo thoi gian du du lieu lich su khong he thay doi.',
+    ghiChu: 'Bao cao CO TU CAP NHAT theo thuc te: buoc 2 xet real_us1 tai THOI DIEM '
+      + 'XEM, nen thiet bi thao thang 7 ma tra US thang 8 se tu bien mat khoi bao cao '
+      + 'thang 7 - dung nhu mong muon.',
+    caanXem: 'Buoc 2c: so dong bi loai vi CUNG LABELNO da tung co mot lan tra US KHAC '
+      + '(khong phai lan thao nay) -> dang bi loai OAN. Buoc 5 va 6 loc theo condition/'
+      + 'MUTATION HIEN TAI cua ROTABLES - day la tieu chi KHAC voi "da tra US hay chua", '
+      + 'co the loai ca thiet bi thuc su CHUA tra. Neu 2 con so nay lon, nen bo bot dieu '
+      + 'kien de bao cao phan anh dung thuc te hon.',
     buoc,
     phanBoConditionSauBuoc5: theoCondition,
   });

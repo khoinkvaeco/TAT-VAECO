@@ -703,8 +703,8 @@ const REPORT_DEFS = {
     title: 'Thiết bị tháo xuống từ tàu nhưng chưa trả unservice',
     desc: 'on_off vm=YA không có bản ghi real_us1 (liên kết qua historyno_). '
       + 'Store và Location là VỊ TRÍ HIỆN TẠI của thiết bị (ROTABLES nối qua psn, rồi LOCATION theo locationno_i). '
-      + '⚠ Báo cáo còn lọc theo TRẠNG THÁI HIỆN TẠI (ROTABLES.condition = US và MUTATION > đầu kỳ), nên thiết bị đã được '
-      + 'nhận/xử lý sẽ biến mất khỏi danh sách — kể cả khi xem lại kỳ cũ. Vì vậy cùng một kỳ chạy lại lúc khác sẽ ra số ít hơn. '
+      + 'Báo cáo TỰ CẬP NHẬT theo thực tế: điều kiện "chưa trả US" được xét tại THỜI ĐIỂM XEM, nên thiết bị tháo tháng 7 '
+      + 'mà trả US sang tháng 8 sẽ tự biến mất khỏi báo cáo tháng 7. Vì vậy cùng một kỳ xem lại lúc khác có thể ra số khác — đó là đúng ý đồ. '
       + 'Xem /api/admin/diag/rnr để biết từng điều kiện cắt bớt bao nhiêu dòng.',
     columns: [
       { title: 'Part No', field: 'partno', headerFilter: 'input' },
