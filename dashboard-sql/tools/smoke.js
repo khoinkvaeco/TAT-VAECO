@@ -40,6 +40,7 @@ const ENDPOINTS = [
   '/api/admin/diag/pairing',
   '/api/admin/diag/rbi',
   '/api/admin/diag/rnr',
+  '/api/admin/diag/remark',
 ];
 
 /** Loi NAY la binh thuong: khong co DB that de ket noi. */

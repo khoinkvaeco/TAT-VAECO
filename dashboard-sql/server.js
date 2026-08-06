@@ -2129,19 +2129,29 @@ async function qRepairAdmin(range, f) {
  * Ket qua duoc cache theo tien trinh.
  */
 const _dateKindCache = new Map();
-async function detectDateKind(fullTable, col) {
+async function detectDateKind(fullTable, col, expected) {
   const key = `${fullTable}.${col}`;
   if (_dateKindCache.has(key)) return _dateKindCache.get(key);
-  let kind = 'date';   // mac dinh an toan: coi la datetime
+  // `expected` = kieu nghiep vu DA XAC NHAN. Dung lam mac dinh khi do that bai,
+  // va canh bao neu do duoc mot kieu KHAC (du lieu doi hoac do sai).
+  let kind = expected || 'date';
   try {
     const r = await query(`SELECT TOP 1 [${col}] AS v FROM ${fullTable} WHERE [${col}] IS NOT NULL`);
     const v = r.length ? r[0].v : null;
-    if (v instanceof Date) kind = 'date';
-    else if (typeof v === 'number') kind = 'number';
-    else if (typeof v === 'string' && /^-?\d+(\.\d+)?$/.test(v.trim())) kind = 'number';
-    console.log(`[SCHEMA] ${key} -> ${kind}`);
+    let det = null;
+    if (v instanceof Date) det = 'date';
+    else if (typeof v === 'number') det = 'number';
+    else if (typeof v === 'string' && /^-?\d+(\.\d+)?$/.test(v.trim())) det = 'number';
+    if (det) {
+      if (expected && det !== expected) {
+        console.warn(`[SCHEMA] ${key}: nghiep vu bao '${expected}' nhung do duoc '${det}'`
+          + ` -> dung '${det}'. Neu ngay hien sai, bao lai de chinh.`);
+      }
+      kind = det;
+    }
+    console.log(`[SCHEMA] ${key} -> ${kind}${expected ? ` (nghiep vu: ${expected})` : ''}`);
   } catch (e) {
-    console.warn(`[SCHEMA] Khong do duoc kieu cua ${key}, coi la datetime:`, e.message);
+    console.warn(`[SCHEMA] Khong do duoc kieu cua ${key}, dung mac dinh '${kind}':`, e.message);
   }
   _dateKindCache.set(key, kind);
   return kind;
@@ -2155,7 +2165,9 @@ async function detectDateKind(fullTable, col) {
  * nhan vien -> INNER JOIN se lam BIEN MAT im lang toan bo phieu cua nguoi do.
  */
 async function pickslipTemp(range, f) {
-  const kind = await detectDateKind('[DWH_DB]..[STG_AMOS].[PICKSLIP_HEADER]', 'PICKSLIP_DATE');
+  // Nghiep vu da xac nhan: PICKSLIP_DATE la SO NGAY AMOS (khong phai datetime).
+  const kind = await detectDateKind(
+    '[DWH_DB]..[STG_AMOS].[PICKSLIP_HEADER]', 'PICKSLIP_DATE', 'number');
   const col = 'h.[PICKSLIP_DATE]';
   const periodWhere = kind === 'number'
     ? `${col} >= @fromDay AND ${col} < @toDay`
@@ -4912,6 +4924,80 @@ app.get('/api/admin/diag/higher', h(async (req, res) => {
     '(ví dụ 2-3 giá trị) chính là cột đánh dấu lắp vào tàu hay vào higher assembly. ' +
     'Báo tên cột + giá trị nào là "higher assembly" để cập nhật logic báo cáo.';
   res.json(out);
+}));
+
+// --- ADMIN: SOI DUOI CHUOI REMARKS de phan biet HUY / TRA ------------------
+//     Nghiep vu cho biet phai "do tu cuoi cua remark" moi biet dong do la HUY
+//     hay TRA. Nhung KHONG DOAN tu khoa - endpoint nay in ra cac DUOI THUC TE
+//     hay gap nhat (tu cuoi cung, 8/12/20 ky tu cuoi) kem so lan xuat hien.
+//     Co danh sach do roi moi viet ham phan loai. CHI DOC.
+app.get('/api/admin/diag/remark', h(async (req, res) => {
+  if (CONFIG.demoMode) return res.json({ note: 'Dang o DEMO_MODE, khong co du lieu that.' });
+  const range = resolveRange(req.query);
+  const f = readFilters(req.query);
+  const params = { from: range.from, to: range.to, top: CONFIG.maxRows, ...amosDayParams(range) };
+  const { pull, dept, join, drop } = await pickslipTemp(range, f);
+  const w = pickslipWhere(f, dept, params);
+
+  // Tu CUOI CUNG cua chuoi: dao nguoc -> cat den dau cach dau tien -> dao lai
+  const lastWord = `REVERSE(LEFT(REVERSE(RTRIM(x.remarks)),
+      CHARINDEX(' ', REVERSE(RTRIM(x.remarks)) + ' ') - 1))`;
+  const coRemark = `LTRIM(RTRIM(ISNULL(x.remarks, ''))) <> ''`;
+
+  const text = `${pull}
+
+    -- [0] Tong quan: bao nhieu dong huy/tra, bao nhieu dong co ghi chu
+    SELECT COUNT(*) AS tong_dong,
+           SUM(x.is_cancel) AS so_dong_qty_canceled,
+           SUM(CASE WHEN x.is_cancel = 1 AND ${coRemark} THEN 1 ELSE 0 END) AS co_remark,
+           SUM(CASE WHEN x.is_cancel = 1 AND NOT (${coRemark}) THEN 1 ELSE 0 END) AS remark_rong
+    ${join} WHERE 1 = 1 ${w};
+
+    -- [1] TU CUOI CUNG cua remark (dong co QTY_CANCELED > 0)
+    SELECT TOP 40 UPPER(${lastWord}) AS tu_cuoi, COUNT(*) AS so_dong
+    ${join} WHERE x.is_cancel = 1 AND ${coRemark} ${w}
+    GROUP BY UPPER(${lastWord})
+    ORDER BY COUNT(*) DESC;
+
+    -- [2] 8 / 12 / 20 ky tu CUOI (phong khi dau hieu khong tach bang dau cach)
+    SELECT TOP 40 UPPER(RIGHT(RTRIM(x.remarks), 8)) AS duoi_8, COUNT(*) AS so_dong
+    ${join} WHERE x.is_cancel = 1 AND ${coRemark} ${w}
+    GROUP BY UPPER(RIGHT(RTRIM(x.remarks), 8)) ORDER BY COUNT(*) DESC;
+
+    SELECT TOP 40 UPPER(RIGHT(RTRIM(x.remarks), 12)) AS duoi_12, COUNT(*) AS so_dong
+    ${join} WHERE x.is_cancel = 1 AND ${coRemark} ${w}
+    GROUP BY UPPER(RIGHT(RTRIM(x.remarks), 12)) ORDER BY COUNT(*) DESC;
+
+    SELECT TOP 40 UPPER(RIGHT(RTRIM(x.remarks), 20)) AS duoi_20, COUNT(*) AS so_dong
+    ${join} WHERE x.is_cancel = 1 AND ${coRemark} ${w}
+    GROUP BY UPPER(RIGHT(RTRIM(x.remarks), 20)) ORDER BY COUNT(*) DESC;
+
+    -- [3] Vai remark NGUYEN VAN de doc cho de hinh dung
+    SELECT TOP 20 x.pickslipno, x.partno, x.qty_booked, x.qty_canceled, x.remarks
+    ${join} WHERE x.is_cancel = 1 AND ${coRemark} ${w}
+    ORDER BY LEN(RTRIM(x.remarks)) DESC;
+
+    ${drop}`;
+
+  try {
+    const sets = await queryMulti(text, params);
+    const pick = (k) => sets.find((s) => s.length && k in s[0]) || [];
+    res.json({
+      range,
+      huongDan: 'Nhin bang tuCuoi truoc: neu cac gia tri hay gap tach bach thanh vai nhom '
+        + '(vi du CANCEL / RETURN / HUY / TRA) thi do chinh la dau hieu can dung. '
+        + 'Neu tu cuoi khong ro thi xem duoi8 / duoi12 / duoi20. '
+        + 'Bao lai tu khoa nao la HUY, tu khoa nao la TRA -> se viet ham phan loai theo dung do.',
+      tongQuan: pick('tong_dong')[0] || {},
+      tuCuoi: pick('tu_cuoi'),
+      duoi8: pick('duoi_8'),
+      duoi12: pick('duoi_12'),
+      duoi20: pick('duoi_20'),
+      viDuNguyenVan: pick('remarks'),
+    });
+  } catch (e) {
+    res.json({ range, loi: e.message });
+  }
 }));
 
 // --- ADMIN: CHAN DOAN bao cao "Thao chua tra US" (vi sao so dong thay doi) ---
