@@ -300,3 +300,51 @@ body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
   background: color-mix(in srgb, var(--series-1) 18%, transparent);
   border-bottom: none;
 }
+
+/* ---- LOP PHU "DANG TAI" -----------------------------------------------------
+   Van de: chi co dong chu "Dang tai" nho o thanh tren -> nhieu nguoi khong thay,
+   ma du lieu CU van hien ro nen de doc nham la du lieu moi.
+   Cach xu ly: phu mo ngay len VUNG DU LIEU dang tai, kem vong xoay + chu ro
+   rang, va CHAN moi thao tac (click/cuon) vao du lieu cu. */
+.busy-host { position: relative; }
+.busy-overlay {
+  position: absolute; inset: 0; z-index: 25;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
+  background: color-mix(in srgb, var(--surface-1) 80%, transparent);
+  backdrop-filter: blur(2.5px);
+  -webkit-backdrop-filter: blur(2.5px);
+  border-radius: 12px;
+  cursor: progress;
+  animation: busyIn .18s ease-out;
+}
+@keyframes busyIn { from { opacity: 0; } to { opacity: 1; } }
+.busy-overlay .spinner-lg {
+  width: 34px; height: 34px; border-radius: 50%;
+  border: 3px solid var(--hair); border-top-color: var(--brand-accent);
+  animation: spin .8s linear infinite;
+}
+.busy-overlay .busy-text {
+  font-size: 13px; font-weight: 600; color: var(--text-secondary);
+  letter-spacing: .2px;
+}
+/* Vung du lieu dang cho: lam mo + khong bam duoc (phong khi trinh duyet cu
+   khong ho tro backdrop-filter thi van thay ro la du lieu chua san sang) */
+.is-busy > *:not(.busy-overlay) { opacity: .35; pointer-events: none; user-select: none; }
+
+/* Tab dang tai: cham nhay nhe cho biet dang cho */
+.reportTab.loading::after,
+.mainTab.loading::after {
+  content: ''; display: inline-block; margin-left: 6px;
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--brand-accent); animation: busyPulse 1s ease-in-out infinite;
+}
+@keyframes busyPulse { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
+
+/* Chip "Dang tai" o thanh loc: to va noi bat hon dong chu xam cu */
+.loading-chip {
+  font-size: 13px; font-weight: 600;
+  color: var(--brand-accent);
+  background: color-mix(in srgb, var(--brand-accent) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--brand-accent) 45%, transparent);
+  padding: 4px 10px; border-radius: 999px;
+}

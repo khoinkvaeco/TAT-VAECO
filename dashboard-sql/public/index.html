@@ -101,8 +101,8 @@
       </label>
 
       <!-- Du lieu tu dong tai khi doi ky bao cao / dropdown (khong can nut Ap dung) -->
-      <div id="loading" class="hidden items-center gap-2 text-sm text-muted">
-        <span class="spinner"></span> Đang tải…
+      <div id="loading" class="hidden items-center gap-2 loading-chip">
+        <span class="spinner"></span> Đang tải dữ liệu…
       </div>
       <span id="rangeLabel" class="text-xs text-muted ml-auto"></span>
     </div>
@@ -125,6 +125,7 @@
   <main class="max-w-[1600px] mx-auto px-5 py-5">
     <!-- ============ TAB TỔNG QUAN ============ -->
     <section id="tab-dashboard">
+      <div id="dashPane">
       <div id="kpiGrid" class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2 mb-5"></div>
 
       <div class="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-5">
@@ -166,6 +167,7 @@
         <div id="recalcNote" class="hidden recalc-note"></div>
         <div id="mainTable"></div>
       </div>
+      </div><!-- /#dashPane -->
     </section>
 
     <!-- ============ TAB BÁO CÁO ============ -->
@@ -195,9 +197,12 @@
             <button id="reportExport" class="btn-export">⬇ Excel</button>
           </div>
         </div>
-        <!-- Bang TONG HOP (chi mot so bao cao dung) - dung tu chinh du lieu bang duoi -->
-        <div id="reportSummary" class="hidden mb-3"></div>
-        <div id="reportTable"></div>
+        <!-- Vung du lieu: lop phu "Dang tai" se che dung khoi nay -->
+        <div id="reportPane">
+          <!-- Bang TONG HOP (chi mot so bao cao dung) - dung tu chinh du lieu bang duoi -->
+          <div id="reportSummary" class="hidden mb-3"></div>
+          <div id="reportTable"></div>
+        </div>
       </div>
     </section>
 

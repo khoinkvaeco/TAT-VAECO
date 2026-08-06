@@ -128,6 +128,51 @@ function showLoading(on) {
   $('#loading').classList.toggle('hidden', !on);
   $('#loading').classList.toggle('flex', on);
 }
+
+/**
+ * LOP PHU "DANG TAI" tren MOT VUNG DU LIEU cu the.
+ * Vi sao can: dong chu "Dang tai" o thanh tren qua nho, nhieu nguoi khong thay,
+ * trong khi du lieu CU van hien ro -> de doc nham. Lop phu nay lam mo du lieu
+ * cu, chan thao tac, va noi ro dang cho.
+ *
+ * @param {string} sel   selector cua vung du lieu
+ * @param {boolean} on   bat/tat
+ * @param {string} text  chu hien duoi vong xoay
+ * @param {number} delay ms cho truoc khi hien (mac dinh 120ms) - tranh nhap
+ *                       nhay khi du lieu lay tu cache, ve gan nhu tuc thi
+ */
+const _busyTimers = new Map();
+function setBusy(sel, on, text = 'Đang tải dữ liệu…', delay = 120) {
+  const host = $(sel);
+  if (!host) return;
+  clearTimeout(_busyTimers.get(sel));
+  const paint = () => {
+    host.classList.add('busy-host', 'is-busy');
+    let ov = host.querySelector(':scope > .busy-overlay');
+    if (!ov) {
+      ov = document.createElement('div');
+      ov.className = 'busy-overlay';
+      ov.innerHTML = '<div class="spinner-lg"></div><div class="busy-text"></div>';
+      host.appendChild(ov);
+    }
+    ov.querySelector('.busy-text').textContent = text;
+  };
+  if (on) {
+    _busyTimers.set(sel, setTimeout(paint, delay));
+  } else {
+    host.classList.remove('is-busy');
+    const ov = host.querySelector(':scope > .busy-overlay');
+    if (ov) ov.remove();
+  }
+}
+
+/** Cham nhay tren nut tab dang tai (bao cao / tab chinh). */
+function setTabLoading(selector, name, on) {
+  $$(selector).forEach((b) => {
+    const mine = b.dataset.report === name || b.dataset.tab === name;
+    b.classList.toggle('loading', on && mine);
+  });
+}
 function showError(msg) {
   if (!msg) {
     $('#errorBox').classList.add('hidden');
@@ -902,6 +947,8 @@ async function loadDashboard() {
   const seq = ++dashLoadSeq;
   showError('');
   showLoading(true);
+  setBusy('#dashPane', true, 'Đang tải dữ liệu…');
+  setTabLoading('.mainTab', 'dashboard', true);
   $('#recalcNote').classList.add('hidden');
   try {
     const dash = await api('/api/dashboard');
@@ -949,6 +996,10 @@ async function loadDashboard() {
     showError(err.message);
   } finally {
     showLoading(false);
+    if (seq === dashLoadSeq) {
+      setBusy('#dashPane', false);
+      setTabLoading('.mainTab', 'dashboard', false);
+    }
   }
 }
 
@@ -1065,6 +1116,21 @@ async function loadReport(name) {
   $('#reportDesc').textContent = def.desc;
   $$('.reportTab').forEach((b) => b.classList.toggle('active', b.dataset.report === name));
 
+  // DON SACH du lieu cua bao cao TRUOC ngay lap tuc: neu de nguyen, nguoi dung
+  // se doc nham so lieu tab cu tuong la tab moi. Dat cot moi + rong du lieu ->
+  // thay dung khung bang cua bao cao sap toi (kieu "skeleton").
+  $('#reportCount').textContent = '';
+  $('#reportSearch').value = '';
+  const sumBoxEarly = $('#reportSummary');
+  if (sumBoxEarly) { sumBoxEarly.innerHTML = ''; sumBoxEarly.classList.add('hidden'); }
+  if (reportTable) {
+    reportTable.clearFilter(true);
+    reportTable.setColumns(withHeaderFilters(def.columns));
+    reportTable.replaceData([]);
+  }
+  setBusy('#reportPane', true);
+  setTabLoading('.reportTab', name, true);
+
   showError('');
   showLoading(true);
   try {
@@ -1117,10 +1183,7 @@ async function loadReport(name) {
             : `${n.toLocaleString('vi')}/${reportTotalRows.toLocaleString('vi')} dòng`;
       });
     } else {
-      // Xoa filter tim kiem cu (cua bao cao truoc) de khong loc nham het du lieu
-      reportTable.clearFilter(true);
-      $('#reportSearch').value = '';
-      reportTable.setColumns(withHeaderFilters(def.columns));
+      // Cot da duoc dat o dau ham (luc don sach du lieu cu)
       reportTable.replaceData(data.rows);
       reportTable.redraw(true); // dam bao ve lai day du sau khi tab vua duoc hien thi
     }
@@ -1128,6 +1191,10 @@ async function loadReport(name) {
     showError(err.message);
   } finally {
     showLoading(false);
+    if (seq === reportLoadSeq) {
+      setBusy('#reportPane', false);
+      setTabLoading('.reportTab', name, false);
+    }
   }
 }
 
@@ -1236,6 +1303,8 @@ async function loadPartLookup() {
   if (![...qs.keys()].length) { $('#partCount').textContent = 'Điền ít nhất 1 ô để tra cứu'; return; }
   showError('');
   showLoading(true);
+  setBusy('#partTable', true, 'Đang tra cứu…');
+  if (partTable) partTable.replaceData([]);   // don ket qua lan tra truoc
   try {
     const res = await fetch(`/api/part-onoff?${qs.toString()}`);
     const data = await res.json();
@@ -1270,6 +1339,7 @@ async function loadPartLookup() {
     showError(err.message);
   } finally {
     showLoading(false);
+    setBusy('#partTable', false);
   }
 }
 
