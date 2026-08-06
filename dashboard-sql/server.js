@@ -2114,6 +2114,194 @@ async function qRepairAdmin(range, f) {
     .slice(0, CONFIG.maxRows);
 }
 
+// ---------------------------------------------------------------------------
+// 5c. QUAN LY XUAT KHO (pickslip) - PICKSLIP_BOOKED x PICKSLIP_HEADER
+//     Don vi dem: SO DONG (line), khong phai so luong QTY.
+//     "Huy/tra": QTY_CANCELED > 0 (ke ca huy mot phan).
+//     Ky bao cao: theo PICKSLIP_DATE.
+// ---------------------------------------------------------------------------
+
+/**
+ * Do KIEU THAT cua mot cot ngay tren linked server (Date hay so ngay AMOS).
+ * KHONG doan: lay 1 gia tri that roi xem driver tra ve kieu gi.
+ * Da tung dinh loi nay o WO_PART_ON_OFF.CREATED_DATE (so ngay AMOS chu khong
+ * phai datetime - doc nham ra nam 1954), nen o day do truoc khi dung.
+ * Ket qua duoc cache theo tien trinh.
+ */
+const _dateKindCache = new Map();
+async function detectDateKind(fullTable, col) {
+  const key = `${fullTable}.${col}`;
+  if (_dateKindCache.has(key)) return _dateKindCache.get(key);
+  let kind = 'date';   // mac dinh an toan: coi la datetime
+  try {
+    const r = await query(`SELECT TOP 1 [${col}] AS v FROM ${fullTable} WHERE [${col}] IS NOT NULL`);
+    const v = r.length ? r[0].v : null;
+    if (v instanceof Date) kind = 'date';
+    else if (typeof v === 'number') kind = 'number';
+    else if (typeof v === 'string' && /^-?\d+(\.\d+)?$/.test(v.trim())) kind = 'number';
+    console.log(`[SCHEMA] ${key} -> ${kind}`);
+  } catch (e) {
+    console.warn(`[SCHEMA] Khong do duoc kieu cua ${key}, coi la datetime:`, e.message);
+  }
+  _dateKindCache.set(key, kind);
+  return kind;
+}
+
+/**
+ * Keo du lieu pickslip cua ky ve bang tam #ps roi tra ve cac manh SQL dung lai.
+ * LINKED SERVER: 2 bang AMOS duoc keo ve MOT LAN; SIGN chi duoc noi SAU do va
+ * bang LEFT JOIN (signJoin) - KHONG dung INNER JOIN nhu cau SQL goc, vi
+ * SIGN_CACHE co the KHONG TON TAI (tai khoan chi doc thi no tu tat) hoac thieu
+ * nhan vien -> INNER JOIN se lam BIEN MAT im lang toan bo phieu cua nguoi do.
+ */
+async function pickslipTemp(range, f) {
+  const kind = await detectDateKind('[DWH_DB]..[STG_AMOS].[PICKSLIP_HEADER]', 'PICKSLIP_DATE');
+  const col = 'h.[PICKSLIP_DATE]';
+  const periodWhere = kind === 'number'
+    ? `${col} >= @fromDay AND ${col} < @toDay`
+    : `${col} >= @from AND ${col} < @to`;
+  // Doi ve datetime de hien thi / gom theo ngay
+  const dateVN = kind === 'number'
+    ? `DATEADD(DAY, TRY_CONVERT(int, TRY_CONVERT(float, ${col})), TRY_CONVERT(datetime, @amosEpoch))`
+    : `TRY_CONVERT(datetime, ${col})`;
+
+  const pull = `
+    IF OBJECT_ID('tempdb..#ps') IS NOT NULL DROP TABLE #ps;
+    SELECT
+      RTRIM(p.[STATION])        AS station,
+      RTRIM(p.[STORE])          AS store,
+      RTRIM(p.[LOCATION_FROM])  AS location_from,
+      p.[PICKING_LISTNO_I]      AS picking_listno,
+      RTRIM(p.[PICKSLIPNO])     AS pickslipno,
+      p.[PICKSLIPSEQNO_I]       AS seqno,
+      RTRIM(p.[PARTNO])         AS partno,
+      ISNULL(LTRIM(RTRIM(p.[SERIALNO])), '') + ISNULL(LTRIM(RTRIM(p.[BATCHNO])), '') AS serialno,
+      p.[QTY_BOOKED]            AS qty_booked,
+      p.[QTY_CANCELED]          AS qty_canceled,
+      CASE WHEN TRY_CONVERT(float, p.[QTY_CANCELED]) > 0 THEN 1 ELSE 0 END AS is_cancel,
+      RTRIM(p.[OWNER])          AS owner,
+      RTRIM(p.[CREATED_BY])     AS created_by,
+      ${dateVN}                 AS pickslip_date,
+      RTRIM(h.[MECH_SIGN])      AS mech_sign,
+      RTRIM(h.[BOOKING_SIGN])   AS booking_sign,
+      RTRIM(h.[RECEIVER])       AS receiver,
+      RTRIM(h.[REMARKS])        AS remarks,
+      RTRIM(h.[PICKSLIP_TEXT])  AS pickslip_text
+    INTO #ps
+    FROM [DWH_DB]..[STG_AMOS].[PICKSLIP_BOOKED] p
+    JOIN [DWH_DB]..[STG_AMOS].[PICKSLIP_HEADER] h ON h.[PICKSLIPNO] = p.[PICKSLIPNO]
+    WHERE ${periodWhere};
+    CREATE INDEX IX_ps_mech ON #ps (mech_sign);`;
+
+  // Trung tam: SIGN theo MECH_SIGN (nguoi nhan hang), lui ve 'PA' - giong moi
+  // bao cao khac. LEFT JOIN nen khong the lam mat dong.
+  const dept = deptFromStaff('x.[mech_sign]', 'sm');
+  const join = `FROM #ps x ${signJoin('x.[mech_sign]', 'sm')}`;
+  return { pull, dept, join, drop: 'DROP TABLE #ps;' };
+}
+
+/** Bo loc station/store/department cho bang tam #ps. */
+function pickslipWhere(f, dept, params) {
+  let w = '';
+  if (f.station) { params.fStation = f.station; w += ' AND x.station = @fStation'; }
+  if (f.store) { params.fStore = f.store; w += ' AND x.store = @fStore'; }
+  if (f.department) { params.fDepartment = f.department; w += ` AND ${dept} = @fDepartment`; }
+  return w;
+}
+
+/**
+ * DU LIEU TAB "QUAN LY XUAT KHO": KPI + bieu do + bang chi tiet.
+ * Tat ca tinh tren #ps (da o local) nen nhieu phep gom cung chi ton 1 luot
+ * hoi linked server duy nhat.
+ */
+async function qPickslip(range, f) {
+  const params = { from: range.from, to: range.to, top: CONFIG.maxRows, ...amosDayParams(range) };
+  const { pull, dept, join, drop } = await pickslipTemp(range, f);
+  const w = pickslipWhere(f, dept, params);
+
+  const text = `${pull}
+
+    -- [0] KPI tong (don vi: SO DONG)
+    SELECT COUNT(*) AS so_dong,
+           SUM(x.is_cancel) AS so_dong_huy,
+           COUNT(DISTINCT x.pickslipno) AS so_phieu,
+           COUNT(DISTINCT CASE WHEN x.is_cancel = 1 THEN x.pickslipno END) AS so_phieu_co_huy
+    ${join} WHERE 1 = 1 ${w};
+
+    -- [1] Theo Trung tam
+    SELECT ${dept} AS department, COUNT(*) AS so_dong, SUM(x.is_cancel) AS so_dong_huy
+    ${join} WHERE 1 = 1 ${w}
+    GROUP BY ${dept};
+
+    -- [2] Theo NGAY (xu huong)
+    SELECT CAST(x.pickslip_date AS date) AS ngay,
+           COUNT(*) AS so_dong, SUM(x.is_cancel) AS so_dong_huy
+    ${join} WHERE x.pickslip_date IS NOT NULL ${w}
+    GROUP BY CAST(x.pickslip_date AS date)
+    ORDER BY CAST(x.pickslip_date AS date);
+
+    -- [3] Top Part No bi huy nhieu nhat
+    SELECT TOP 10 x.partno AS partno, COUNT(*) AS so_dong_huy
+    ${join} WHERE x.is_cancel = 1 ${w}
+    GROUP BY x.partno
+    ORDER BY COUNT(*) DESC;
+
+    -- [4] Bang chi tiet
+    SELECT TOP (@top)
+      x.station, x.store, x.location_from, x.picking_listno, x.pickslipno, x.seqno,
+      x.partno, x.serialno, x.qty_booked, x.qty_canceled, x.is_cancel,
+      x.owner, x.created_by, x.pickslip_date, x.mech_sign, x.booking_sign,
+      ${dept} AS department,
+      x.receiver, x.remarks, x.pickslip_text
+    ${join} WHERE 1 = 1 ${w}
+    ORDER BY x.pickslip_date DESC, x.pickslipno DESC;
+
+    ${drop}`;
+
+  const sets = await queryMulti(text, params);
+  const pick = (k) => sets.find((s) => s.length && k in s[0]) || [];
+  const kpi = (pick('so_phieu')[0]) || { so_dong: 0, so_dong_huy: 0, so_phieu: 0, so_phieu_co_huy: 0 };
+  const byDept = pick('department').filter((r) => 'so_dong_huy' in r && !('partno' in r));
+  const byDay = pick('ngay');
+  const topPart = pick('partno').filter((r) => 'so_dong_huy' in r && !('station' in r));
+  const rows = sets.find((s) => s.length && 'pickslipno' in s[0] && 'remarks' in s[0]) || [];
+
+  const pct = (a, b) => (b ? Math.round((a / b) * 1000) / 10 : 0);
+  const deptSorted = [...byDept].sort((a, b) => b.so_dong - a.so_dong);
+  return {
+    range: { from: range.from, to: range.to, label: range.label },
+    kpis: {
+      soDong: kpi.so_dong || 0,
+      soDongHuy: kpi.so_dong_huy || 0,
+      soDongThuc: (kpi.so_dong || 0) - (kpi.so_dong_huy || 0),
+      tyLeHuy: pct(kpi.so_dong_huy || 0, kpi.so_dong || 0),
+      soPhieu: kpi.so_phieu || 0,
+      soPhieuCoHuy: kpi.so_phieu_co_huy || 0,
+      tyLePhieuCoHuy: pct(kpi.so_phieu_co_huy || 0, kpi.so_phieu || 0),
+    },
+    charts: {
+      byDept: {
+        labels: deptSorted.map((r) => r.department),
+        thuc: deptSorted.map((r) => r.so_dong - r.so_dong_huy),
+        huy: deptSorted.map((r) => r.so_dong_huy),
+        tyLe: deptSorted.map((r) => pct(r.so_dong_huy, r.so_dong)),
+      },
+      byDay: {
+        labels: byDay.map((r) => (r.ngay instanceof Date ? r.ngay.toISOString().slice(0, 10) : String(r.ngay).slice(0, 10))),
+        soDong: byDay.map((r) => r.so_dong),
+        tyLe: byDay.map((r) => pct(r.so_dong_huy, r.so_dong)),
+      },
+      topPart: {
+        labels: topPart.map((r) => r.partno),
+        values: topPart.map((r) => r.so_dong_huy),
+      },
+    },
+    rows,
+    count: rows.length,
+    truncated: rows.length >= CONFIG.maxRows,
+  };
+}
+
 async function qOther(range, f) {
   const params = { from: range.from, to: range.to, top: CONFIG.maxRows };
   const dept = deptFromReal('r', 'sm');
@@ -4013,6 +4201,17 @@ app.get(
       };
     }));
     res.json({ series, months });
+  })
+);
+
+// --- QUAN LY XUAT KHO (pickslip): KPI + bieu do + bang chi tiet ---
+app.get(
+  '/api/pickslip',
+  cached(60 * 1000, async (req, res) => {
+    const range = resolveRange(req.query);
+    const f = readFilters(req.query);
+    if (CONFIG.demoMode) return res.json(DEMO.pickslip(range, f));
+    res.json(await qPickslip(range, f));
   })
 );
 

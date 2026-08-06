@@ -1283,17 +1283,228 @@ function switchTab(tab) {
   $$('.mainTab').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
   $('#tab-dashboard').classList.toggle('hidden', tab !== 'dashboard');
   $('#tab-reports').classList.toggle('hidden', tab !== 'reports');
+  $('#tab-pickslip').classList.toggle('hidden', tab !== 'pickslip');
   $('#tab-partlookup').classList.toggle('hidden', tab !== 'partlookup');
   if (tab === 'reports') {
     // LUON tai lai khi mo tab (cache lam viec nay re); tranh cap nhat bang khi
     // tab dang an (Tabulator ve rong neu container display:none).
     loadReport(state.currentReport);
+  } else if (tab === 'pickslip') {
+    loadPickslip();
   } else if (tab === 'partlookup') {
     if (partTable) partTable.redraw(true); // ve lai sau khi container hien thi
     $('#poPartno').focus();
   } else if (mainTable) {
     mainTable.redraw(true); // ve lai sau khi tab hien thi tro lai
   }
+}
+
+// --------------------------------------------------------------------------
+// 11c. Tab Quan ly xuat kho (pickslip) - KPI + 3 bieu do + bang chi tiet
+//      Don vi dem: SO DONG. "Huy" = QTY_CANCELED > 0. Ky theo PICKSLIP_DATE.
+// --------------------------------------------------------------------------
+let pickTable = null;
+let pickTotalRows = 0;
+let pickLoadSeq = 0;
+
+const COLS_PICKSLIP = [
+  { title: 'Ngày phiếu', field: 'pickslip_date', formatter: fmtDateCell },
+  { title: 'Pickslip', field: 'pickslipno', headerFilter: 'input' },
+  { title: 'Seq', field: 'seqno', formatter: fmtIntCell, hozAlign: 'right', width: 70 },
+  { title: 'Picking list', field: 'picking_listno', formatter: fmtIntCell, hozAlign: 'right', headerFilter: 'input' },
+  { title: 'Part No', field: 'partno', headerFilter: 'input' },
+  { title: 'Serial / Batch', field: 'serialno', headerFilter: 'input' },
+  { title: 'SL đặt', field: 'qty_booked', hozAlign: 'right', sorter: 'number', width: 85 },
+  {
+    title: 'SL hủy', field: 'qty_canceled', hozAlign: 'right', sorter: 'number', width: 85,
+    formatter: (cell) => {
+      const v = Number(cell.getValue()) || 0;
+      if (!v) return '<span style="color:var(--text-muted)">0</span>';
+      const c = cssVar('--warning');
+      return `<span class="tat-badge" style="background:${c}22;color:${c}">${v}</span>`;
+    },
+  },
+  { title: 'Station', field: 'station', headerFilter: 'input', width: 90 },
+  { title: 'Store', field: 'store', headerFilter: 'input', width: 100 },
+  { title: 'Vị trí lấy', field: 'location_from', headerFilter: 'input' },
+  { title: 'Center', field: 'department', headerFilter: 'input' },
+  { title: 'Mech sign', field: 'mech_sign', headerFilter: 'input' },
+  { title: 'Booking sign', field: 'booking_sign', headerFilter: 'input' },
+  { title: 'Receiver', field: 'receiver', headerFilter: 'input' },
+  { title: 'Owner', field: 'owner', headerFilter: 'input' },
+  { title: 'Người tạo', field: 'created_by', headerFilter: 'input' },
+  { title: 'Ghi chú', field: 'remarks', headerFilter: 'input', widthGrow: 2 },
+  { title: 'Nội dung phiếu', field: 'pickslip_text', headerFilter: 'input', widthGrow: 2 },
+];
+
+/** Bo loc cua bang xuat kho: o tich "Chi dong bi huy" VA o tim kiem.
+ *  Gop vao MOT ham vi Tabulator khong cho dat 2 ham loc chong nhau. */
+function pickCancelFilter(row) {
+  if ($('#pickOnlyCancel').checked && !(Number(row.qty_canceled) > 0)) return false;
+  const q = ($('#pickSearch').value || '').trim().toLowerCase();
+  if (!q) return true;
+  return Object.values(row).some((v) => String(v ?? '').toLowerCase().includes(q));
+}
+
+function renderPickKpis(k) {
+  const cards = [
+    { label: 'Số dòng xuất', value: k.soDong, unit: 'dòng', accent: '--series-1' },
+    { label: 'Thực xuất', value: k.soDongThuc, unit: 'dòng', accent: '--good' },
+    { label: 'Dòng bị hủy', value: k.soDongHuy, unit: 'dòng', accent: '--warning' },
+    { label: 'Tỷ lệ hủy', value: k.tyLeHuy, unit: '%', accent: '--critical' },
+    { label: 'Số phiếu', value: k.soPhieu, unit: 'phiếu', accent: '--series-4' },
+    { label: 'Phiếu có hủy', value: `${k.soPhieuCoHuy} (${k.tyLePhieuCoHuy}%)`, unit: '', accent: '--series-3' },
+  ];
+  $('#pickKpi').innerHTML = cards.map((c) => `
+    <div class="kpi-card" style="border-left-color: var(${c.accent})">
+      <div class="kpi-label">${c.label}</div>
+      <div class="kpi-value">${c.value} <span class="kpi-unit">${c.unit}</span></div>
+    </div>`).join('');
+}
+
+function renderPickCharts(c) {
+  const d = chartDefaults();
+
+  destroyChart('pickDept');
+  charts.pickDept = new Chart($('#chartPickDept'), {
+    type: 'bar',
+    data: {
+      labels: c.byDept.labels,
+      datasets: [
+        { label: 'Thực xuất', data: c.byDept.thuc, backgroundColor: cssVar('--good') },
+        { label: 'Hủy', data: c.byDept.huy, backgroundColor: cssVar('--warning'), borderRadius: 4 },
+      ],
+    },
+    options: {
+      ...d.common,
+      interaction: { mode: 'index', intersect: false },
+      scales: {
+        x: { ...d.common.scales.x, stacked: true },
+        y: { ...d.common.scales.y, stacked: true, grace: '8%' },
+      },
+      plugins: {
+        ...d.common.plugins,
+        tooltip: {
+          mode: 'index', intersect: false,
+          callbacks: {
+            footer: (items) => {
+              const i = items[0].dataIndex;
+              const t = items.reduce((s, it) => s + (Number(it.parsed.y) || 0), 0);
+              return `Tổng: ${t} dòng · Tỷ lệ hủy: ${c.byDept.tyLe[i]}%`;
+            },
+          },
+        },
+      },
+      onClick: chartDrill(c.byDept.labels, 'department'),
+    },
+    plugins: [segmentValueLabel, stackTotalLabel],
+  });
+
+  destroyChart('pickDay');
+  charts.pickDay = new Chart($('#chartPickDay'), {
+    type: 'bar',
+    data: {
+      labels: c.byDay.labels,
+      datasets: [
+        { type: 'bar', label: 'Số dòng', data: c.byDay.soDong, backgroundColor: cssVar('--series-1'), borderRadius: 3, yAxisID: 'y' },
+        {
+          type: 'line', label: '% hủy', data: c.byDay.tyLe, yAxisID: 'y1',
+          borderColor: cssVar('--warning'), backgroundColor: cssVar('--warning'),
+          borderWidth: 2, tension: .25, pointRadius: 2,
+        },
+      ],
+    },
+    options: {
+      ...d.common,
+      interaction: { mode: 'index', intersect: false },
+      scales: {
+        x: d.common.scales.x,
+        y: { ...d.common.scales.y, title: { display: true, text: 'Số dòng', color: cssVar('--text-secondary') } },
+        y1: {
+          position: 'right', beginAtZero: true, grid: { drawOnChartArea: false },
+          ticks: { color: cssVar('--text-secondary'), callback: (v) => v + '%' },
+          title: { display: true, text: '% hủy', color: cssVar('--text-secondary') },
+        },
+      },
+    },
+  });
+
+  destroyChart('pickPart');
+  charts.pickPart = new Chart($('#chartPickPart'), {
+    type: 'bar',
+    data: {
+      labels: c.topPart.labels,
+      datasets: [{ label: 'Số dòng bị hủy', data: c.topPart.values, backgroundColor: cssVar('--warning'), borderRadius: 4 }],
+    },
+    options: {
+      ...d.common,
+      indexAxis: 'y',
+      plugins: { ...d.common.plugins, legend: { display: false } },
+      scales: { x: { ...d.common.scales.y, beginAtZero: true }, y: d.common.scales.x },
+    },
+  });
+}
+
+async function loadPickslip() {
+  const seq = ++pickLoadSeq;
+  showError('');
+  showLoading(true);
+  setBusy('#pickPane', true);
+  setTabLoading('.mainTab', 'pickslip', true);
+  try {
+    const data = await api('/api/pickslip');
+    if (seq !== pickLoadSeq) return;
+    $('#rangeLabel').textContent = `${data.range.label}: ${fmtDateTime(data.range.from)} → ${fmtRangeEnd(data.range.to)}`;
+    renderPickKpis(data.kpis);
+    renderPickCharts(data.charts);
+    $('#pickDesc').textContent =
+      'PICKSLIP_BOOKED × PICKSLIP_HEADER. Kỳ tính theo PICKSLIP_DATE; đơn vị đếm là SỐ DÒNG; '
+      + '“hủy” là dòng có QTY_CANCELED > 0 (kể cả hủy một phần).';
+    pickTotalRows = data.count;
+    $('#pickCount').textContent =
+      `${data.count.toLocaleString('vi')} dòng` + (data.truncated ? ' ⚠ chạm giới hạn MAX_ROWS' : '');
+    if (!pickTable) {
+      pickTable = new Tabulator('#pickTable', {
+        data: data.rows,
+        columns: withHeaderFilters(COLS_PICKSLIP),
+        layout: 'fitDataFill',
+        pagination: false,
+        placeholder: 'Không có dữ liệu',
+        height: '600px',
+      });
+      pickTable.on('dataFiltered', (filters, rowsFiltered) => {
+        const n = rowsFiltered.length;
+        $('#pickCount').textContent = n === pickTotalRows
+          ? `${pickTotalRows.toLocaleString('vi')} dòng`
+          : `${n.toLocaleString('vi')}/${pickTotalRows.toLocaleString('vi')} dòng`;
+      });
+    } else {
+      pickTable.replaceData(data.rows);
+      pickTable.redraw(true);
+    }
+    pickTable.setFilter(pickCancelFilter);
+  } catch (err) {
+    showError(err.message);
+  } finally {
+    showLoading(false);
+    if (seq === pickLoadSeq) {
+      setBusy('#pickPane', false);
+      setTabLoading('.mainTab', 'pickslip', false);
+    }
+  }
+}
+
+function initPickslip() {
+  $('#pickOnlyCancel').addEventListener('change', () => {
+    if (pickTable) pickTable.setFilter(pickCancelFilter);
+  });
+  // Tabulator khong ghep duoc 2 ham loc -> gop CA HAI dieu kien vao mot ham
+  $('#pickSearch').addEventListener('input', () => {
+    if (pickTable) pickTable.setFilter(pickCancelFilter);
+  });
+  $('#pickExport').addEventListener('click', () => {
+    if (pickTable) pickTable.download('xlsx', `XuatKho_${Date.now()}.xlsx`, { sheetName: 'XuatKho' });
+  });
 }
 
 // --------------------------------------------------------------------------
@@ -1521,6 +1732,7 @@ async function init() {
   initTheme();
   initChat();
   initPartLookup();
+  initPickslip();
   checkHealth();
   await loadFilters(); // doi nap xong option roi moi khoi phuc gia tri da luu
   $('#stationSelect').value = state.station;

@@ -612,6 +612,95 @@ function repairAdmin(range, f) {
       || (b.age_days ?? -1) - (a.age_days ?? -1));
 }
 
+// --- QUAN LY XUAT KHO (pickslip) ---------------------------------------------
+function pickslip(range, f) {
+  const rows = [];
+  const n = 260;
+  for (let i = 0; i < n; i++) {
+    const d = baseDevice(i);
+    const huy = rndInt(0, 9) < 2;           // ~20% dong bi huy
+    const qtyB = rndInt(1, 8);
+    rows.push({
+      station: d.station,
+      store: d.store,
+      location_from: rnd(['A01', 'B12', 'SHOPLOC', 'HANSTORE', 'SGNSTORE']),
+      picking_listno: rndInt(100000, 999999),
+      pickslipno: 'P-' + rndInt(300000, 399999),
+      seqno: rndInt(1, 20),
+      partno: d.partno,
+      serialno: d.serialno,
+      qty_booked: qtyB,
+      qty_canceled: huy ? rndInt(1, qtyB) : 0,
+      is_cancel: huy ? 1 : 0,
+      owner: rnd(['VNA', 'VAECO', '']),
+      created_by: d.staff,
+      pickslip_date: rndDate(range.from, range.to).toISOString(),
+      mech_sign: d.staff,
+      booking_sign: 'VAE' + rndInt(10000, 99999),
+      department: rnd(DEPARTMENTS),
+      receiver: rnd(RECEIVERS),
+      remarks: huy ? rnd(['Sai part', 'Khong du hang', 'Doi phuong an', '']) : '',
+      pickslip_text: rnd(['', 'AOG', 'Routine']),
+    });
+  }
+  const kept = applyFilter(rows, f);
+  const pct = (a, b) => (b ? Math.round((a / b) * 1000) / 10 : 0);
+  const soDongHuy = kept.filter((r) => r.is_cancel).length;
+  const phieu = new Set(kept.map((r) => r.pickslipno));
+  const phieuHuy = new Set(kept.filter((r) => r.is_cancel).map((r) => r.pickslipno));
+
+  const g = new Map();
+  kept.forEach((r) => {
+    const k = r.department || 'PA';
+    const x = g.get(k) || { department: k, so_dong: 0, so_dong_huy: 0 };
+    x.so_dong++; if (r.is_cancel) x.so_dong_huy++;
+    g.set(k, x);
+  });
+  const byDept = [...g.values()].sort((a, b) => b.so_dong - a.so_dong);
+
+  const dm = new Map();
+  kept.forEach((r) => {
+    const k = r.pickslip_date.slice(0, 10);
+    const x = dm.get(k) || { ngay: k, so_dong: 0, so_dong_huy: 0 };
+    x.so_dong++; if (r.is_cancel) x.so_dong_huy++;
+    dm.set(k, x);
+  });
+  const byDay = [...dm.values()].sort((a, b) => a.ngay.localeCompare(b.ngay));
+
+  const pm = new Map();
+  kept.filter((r) => r.is_cancel).forEach((r) => pm.set(r.partno, (pm.get(r.partno) || 0) + 1));
+  const topPart = [...pm.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
+
+  return {
+    range: { from: range.from, to: range.to, label: range.label },
+    kpis: {
+      soDong: kept.length,
+      soDongHuy,
+      soDongThuc: kept.length - soDongHuy,
+      tyLeHuy: pct(soDongHuy, kept.length),
+      soPhieu: phieu.size,
+      soPhieuCoHuy: phieuHuy.size,
+      tyLePhieuCoHuy: pct(phieuHuy.size, phieu.size),
+    },
+    charts: {
+      byDept: {
+        labels: byDept.map((r) => r.department),
+        thuc: byDept.map((r) => r.so_dong - r.so_dong_huy),
+        huy: byDept.map((r) => r.so_dong_huy),
+        tyLe: byDept.map((r) => pct(r.so_dong_huy, r.so_dong)),
+      },
+      byDay: {
+        labels: byDay.map((r) => r.ngay),
+        soDong: byDay.map((r) => r.so_dong),
+        tyLe: byDay.map((r) => pct(r.so_dong_huy, r.so_dong)),
+      },
+      topPart: { labels: topPart.map((x) => x[0]), values: topPart.map((x) => x[1]) },
+    },
+    rows: kept,
+    count: kept.length,
+  };
+}
+
 module.exports = {
   filters,
   manualPairCandidates,
@@ -630,4 +719,5 @@ module.exports = {
   removedBeforeInstalled,
   other,
   repairAdmin,
+  pickslip,
 };
