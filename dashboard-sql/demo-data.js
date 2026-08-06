@@ -616,6 +616,12 @@ function repairAdmin(range, f) {
 function pickslip(range, f) {
   const rows = [];
   const n = 260;
+  // Thuc te MOT picking list gom NHIEU dong -> tao san mot ro phieu de nhieu
+  // dong dung chung. Trang thai scan gan THEO PHIEU (mot phieu = mot file PDF).
+  const plPool = [];
+  for (let i = 0; i < 70; i++) {
+    plPool.push({ no: rndInt(100000, 999999), scan: rndInt(0, 9) < 7 ? 'SCANNED' : 'CHUA_SCAN' });
+  }
   for (let i = 0; i < n; i++) {
     const d = baseDevice(i);
     const r = rndInt(0, 9);
@@ -626,7 +632,7 @@ function pickslip(range, f) {
       station: d.station,
       store: d.store,
       location_from: rnd(['A01', 'B12', 'SHOPLOC', 'HANSTORE', 'SGNSTORE']),
-      picking_listno: rndInt(100000, 999999),
+      picking_listno: 0, // gan o vong duoi (theo ro phieu plPool)
       pickslipno: 'P-' + rndInt(300000, 399999),
       seqno: rndInt(1, 20),
       partno: d.partno,
@@ -649,7 +655,10 @@ function pickslip(range, f) {
   }
   // Doi chieu file scan + phieu tra + TAT return (demo: sinh ngau nhien)
   rows.forEach((r) => {
-    r.scan = rndInt(0, 9) < 7 ? 'SCANNED' : 'CHUA_SCAN';
+    const pl = rnd(plPool);
+    r.picking_listno = pl.no;
+    r.scan = pl.scan; // moi dong cung phieu PHAI cung trang thai scan
+
     r.return_no = '';
     r.return_date = null;
     r.tat_return = null;
@@ -693,8 +702,16 @@ function pickslip(range, f) {
   kept.filter((r) => r.is_cancel).forEach((r) => pm.set(r.partno, (pm.get(r.partno) || 0) + 1));
   const topPart = [...pm.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
 
-  const daScan = kept.filter((r) => r.scan === 'SCANNED').length;
-  const chuaScan = kept.filter((r) => r.scan === 'CHUA_SCAN').length;
+  // Dem scan theo PHIEU (distinct picking list) - giong server that
+  const plScan = new Map();
+  kept.forEach((r) => plScan.set(String(r.picking_listno), r.scan));
+  const daScan = [...plScan.values()].filter((v) => v === 'SCANNED').length;
+  const chuaScan = [...plScan.values()].filter((v) => v === 'CHUA_SCAN').length;
+  const daScanDong = kept.filter((r) => r.scan === 'SCANNED').length;
+  const chuaScanDong = kept.filter((r) => r.scan === 'CHUA_SCAN').length;
+  const retScan = new Map();
+  kept.filter((r) => r.return_no && r.return_no !== 'NOT FOUND')
+    .forEach((r) => retScan.set(r.return_no, r.return_scan));
   const retOk = kept.filter((r) => r.loai === 'RETURN' && r.tat_return !== null);
   const tats = retOk.map((r) => r.tat_return);
   const TB = [
@@ -720,13 +737,15 @@ function pickslip(range, f) {
       soPhieuCoHuy: phieuHuy.size,
       tyLePhieuCoHuy: pct(phieuHuy.size, phieu.size),
       daScan, chuaScan,
+      tongPhieuScan: daScan + chuaScan,
       tyLeScan: pct(daScan, daScan + chuaScan),
+      daScanDong, chuaScanDong,
       returnCoPhieu: kept.filter((r) => r.loai === 'RETURN' && r.return_no && r.return_no !== 'NOT FOUND').length,
       returnKhongPhieu: kept.filter((r) => r.return_no === 'NOT FOUND').length,
       tatReturnAvg: tats.length ? Math.round((tats.reduce((a, b) => a + b, 0) / tats.length) * 10) / 10 : null,
       tatReturnMax: tats.length ? Math.max(...tats) : null,
-      returnDaScan: kept.filter((r) => r.return_scan === 'SCANNED').length,
-      returnChuaScan: kept.filter((r) => r.return_scan === 'CHUA_SCAN').length,
+      returnDaScan: [...retScan.values()].filter((v) => v === 'SCANNED').length,
+      returnChuaScan: [...retScan.values()].filter((v) => v === 'CHUA_SCAN').length,
     },
     scanFolder: { dir: '(DEMO) \\\\10.99.7.7\\picking list\\2026', ok: true, count: 1234, error: '', ms: 5 },
     charts: {
@@ -754,6 +773,11 @@ function pickslip(range, f) {
 function receiving(range, f) {
   const rows = [];
   const n = 320;
+  // Mot VOUCHER gom nhieu dong; trang thai scan gan THEO VOUCHER.
+  const vcPool = [];
+  for (let i = 0; i < 90; i++) {
+    vcPool.push({ no: 'R-' + rndInt(200000, 299999), scan: rndInt(0, 9) < 7 ? 'SCANNED' : 'CHUA_SCAN' });
+  }
   for (let i = 0; i < n; i++) {
     const d = baseDevice(i);
     const del = rndDate(range.from, range.to);
@@ -761,7 +785,7 @@ function receiving(range, f) {
       station: d.station,
       store: d.store,
       location: rnd(['A01', 'B12', 'LG3', 'RACK-7', 'QUAR']),
-      voucherno: 'R-' + rndInt(200000, 299999),
+      voucherno: '', // gan o vong duoi (theo ro voucher vcPool)
       partno: d.partno,
       serialno: d.serialno,
       batchno: '',
@@ -781,17 +805,24 @@ function receiving(range, f) {
       recdetailno: rndInt(500000, 599999),
     });
   }
-  const kept = applyFilter(rows, f);
-  kept.forEach((r) => {
-    r.voucher_scan = r.voucherno.replace(/^R-/i, '');
-    r.scan = rndInt(0, 9) < 7 ? 'SCANNED' : 'CHUA_SCAN';
+  rows.forEach((r) => {
+    const v = rnd(vcPool);
+    r.voucherno = v.no;
+    r.voucher_scan = v.no.replace(/^R-/i, '');
+    r.scan = v.scan; // moi dong cung voucher PHAI cung trang thai scan
   });
+  const kept = applyFilter(rows, f);
   const pct = (a, b) => (b ? Math.round((a / b) * 1000) / 10 : 0);
-  const daScan = kept.filter((r) => r.scan === 'SCANNED').length;
-  const chuaScan = kept.length - daScan;
+  // Dem scan theo PHIEU (distinct voucher) - giong server that
+  const vc = new Map();
+  kept.forEach((r) => vc.set(r.voucherno, r));
+  const daScan = [...vc.values()].filter((r) => r.scan === 'SCANNED').length;
+  const chuaScan = vc.size - daScan;
+  const daScanDong = kept.filter((r) => r.scan === 'SCANNED').length;
+  const chuaScanDong = kept.length - daScanDong;
 
   const g = new Map();
-  kept.forEach((r) => {
+  [...vc.values()].forEach((r) => {
     const k = r.department || 'PA';
     const x = g.get(k) || { k, daScan: 0, chuaScan: 0, tong: 0 };
     x.tong++; if (r.scan === 'SCANNED') x.daScan++; else x.chuaScan++;
@@ -815,7 +846,9 @@ function receiving(range, f) {
       crHuy: 24,
       b1BiHuy: 24,
       daScan, chuaScan,
-      tyLeScan: pct(daScan, kept.length),
+      tongPhieuScan: vc.size,
+      tyLeScan: pct(daScan, vc.size),
+      daScanDong, chuaScanDong,
     },
     scanFolder: { dir: '(DEMO) \\\\10.99.7.7\\certificates\\2026', ok: true, count: 987, error: '', ms: 4 },
     charts: {

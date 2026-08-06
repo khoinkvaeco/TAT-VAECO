@@ -1579,16 +1579,21 @@ function renderPickKpis(k) {
     { label: 'Tỷ lệ hủy/trả', value: k.tyLeHuy, unit: '%', accent: '--critical' },
     { label: 'Phiếu có hủy/trả', value: `${k.soPhieuCoHuy}/${k.soPhieu}`, unit: `(${k.tyLePhieuCoHuy}%)`, accent: '--series-3' },
     {
-      label: 'Đã scan', value: n(k.daScan), unit: `dòng (${k.tyLeScan ?? 0}%)`, accent: '--good',
-      title: 'Có file PDF picking list trong thư mục scan.',
+      label: 'Đã scan', value: `${n(k.daScan)}/${n(k.tongPhieuScan)}`, unit: `phiếu (${k.tyLeScan ?? 0}%)`,
+      accent: (k.chuaScan === 0 && k.tongPhieuScan > 0) ? '--good' : '--warning',
+      title: 'Số PICKING LIST đã có file PDF trong thư mục scan, tính trên TOÀN KỲ '
+        + '(không phụ thuộc bảng chi tiết bên dưới — bảng đó bị cắt ở MAX_ROWS). '
+        + 'Yêu cầu nghiệp vụ: phải đạt 100%.',
     },
     {
-      label: 'Chưa scan', value: n(k.chuaScan), unit: 'dòng', accent: '--critical',
-      title: 'Không tìm thấy file PDF picking list tương ứng trong thư mục scan.',
+      label: 'Chưa scan', value: n(k.chuaScan), unit: 'phiếu', accent: k.chuaScan ? '--critical' : '--good',
+      title: 'Số PICKING LIST chưa tìm thấy file PDF. Đếm theo PHIẾU (một phiếu nhiều dòng '
+        + 'chỉ cần một file), tính trên toàn kỳ. Đây là số file thực sự còn phải scan.',
     },
     {
       label: 'TAT return TB', value: n(k.tatReturnAvg), unit: 'ngày', accent: '--series-2',
-      title: 'Trung bình số ngày từ khi xuất kho đến khi trả về kho (chỉ tính dòng Return đã tìm được phiếu nhập lại).',
+      title: 'Trung bình số ngày từ khi xuất kho đến khi trả về kho — tính trên TOÀN KỲ, '
+        + 'chỉ gồm dòng Return đã tra được phiếu nhập lại.',
     },
     {
       label: 'TAT return lâu nhất', value: n(k.tatReturnMax), unit: 'ngày', accent: '--warning',
@@ -1597,11 +1602,14 @@ function renderPickKpis(k) {
     {
       label: 'Return có phiếu trả', value: `${n(k.returnCoPhieu)}/${(k.returnCoPhieu || 0) + (k.returnKhongPhieu || 0)}`,
       unit: 'dòng', accent: '--series-4',
-      title: 'Số dòng Return đã tìm được phiếu nhập lại kho trong HISTORY (VM ∈ EA, TC).',
+      title: 'Số dòng Return tra được số phiếu nhập lại kho trong HISTORY (VM ∈ EA, TC), toàn kỳ. '
+        + 'Không tra được thì cột "Phiếu trả" ghi NOT FOUND — khi đó không kiểm được scan của phiếu trả.',
     },
     {
-      label: 'Phiếu trả chưa scan', value: n(k.returnChuaScan), unit: 'dòng', accent: '--critical',
-      title: 'Phiếu nhập lại kho chưa có file PDF <HISTORYNO_I> trong thư mục scan.',
+      label: 'Phiếu trả chưa scan', value: n(k.returnChuaScan), unit: 'phiếu',
+      accent: k.returnChuaScan ? '--critical' : '--good',
+      title: 'Số phiếu nhập lại kho (HISTORYNO_I) chưa có file PDF trong thư mục scan. '
+        + 'Đếm theo phiếu, toàn kỳ.',
     },
   ]);
 }
@@ -1742,7 +1750,9 @@ async function loadPickslip() {
       'PICKSLIP_BOOKED × PICKSLIP_HEADER. Kỳ theo PICKSLIP_DATE (ngày AMOS); đơn vị đếm là SỐ DÒNG. '
       + 'Cancel / Return phân biệt bằng ĐUÔI của PICKSLIP_TEXT (…cancel · …cancel booking · …return) kèm QTY_CANCELED ≠ 0. '
       + 'Đã áp bộ lọc nghiệp vụ: QTY_BOOKED ≠ 0, STATUS ∉ {1, 11}, LOCATION_FROM không chứa “U/S”, STORE thuộc MAIN/VNA. '
-      + 'Cột Scan đối chiếu file PDF trong thư mục scan; TAT return = số ngày từ ngày xuất kho đến ngày trả về kho (HISTORY, VM ∈ EA/TC).';
+      + 'Cột Scan đối chiếu file PDF trong thư mục scan; TAT return = số ngày từ ngày xuất kho đến ngày trả về kho (HISTORY, VM ∈ EA/TC). '
+      + '⚠ Thẻ KPI “Đã scan / Chưa scan” đếm theo PHIẾU (một picking list nhiều dòng chỉ cần một file) và tính trên TOÀN KỲ; '
+      + 'bảng chi tiết bên dưới đếm theo DÒNG và bị cắt ở MAX_ROWS, nên hai con số không nhất thiết bằng nhau.';
     pickTotalRows = data.count;
     $('#pickCount').textContent =
       `${data.count.toLocaleString('vi')} dòng` + (data.truncated ? ' ⚠ chạm giới hạn MAX_ROWS' : '');
@@ -1842,12 +1852,16 @@ function renderRecvKpis(k) {
     { label: 'Dòng nhập kho', value: k.soDong, unit: 'dòng', accent: '--series-1' },
     { label: 'Số voucher', value: k.soPhieu, unit: 'phiếu', accent: '--series-3' },
     {
-      label: 'Đã scan', value: k.daScan, unit: `dòng (${k.tyLeScan ?? 0}%)`, accent: '--good',
-      title: 'Đã có file PDF trùng VOUCHERNO trong thư mục scan.',
+      label: 'Đã scan', value: `${k.daScan}/${k.tongPhieuScan}`, unit: `phiếu (${k.tyLeScan ?? 0}%)`,
+      accent: (k.chuaScan === 0 && k.tongPhieuScan > 0) ? '--good' : '--warning',
+      title: 'Số VOUCHER đã có file PDF trong thư mục scan, tính trên TOÀN KỲ '
+        + '(không phụ thuộc bảng chi tiết bên dưới — bảng đó bị cắt ở MAX_ROWS). '
+        + 'Yêu cầu nghiệp vụ: phải đạt 100%.',
     },
     {
-      label: 'Chưa scan', value: k.chuaScan, unit: 'dòng', accent: '--critical',
-      title: 'Chưa tìm thấy file PDF trùng VOUCHERNO trong thư mục scan.',
+      label: 'Chưa scan', value: k.chuaScan, unit: 'phiếu', accent: k.chuaScan ? '--critical' : '--good',
+      title: 'Số VOUCHER chưa tìm thấy file PDF. Đếm theo PHIẾU (một voucher nhiều dòng '
+        + 'chỉ cần một file), tính trên toàn kỳ. Đây là số file thực sự còn phải scan.',
     },
     {
       label: 'Phiếu bị hủy nhập', value: k.b1BiHuy, unit: 'dòng', accent: '--warning',
@@ -1918,7 +1932,9 @@ async function loadReceiving() {
       + 'Đã LOẠI các dòng B1 có RECDETAILNO_I trùng với dòng VM = CR (phiếu nhập đã bị hủy). '
       + 'Bộ lọc: STATION chứa station đang chọn, CONDITION không chứa “us”, STORE thuộc MAIN/VNA, '
       + 'loại riêng STORE = MAIN có LOCATION là SHOPLOC hoặc LG5. '
-      + 'Cột Scan đối chiếu file <VOUCHERNO>.pdf trong thư mục scan (VOUCHERNO đã bỏ tiền tố “R-”).';
+      + 'Cột Scan đối chiếu file <VOUCHERNO>.pdf trong thư mục scan (VOUCHERNO đã bỏ tiền tố “R-”). '
+      + '⚠ Thẻ KPI và biểu đồ “Đã scan / Chưa scan” đếm theo PHIẾU (voucher) và tính trên TOÀN KỲ; '
+      + 'bảng chi tiết bên dưới đếm theo DÒNG và bị cắt ở MAX_ROWS.';
     recvTotalRows = data.count;
     $('#recvCount').textContent =
       `${data.count.toLocaleString('vi')} dòng` + (data.truncated ? ' ⚠ chạm giới hạn MAX_ROWS' : '');

@@ -2444,28 +2444,80 @@ const TAT_RETURN_BUCKETS = [
  *   - return_date : ngay tra ve kho thuc te
  *   - tat_return  : SO NGAY tu ngay xuat kho (PICKSLIP_DATE) den ngay tra ve kho
  *   - return_scan : phieu tra da scan hay chua (cung thu muc picking list)
- * Chi cac dong loai 'RETURN' moi hoi HISTORY.
+ *
+ * DEM SCAN THEO **PHIEU**, TREN **TOAN KY** - khong dem theo dong va khong dem
+ * tren `rows`. Hai ly do (nghiep vu yeu cau scan phai dat 100% nen so nay phai
+ * dung tuyet doi):
+ *   1. Mot picking list co NHIEU DONG. Dem theo dong thi mot phieu 50 dong chua
+ *      scan hien thanh "50 chua scan", trong khi thuc te chi la 1 file can scan.
+ *   2. `rows` da bi cat con TOP(MAX_ROWS). Ky lon thi cac phieu chua scan nam
+ *      ngoai phan bi cat se BIEN MAT khoi KPI -> co the hien 100% trong khi thuc
+ *      te van con thieu.
+ * Vi vay danh sach phieu (`allPicking`) va danh sach dong Return (`allReturns`)
+ * duoc lay RIENG bang SELECT DISTINCT tren #ps cho ca ky - danh sach nay nho
+ * hon nhieu so voi bang chi tiet nen khong ton them dang ke.
+ *
+ * @param rows        bang chi tiet (da cat TOP) - chi dung de gan cot hien thi
+ * @param allPicking  [{ pl_all }]              - phieu xuat DISTINCT ca ky
+ * @param allReturns  [{ seq_ret, ngay_xuat }]  - dong Return DISTINCT ca ky
  */
-async function enrichPickslipRows(rows) {
+async function enrichPickslipRows(rows, allPicking = [], allReturns = []) {
   const dirs = loadScanDirs();
   const folder = await readScanFolder(dirs.picking, 'prefix');
 
-  const retRows = rows.filter((r) => r.loai === 'RETURN');
-  const hist = retRows.length ? await fetchReturnHistory(retRows.map((r) => r.seqno)) : new Map();
+  // Hoi HISTORY cho TOAN BO dong Return cua ky (khong chi phan hien tren bang)
+  const hist = allReturns.length
+    ? await fetchReturnHistory(allReturns.map((r) => r.seq_ret))
+    : new Map();
 
   const st = {
-    daScan: 0, chuaScan: 0,
+    daScan: 0, chuaScan: 0, tongPhieu: 0,
+    daScanDong: 0, chuaScanDong: 0,
     returnCoPhieu: 0, returnKhongPhieu: 0,
     returnDaScan: 0, returnChuaScan: 0,
     tatReturnAvg: null, tatReturnMax: null,
   };
+
+  // --- (1) Scan phieu xuat: dem theo PHIEU, ca ky ---
+  for (const p of allPicking) {
+    const s = scanState(folder, idStr(p.pl_all));
+    if (s === 'SCANNED') st.daScan += 1;
+    else if (s === 'CHUA_SCAN') st.chuaScan += 1;
+  }
+  st.tongPhieu = st.daScan + st.chuaScan;
+
+  // --- (2) Phieu tra + TAT return: cung tinh tren TOAN KY ---
   const tats = [];
   const buckets = TAT_RETURN_BUCKETS.map(() => 0);
+  const retScanDone = new Set(); // moi phieu tra chi dem MOT lan
+  for (const r of allReturns) {
+    const h = hist.get(idStr(r.seq_ret));
+    if (!h) { st.returnKhongPhieu += 1; continue; }
+    st.returnCoPhieu += 1;
+    const base = idStr(h.historyno);
+    if (!retScanDone.has(base)) {
+      retScanDone.add(base);
+      const s = scanState(folder, base);
+      if (s === 'SCANNED') st.returnDaScan += 1;
+      else if (s === 'CHUA_SCAN') st.returnChuaScan += 1;
+    }
+    const d = dayDiff(r.ngay_xuat, h.return_date);
+    if (d !== null) {
+      tats.push(d);
+      const bi = TAT_RETURN_BUCKETS.findIndex((b) => d >= b.min && d <= b.max);
+      if (bi >= 0) buckets[bi] += 1;
+    }
+  }
+  if (tats.length) {
+    st.tatReturnAvg = Math.round((tats.reduce((a, b) => a + b, 0) / tats.length) * 10) / 10;
+    st.tatReturnMax = Math.max(...tats);
+  }
 
+  // --- (3) Gan cot hien thi cho tung dong cua bang chi tiet ---
   for (const r of rows) {
     r.scan = scanState(folder, idStr(r.picking_listno));
-    if (r.scan === 'SCANNED') st.daScan += 1;
-    else if (r.scan === 'CHUA_SCAN') st.chuaScan += 1;
+    if (r.scan === 'SCANNED') st.daScanDong += 1;
+    else if (r.scan === 'CHUA_SCAN') st.chuaScanDong += 1;
 
     r.return_no = '';
     r.return_date = null;
@@ -2474,27 +2526,12 @@ async function enrichPickslipRows(rows) {
     if (r.loai !== 'RETURN') continue;
 
     const h = hist.get(idStr(r.seqno));
-    if (!h) { st.returnKhongPhieu += 1; r.return_no = 'NOT FOUND'; continue; }
-    st.returnCoPhieu += 1;
+    if (!h) { r.return_no = 'NOT FOUND'; continue; }
     const base = idStr(h.historyno);
     r.return_no = base + '-R';
     r.return_date = h.return_date;
     r.return_scan = scanState(folder, base);
-    if (r.return_scan === 'SCANNED') st.returnDaScan += 1;
-    else if (r.return_scan === 'CHUA_SCAN') st.returnChuaScan += 1;
-
-    const d = dayDiff(r.pickslip_date, h.return_date);
-    if (d !== null) {
-      r.tat_return = d;
-      tats.push(d);
-      const bi = TAT_RETURN_BUCKETS.findIndex((b) => d >= b.min && d <= b.max);
-      if (bi >= 0) buckets[bi] += 1;
-    }
-  }
-
-  if (tats.length) {
-    st.tatReturnAvg = Math.round((tats.reduce((a, b) => a + b, 0) / tats.length) * 10) / 10;
-    st.tatReturnMax = Math.max(...tats);
+    r.tat_return = dayDiff(r.pickslip_date, h.return_date);
   }
 
   return {
@@ -2557,6 +2594,18 @@ async function qPickslip(range, f) {
     ${join} WHERE 1 = 1 ${w}
     ORDER BY x.pickslip_date DESC, x.pickslipno DESC;
 
+    -- [5] DANH SACH PHIEU XUAT (distinct) cua TOAN KY.
+    --     Dung de dem "da/chua scan" theo PHIEU va KHONG bi cat boi TOP(@top)
+    --     nhu bang chi tiet - nghiep vu yeu cau scan dat 100% nen so nay phai
+    --     phu het ky, khong duoc thieu.
+    SELECT DISTINCT x.picking_listno AS pl_all
+    ${join} WHERE 1 = 1 ${w};
+
+    -- [6] CAC DONG RETURN cua TOAN KY (kem ngay xuat de tinh TAT return)
+    SELECT x.seqno AS seq_ret, MIN(x.pickslip_date) AS ngay_xuat
+    ${join} WHERE x.loai = 'RETURN' ${w}
+    GROUP BY x.seqno;
+
     ${drop}`;
 
   const sets = await queryMulti(text, params);
@@ -2568,7 +2617,7 @@ async function qPickslip(range, f) {
   const rows = sets.find((s) => s.length && 'pickslipno' in s[0] && 'remarks' in s[0]) || [];
 
   // --- DOI CHIEU FILE SCAN + PHIEU TRA + TAT RETURN (tinh o Node, khong SQL) ---
-  const scan = await enrichPickslipRows(rows);
+  const scan = await enrichPickslipRows(rows, pick('pl_all'), pick('seq_ret'));
 
   const pct = (a, b) => (b ? Math.round((a / b) * 1000) / 10 : 0);
   const deptSorted = [...byDept].sort((a, b) => b.so_dong - a.so_dong);
@@ -2585,10 +2634,14 @@ async function qPickslip(range, f) {
       soPhieu: kpi.so_phieu || 0,
       soPhieuCoHuy: kpi.so_phieu_co_huy || 0,
       tyLePhieuCoHuy: pct(kpi.so_phieu_co_huy || 0, kpi.so_phieu || 0),
-      // Doi chieu file scan (tinh tren cac dong hien trong bang chi tiet)
+      // Doi chieu file scan - dem theo PHIEU (picking list), tinh tren TOAN KY
       daScan: sc.daScan,
       chuaScan: sc.chuaScan,
-      tyLeScan: pct(sc.daScan, sc.daScan + sc.chuaScan),
+      tongPhieuScan: sc.tongPhieu,
+      tyLeScan: pct(sc.daScan, sc.tongPhieu),
+      // Theo DONG (chi de doi chieu voi bang chi tiet, co the bi cat boi MAX_ROWS)
+      daScanDong: sc.daScanDong,
+      chuaScanDong: sc.chuaScanDong,
       // Phieu tra + TAT return
       returnCoPhieu: sc.returnCoPhieu,
       returnKhongPhieu: sc.returnKhongPhieu,
@@ -2727,6 +2780,13 @@ async function qReceiving(range, f) {
     ${join} WHERE ${conLai} ${w}
     ORDER BY x.del_date DESC, x.voucherno;
 
+    -- [3] DANH SACH VOUCHER (distinct) cua TOAN KY - de dem "da/chua scan"
+    --     theo PHIEU (mot voucher co nhieu dong) va KHONG bi cat boi TOP(@top).
+    --     Nghiep vu yeu cau scan dat 100% nen so nay phai phu het ky.
+    SELECT x.voucherno AS vc_all, MIN(${dept}) AS department
+    ${join} WHERE ${conLai} ${w}
+    GROUP BY x.voucherno;
+
     DROP TABLE #hi;`;
 
   const sets = await queryMulti(text, params);
@@ -2736,24 +2796,36 @@ async function qReceiving(range, f) {
   const rows = pick('voucherno').filter((r) => 'del_date' in r);
 
   // --- Doi chieu file scan PDF (ten file = VOUCHERNO da bo tien to 'R-') ---
+  //     KPI + bieu do dem theo PHIEU (voucher) tren TOAN KY; bang chi tiet van
+  //     theo dong. Xem giai thich o enrichPickslipRows().
+  const vouchers = pick('vc_all');
   const dirs = loadScanDirs();
   const folder = await readScanFolder(dirs.receiving, 'full');
+  const scanKey = (v) => String(v || '').replace(/^R-/i, '').trim();
+
   let daScan = 0;
   let chuaScan = 0;
   const byDept = new Map();
-  const byDay = new Map();
-  for (const r of rows) {
-    r.voucher_scan = String(r.voucherno || '').replace(/^R-/i, '').trim();
-    r.scan = scanState(folder, r.voucher_scan);
-    if (r.scan === 'SCANNED') daScan += 1;
-    else if (r.scan === 'CHUA_SCAN') chuaScan += 1;
+  for (const v of vouchers) {
+    const s = scanState(folder, scanKey(v.vc_all));
+    if (s === 'SCANNED') daScan += 1;
+    else if (s === 'CHUA_SCAN') chuaScan += 1;
 
-    const dp = r.department || 'PA';
+    const dp = v.department || 'PA';
     if (!byDept.has(dp)) byDept.set(dp, { daScan: 0, chuaScan: 0, tong: 0 });
     const g = byDept.get(dp);
     g.tong += 1;
-    if (r.scan === 'SCANNED') g.daScan += 1; else if (r.scan === 'CHUA_SCAN') g.chuaScan += 1;
+    if (s === 'SCANNED') g.daScan += 1; else if (s === 'CHUA_SCAN') g.chuaScan += 1;
+  }
 
+  const byDay = new Map();
+  let daScanDong = 0;
+  let chuaScanDong = 0;
+  for (const r of rows) {
+    r.voucher_scan = scanKey(r.voucherno);
+    r.scan = scanState(folder, r.voucher_scan);
+    if (r.scan === 'SCANNED') daScanDong += 1;
+    else if (r.scan === 'CHUA_SCAN') chuaScanDong += 1;
     const day = r.del_date instanceof Date ? r.del_date.toISOString().slice(0, 10) : String(r.del_date || '').slice(0, 10);
     if (day) byDay.set(day, (byDay.get(day) || 0) + 1);
   }
@@ -2772,7 +2844,9 @@ async function qReceiving(range, f) {
       b1BiHuy: cnt.b1_bi_huy || 0,
       daScan: daScan,
       chuaScan: chuaScan,
+      tongPhieuScan: daScan + chuaScan,
       tyLeScan: pct(daScan, daScan + chuaScan),
+      daScanDong, chuaScanDong,
     },
     scanFolder: scanFolderStatus(folder),
     charts: {
