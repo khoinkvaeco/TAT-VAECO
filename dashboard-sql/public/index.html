@@ -118,7 +118,7 @@
     <div class="flex gap-1 border-b border-hair">
       <button data-tab="dashboard" class="mainTab">📊 Tổng quan</button>
       <button data-tab="reports" class="mainTab">📋 Các Báo cáo khác </button>
-      <button data-tab="kho" class="mainTab">🏬 Kho / Chứng từ</button>
+      <button data-tab="lgc" class="mainTab">🏬 LGC</button>
       <button data-tab="partlookup" class="mainTab">🔎 Tra cứu Part On/Off</button>
     </div>
   </nav>
@@ -206,20 +206,20 @@
       </div>
     </section>
 
-    <!-- ============ TAB KHO / CHỨNG TỪ ============================================
-         Gom 3 việc CỦA NHÂN VIÊN KHO vào một chỗ (trước đây nằm rải rác: 2 tab
+    <!-- ============ TAB LGC (Logistics Center) ====================================
+         Gom 3 việc CỦA NHÂN VIÊN LGC vào một chỗ (trước đây nằm rải rác: 2 tab
          chính + 1 mục chôn cuối danh sách báo cáo). Các đơn vị khác không cần
-         quan tâm nhóm này → có thể vào thẳng bằng trang /kho.html.
+         quan tâm nhóm này → có thể vào thẳng bằng trang /lgc.
          ========================================================================= -->
-    <section id="tab-kho" class="hidden">
+    <section id="tab-lgc" class="hidden">
       <div class="flex gap-1 flex-wrap mb-4">
-        <button data-kho="pickslip" class="khoTab active">📦 Quản lý xuất kho</button>
-        <button data-kho="receiving" class="khoTab">📥 Receiving</button>
-        <button data-kho="repair" class="khoTab">🛠 Repair Admin</button>
+        <button data-lgc="pickslip" class="lgcTab active">📦 Quản lý xuất kho</button>
+        <button data-lgc="receiving" class="lgcTab">📥 Receiving</button>
+        <button data-lgc="repair" class="lgcTab">🛠 Repair Admin</button>
       </div>
 
-    <!-- ---------- Kho ▸ Quản lý xuất kho ---------- -->
-    <div id="kho-pickslip">
+    <!-- ---------- LGC ▸ Quản lý xuất kho ---------- -->
+    <div id="lgc-pickslip">
       <div id="pickPane">
         <div id="pickScanBar" class="scanbar mb-3 hidden"></div>
         <div id="pickKpi" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 mb-5"></div>
@@ -268,10 +268,10 @@
           <div id="pickTable"></div>
         </div>
       </div>
-    </div><!-- /#kho-pickslip -->
+    </div><!-- /#lgc-pickslip -->
 
-    <!-- ---------- Kho ▸ Receiving (nhập kho) ---------- -->
-    <div id="kho-receiving" class="hidden">
+    <!-- ---------- LGC ▸ Receiving (nhập kho) ---------- -->
+    <div id="lgc-receiving" class="hidden">
       <div id="recvPane">
         <div id="recvScanBar" class="scanbar mb-3 hidden"></div>
         <div id="recvKpi" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 mb-5"></div>
@@ -307,31 +307,31 @@
           <div id="recvTable"></div>
         </div>
       </div>
-    </div><!-- /#kho-receiving -->
+    </div><!-- /#lgc-receiving -->
 
-    <!-- ---------- Kho ▸ Repair Admin ----------
+    <!-- ---------- LGC ▸ Repair Admin ----------
          Dùng LẠI đúng bộ định nghĩa báo cáo 'repair-admin' (REPORT_DEFS) qua
          loadReport(name, host) nên cột/mô tả/bảng tổng hợp chỉ khai báo MỘT
          chỗ — chuyển tab không sinh ra bản sao thứ hai dễ lệch nhau. -->
-    <div id="kho-repair" class="hidden">
+    <div id="lgc-repair" class="hidden">
       <div class="card">
         <div class="flex items-center justify-between gap-3 flex-wrap mb-3">
           <div>
-            <h3 id="khoRepairTitle" class="card-title mb-0">—</h3>
-            <p id="khoRepairDesc" class="text-xs text-muted mt-0.5"></p>
+            <h3 id="lgcRepairTitle" class="card-title mb-0">—</h3>
+            <p id="lgcRepairDesc" class="text-xs text-muted mt-0.5"></p>
           </div>
           <div class="flex items-center gap-2">
-            <input id="khoRepairSearch" type="text" placeholder="Tìm kiếm…" class="finput" />
-            <span id="khoRepairCount" class="text-xs text-muted"></span>
-            <button id="khoRepairExport" class="btn-export">⬇ Excel</button>
+            <input id="lgcRepairSearch" type="text" placeholder="Tìm kiếm…" class="finput" />
+            <span id="lgcRepairCount" class="text-xs text-muted"></span>
+            <button id="lgcRepairExport" class="btn-export">⬇ Excel</button>
           </div>
         </div>
-        <div id="khoRepairPane">
-          <div id="khoRepairSummary" class="hidden mb-3"></div>
-          <div id="khoRepairTable"></div>
+        <div id="lgcRepairPane">
+          <div id="lgcRepairSummary" class="hidden mb-3"></div>
+          <div id="lgcRepairTable"></div>
         </div>
       </div>
-    </div><!-- /#kho-repair -->
+    </div><!-- /#lgc-repair -->
     </section>
 
     <!-- ============ TAB TRA CỨU PART ON/OFF ============ -->

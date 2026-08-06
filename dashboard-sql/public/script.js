@@ -72,15 +72,16 @@ const state = {
   isAdmin: false,   // may nay co quyen SUA (xac nhan doi ung) khong - hoi server
   clientIp: '',
   currentReport: 'returned-unservice',
-  khoTab: 'pickslip',   // tab con dang mo trong nhom Kho / Chung tu
+  lgcTab: 'pickslip',   // tab con dang mo trong nhom LGC
 };
 
 /**
- * CHE DO KHO (/kho hoac /kho.html): nhan vien kho vao THANG nhom "Kho / Chung tu",
- * cac tab TAT cua don vi khac duoc AN di cho do roi. Van la CUNG MOT trang,
- * cung script - chi khac diem vao - nen khong co ban sao thu hai de lech nhau.
+ * CHE DO LGC (/lgc; /kho van chay - dia chi cu): nhan vien LGC vao THANG nhom
+ * "LGC", cac tab TAT cua don vi khac duoc AN di cho do roi. Van la CUNG MOT
+ * trang, cung script - chi khac diem vao - nen khong co ban sao thu hai de
+ * lech nhau.
  */
-const KHO_ONLY = /^\/kho(\.html)?\/?$/.test(location.pathname);
+const LGC_ONLY = /^\/(lgc|kho)(\.html)?\/?$/.test(location.pathname);
 
 let mainTable = null;   // Tabulator bang chinh
 const charts = {};      // luu instance Chart.js
@@ -92,8 +93,8 @@ const reportCache = new Map();
 // --- Luu / khoi phuc cau hinh filter (localStorage) de lan sau mo lai dung ngay ---
 const FILTER_STORE_KEY = 'tat-filters-v1';
 function saveFilters() {
-  const { periodType, month, week, quarter, year, station, store, department, excludeCC, khoTab } = state;
-  localStorage.setItem(FILTER_STORE_KEY, JSON.stringify({ periodType, month, week, quarter, year, station, store, department, excludeCC, khoTab }));
+  const { periodType, month, week, quarter, year, station, store, department, excludeCC, lgcTab } = state;
+  localStorage.setItem(FILTER_STORE_KEY, JSON.stringify({ periodType, month, week, quarter, year, station, store, department, excludeCC, lgcTab }));
 }
 function loadSavedFilters() {
   try {
@@ -1084,7 +1085,7 @@ function resetRecalc() {
 /**
  * NOI DAT bao cao. Cung mot ham loadReport() phuc vu 2 cho:
  *   'report'    - tab "Cac Bao cao khac" (co thanh tab con .reportTab)
- *   'khoRepair' - tab con "Repair Admin" trong nhom Kho / Chung tu
+ *   'lgcRepair' - tab con "Repair Admin" trong nhom LGC
  * Nho vay cot / mo ta / bang tong hop chi khai bao MOT lan trong REPORT_DEFS,
  * chuyen cho hien thi khong sinh ra ban sao thu hai de lech nhau.
  */
@@ -1095,10 +1096,10 @@ const REPORT_HOSTS = {
     search: '#reportSearch', tabSel: '.reportTab', tabAttr: 'report',
     remember: true, // ghi nho bao cao dang mo vao state (de doi filter tai lai dung cai do)
   },
-  khoRepair: {
-    pane: '#khoRepairPane', title: '#khoRepairTitle', desc: '#khoRepairDesc',
-    summary: '#khoRepairSummary', table: '#khoRepairTable', count: '#khoRepairCount',
-    search: '#khoRepairSearch', tabSel: null, tabAttr: null,
+  lgcRepair: {
+    pane: '#lgcRepairPane', title: '#lgcRepairTitle', desc: '#lgcRepairDesc',
+    summary: '#lgcRepairSummary', table: '#lgcRepairTable', count: '#lgcRepairCount',
+    search: '#lgcRepairSearch', tabSel: null, tabAttr: null,
     remember: false, // chi co MOT bao cao -> khong ghi de state.currentReport
   },
 };
@@ -1309,7 +1310,7 @@ function initTheme() {
 // --------------------------------------------------------------------------
 // 11. Chuyen tab chinh
 // --------------------------------------------------------------------------
-const MAIN_TABS = ['dashboard', 'reports', 'kho', 'partlookup'];
+const MAIN_TABS = ['dashboard', 'reports', 'lgc', 'partlookup'];
 
 /**
  * O LOC NAO CO TAC DUNG o man hinh dang xem.
@@ -1321,17 +1322,17 @@ const MAIN_TABS = ['dashboard', 'reports', 'kho', 'partlookup'];
 const FILTER_VIEWS = {
   dashboard: { period: 1, station: 1, store: 1, dept: 1, cc: 1 },
   reports: { period: 1, station: 1, store: 1, dept: 1, cc: 1 },
-  'kho:pickslip': { period: 1, station: 1, store: 1, dept: 1, cc: 0 },
-  'kho:receiving': { period: 1, station: 1, store: 1, dept: 1, cc: 0 },
+  'lgc:pickslip': { period: 1, station: 1, store: 1, dept: 1, cc: 0 },
+  'lgc:receiving': { period: 1, station: 1, store: 1, dept: 1, cc: 0 },
   // Repair Admin la ANH CHUP HIEN TRANG: khong theo ky, chi loc station/store.
-  'kho:repair': { period: 0, station: 1, store: 1, dept: 0, cc: 0 },
+  'lgc:repair': { period: 0, station: 1, store: 1, dept: 0, cc: 0 },
   // Tra cuu Part On/Off co o tim rieng, khong dung o loc nao ben tren.
   partlookup: { period: 0, station: 0, store: 0, dept: 0, cc: 0 },
 };
 
 /** Man hinh dang xem la gi (de biet nen hien nhung o loc nao). */
 function currentFilterView() {
-  if (!$('#tab-kho').classList.contains('hidden')) return 'kho:' + state.khoTab;
+  if (!$('#tab-lgc').classList.contains('hidden')) return 'lgc:' + state.lgcTab;
   if (!$('#tab-reports').classList.contains('hidden')) return 'reports';
   if (!$('#tab-partlookup').classList.contains('hidden')) return 'partlookup';
   return 'dashboard';
@@ -1360,8 +1361,8 @@ function switchTab(tab) {
     // tab dang an (Tabulator ve rong neu container display:none).
     applyFilterVisibility('reports');
     loadReport(state.currentReport);
-  } else if (tab === 'kho') {
-    switchKhoTab(state.khoTab);
+  } else if (tab === 'lgc') {
+    switchLgcTab(state.lgcTab);
   } else if (tab === 'partlookup') {
     applyFilterVisibility('partlookup');
     if (partTable) partTable.redraw(true); // ve lai sau khi container hien thi
@@ -1373,18 +1374,18 @@ function switchTab(tab) {
 }
 
 /**
- * Bat CHE DO KHO: an cac tab TAT, doi tieu de, va them mot loi thoat sang
- * dashboard day du (khong khoa cung - nguoi kho van xem duoc phan con lai).
+ * Bat CHE DO LGC: an cac tab TAT, doi tieu de, va them mot loi thoat sang
+ * dashboard day du (khong khoa cung - nguoi LGC van xem duoc phan con lai).
  * KHONG phai phan quyen: day chi la don gian hoa giao dien. Muon CHAN that
  * thi phai chan o server nhu adminGuard.
  */
-function applyKhoOnlyMode() {
-  document.title = 'VAECO · Kho / Chứng từ';
+function applyLgcOnlyMode() {
+  document.title = 'VAECO · LGC';
   const h1 = document.querySelector('header h1');
   const sub = document.querySelector('header .brand-sub');
-  if (h1) h1.textContent = 'Kho / Chứng từ';
-  if (sub) sub.textContent = 'VAECO · Xuất kho · Receiving · Repair Admin';
-  $$('.mainTab').forEach((b) => { if (b.dataset.tab !== 'kho') b.classList.add('hidden'); });
+  if (h1) h1.textContent = 'LGC';
+  if (sub) sub.textContent = 'VAECO · Logistics Center · Xuất kho · Receiving · Repair Admin';
+  $$('.mainTab').forEach((b) => { if (b.dataset.tab !== 'lgc') b.classList.add('hidden'); });
   const nav = document.querySelector('nav .flex');
   if (nav) {
     const a = document.createElement('a');
@@ -1395,18 +1396,18 @@ function applyKhoOnlyMode() {
   }
 }
 
-/** Chuyen tab con trong nhom Kho / Chung tu (xuat kho · receiving · repair). */
-const KHO_TABS = ['pickslip', 'receiving', 'repair'];
-function switchKhoTab(sub) {
-  if (!KHO_TABS.includes(sub)) sub = 'pickslip';
-  state.khoTab = sub;
+/** Chuyen tab con trong nhom LGC (xuat kho · receiving · repair). */
+const LGC_TABS = ['pickslip', 'receiving', 'repair'];
+function switchLgcTab(sub) {
+  if (!LGC_TABS.includes(sub)) sub = 'pickslip';
+  state.lgcTab = sub;
   saveFilters();
-  $$('.khoTab').forEach((b) => b.classList.toggle('active', b.dataset.kho === sub));
-  KHO_TABS.forEach((t) => $(`#kho-${t}`).classList.toggle('hidden', t !== sub));
-  applyFilterVisibility('kho:' + sub);
+  $$('.lgcTab').forEach((b) => b.classList.toggle('active', b.dataset.lgc === sub));
+  LGC_TABS.forEach((t) => $(`#lgc-${t}`).classList.toggle('hidden', t !== sub));
+  applyFilterVisibility('lgc:' + sub);
   if (sub === 'pickslip') loadPickslip();
   else if (sub === 'receiving') loadReceiving();
-  else loadReport('repair-admin', 'khoRepair');
+  else loadReport('repair-admin', 'lgcRepair');
 }
 
 // --------------------------------------------------------------------------
@@ -2086,7 +2087,7 @@ async function init() {
     state.store = saved.store || '';
     state.department = saved.department || '';
     state.excludeCC = !!saved.excludeCC;
-    if (KHO_TABS.includes(saved.khoTab)) state.khoTab = saved.khoTab;
+    if (LGC_TABS.includes(saved.lgcTab)) state.lgcTab = saved.lgcTab;
   }
   // URL co tham so (link duoc chia se) -> UU TIEN hon cau hinh da luu
   const urlQ = new URLSearchParams(location.search);
@@ -2133,9 +2134,9 @@ async function init() {
     // Dua filter len URL -> copy link gui dong nghiep la ho thay dung man hinh nay
     history.replaceState(null, '', `${location.pathname}?${buildQuery()}`);
     reportCache.clear();
-    if (!KHO_ONLY) loadDashboard();
+    if (!LGC_ONLY) loadDashboard();
     if (!$('#tab-reports').classList.contains('hidden')) loadReport(state.currentReport);
-    if (!$('#tab-kho').classList.contains('hidden')) switchKhoTab(state.khoTab);
+    if (!$('#tab-lgc').classList.contains('hidden')) switchLgcTab(state.lgcTab);
   };
   window.__applyFilters = applyFilters; // cho drill-down tu bieu do (chartDrill)
 
@@ -2157,8 +2158,8 @@ async function init() {
   $('#reportSearch').addEventListener('input', (e) => {
     if (reportTables.report) reportTables.report.setFilter(matchAny, { value: e.target.value });
   });
-  $('#khoRepairSearch').addEventListener('input', (e) => {
-    if (reportTables.khoRepair) reportTables.khoRepair.setFilter(matchAny, { value: e.target.value });
+  $('#lgcRepairSearch').addEventListener('input', (e) => {
+    if (reportTables.lgcRepair) reportTables.lgcRepair.setFilter(matchAny, { value: e.target.value });
   });
 
   // Tinh lai TAT (bo item da chon)
@@ -2173,16 +2174,16 @@ async function init() {
     const t = reportTables.report;
     if (t) t.download('xlsx', `${state.currentReport}_${Date.now()}.xlsx`, { sheetName: 'BaoCao' });
   });
-  $('#khoRepairExport').addEventListener('click', () => {
-    const t = reportTables.khoRepair;
+  $('#lgcRepairExport').addEventListener('click', () => {
+    const t = reportTables.lgcRepair;
     if (t) t.download('xlsx', `RepairAdmin_${Date.now()}.xlsx`, { sheetName: 'RepairAdmin' });
   });
 
   // Tab chinh
   $$('.mainTab').forEach((b) => b.addEventListener('click', () => switchTab(b.dataset.tab)));
-  $$('.khoTab').forEach((b) => b.addEventListener('click', () => switchKhoTab(b.dataset.kho)));
-  if (KHO_ONLY) applyKhoOnlyMode();
-  switchTab(KHO_ONLY ? 'kho' : 'dashboard');
+  $$('.lgcTab').forEach((b) => b.addEventListener('click', () => switchLgcTab(b.dataset.lgc)));
+  if (LGC_ONLY) applyLgcOnlyMode();
+  switchTab(LGC_ONLY ? 'lgc' : 'dashboard');
 
   // Report sub-tabs
   $$('.reportTab').forEach((b) => b.addEventListener('click', () => loadReport(b.dataset.report)));
@@ -2205,7 +2206,7 @@ async function init() {
   $('#stationSelect').value = state.station;
   $('#storeSelect').value = state.store;
   $('#deptSelect').value = state.department;
-  if (!KHO_ONLY) loadDashboard();
+  if (!LGC_ONLY) loadDashboard();
 }
 
 // --------------------------------------------------------------------------

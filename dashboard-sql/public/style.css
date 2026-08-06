@@ -169,12 +169,12 @@ body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
 .brand-header .periodBtn { background: rgba(255,255,255,.1); color: #eaf5f6; border-color: rgba(255,255,255,.2); }
 .periodBtn.active { color: #3a2c00; background: var(--brand-accent); }
 
-.reportTab, .khoTab {
+.reportTab, .lgcTab {
   font-size: 13px; padding: 7px 14px; border-radius: 999px;
   border: 1px solid var(--hair); color: var(--text-secondary); background: var(--surface-1);
 }
-.reportTab:hover, .khoTab:hover { background: var(--hover); }
-.reportTab.active, .khoTab.active { background: var(--brand-2); color: #fff; border-color: var(--brand-2); }
+.reportTab:hover, .lgcTab:hover { background: var(--hover); }
+.reportTab.active, .lgcTab.active { background: var(--brand-2); color: #fff; border-color: var(--brand-2); }
 
 /* --- Nút --- */
 .btn-export, .btn-ghost, .btn-accent {
@@ -333,7 +333,7 @@ body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
 
 /* Tab dang tai: cham nhay nhe cho biet dang cho */
 .reportTab.loading::after,
-.khoTab.loading::after,
+.lgcTab.loading::after,
 .mainTab.loading::after {
   content: ''; display: inline-block; margin-left: 6px;
   width: 6px; height: 6px; border-radius: 50%;
