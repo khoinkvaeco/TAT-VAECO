@@ -1366,10 +1366,11 @@ async function qRemovedNotReturned(range, f) {
       o.[store]      AS store,
       o.[ac_registr] AS ac_registr,
       o.[created_by] AS staff, 
-      COALESCE(NULLIF(NULLIF(LTRIM(RTRIM(r.department)), ''), 'UNKNOWN'),
-         CASE WHEN LEFT(LTRIM(RTRIM(r.action_per)), 2) = 'PA' THEN 'PA' END,
-         NULLIF(NULLIF(LTRIM(RTRIM(sm.DEPARTMENT)), ''), 'UNKNOWN'),
-         'PA')  AS trung_tam,
+      -- Trung tam: chi con nguon SIGN(created_by). Truoc day bieu thuc nay con
+      -- doc r.department / r.action_per cua real_us1, nhung dieu kien bao cao
+      -- BAT BUOC khong co dong real_us1 nao -> 2 nhanh do LUON NULL, la code
+      -- chet. Bo di, ket qua khong doi.
+      ${deptFromStaff('o.[created_by]', 'sm')} AS trung_tam,
       -- VI TRI HIEN TAI (ROTABLES da duoc noi san o duoi va dang dung trong WHERE).
       -- Store hien tai lay tu LOCATION theo locationno_i cua ROTABLES - dung
       -- quan he ma chinh SQL cua Repair Admin dang dung. LEFT JOIN nen KHONG
@@ -1379,8 +1380,6 @@ async function qRemovedNotReturned(range, f) {
       o.[psn]                AS psn,
       ${amosToVN('o')} AS removed_time_vn
     FROM [NQT].[dbo].[on_off] o
-    LEFT JOIN [NQT].[dbo].[real_us1] r
-      ON o.[labelno] = r.[labelno]   -- so sanh so truc tiep (cot so; RTRIM lam float->chuoi 6 chu so -> ghep nham)
     LEFT JOIN [DWH_DB]..[STG_AMOS].ROTABLES RO ON o.PSN = RO.PSN
     LEFT JOIN [DWH_DB]..[STG_AMOS].[LOCATION] LOC ON LOC.[locationno_i] = RO.[locationno_i]
     ${signJoin('o.[created_by]', 'sm')}
@@ -1390,7 +1389,21 @@ async function qRemovedNotReturned(range, f) {
     -- Vi vay chay lai cung mot ky vao thoi diem khac se ra so khac (giam dan).
     -- Dung /api/admin/diag/rnr de xem tung buoc loc bot bao nhieu dong.
     WHERE o.[vm] = 'YA' AND RO.MUTATION > @fromDay and RO.condition ='US'
-      AND r.[historyno_] IS NULL
+      -- "CHUA TRA UNSERVICE" - xet tai THOI DIEM XEM nen bao cao tu cap nhat:
+      -- thao thang 7 ma tra US thang 8 thi xem lai thang 7 se khong con dong do.
+      -- (1) Khong co dong tra US khop CHINH XAC lan thao nay (historyno_) - day
+      --     la khoa ma docstring va qTatDepartments deu dung.
+      AND NOT EXISTS (
+        SELECT 1 FROM [NQT].[dbo].[real_us1] r
+        WHERE r.[historyno_] = o.[historyno_])
+      -- (2) Va khong co dong tra US nao cung labelno XAY RA SAU lan thao nay
+      --     (du phong cho ban ghi thieu historyno_). Bat buoc phai co dieu kien
+      --     thoi gian: truoc day chi so labelno nen mot lan tra US cua CHU KY
+      --     TRUOC cung lam mat dong - do thuc te loai OAN 672 dong trong 1 thang.
+      AND NOT EXISTS (
+        SELECT 1 FROM [NQT].[dbo].[real_us1] r2
+        WHERE r2.[labelno] = o.[labelno]
+          AND r2.[del_time] >= ${amosToVN('o')})
       AND o.higher_par IS NULL
       AND o.[mutation] BETWEEN @fromDay AND @toDay  -- loc tho theo index (sargable)
       AND ${amosToVN('o')} >= @from AND ${amosToVN('o')} < @to
@@ -4725,6 +4738,11 @@ app.get('/api/admin/diag/rnr', h(async (req, res) => {
   // (historyno_ - la khoa ma docstring va qTatDepartments deu dung)
   const noUsHist = `AND NOT EXISTS (SELECT 1 FROM [NQT].[dbo].[real_us1] r
                     WHERE r.[historyno_] = o.[historyno_])`;
+  // Quy tac DANG DUNG trong bao cao (xem qRemovedNotReturned)
+  const noUsNow = `${noUsHist}
+      AND NOT EXISTS (SELECT 1 FROM [NQT].[dbo].[real_us1] r2
+                      WHERE r2.[labelno] = o.[labelno]
+                        AND r2.[del_time] >= ${amosToVN('o')})`;
   const noHigher = 'AND o.[higher_par] IS NULL';
   const joinRo = 'INNER JOIN [DWH_DB]..[STG_AMOS].ROTABLES RO ON o.PSN = RO.PSN';
 
@@ -4736,18 +4754,18 @@ app.get('/api/admin/diag/rnr', h(async (req, res) => {
   const buoc = [];
   buoc.push(await step('1. Thao (YA) trong ky',
     `SELECT COUNT(*) AS cnt FROM [NQT].[dbo].[on_off] o WHERE ${inPeriod}`));
-  buoc.push(await step('2. ... va CHUA tra unservice',
+  buoc.push(await step('2. [cach CU] chua tra US - chi khop labelno',
     `SELECT COUNT(*) AS cnt FROM [NQT].[dbo].[on_off] o WHERE ${inPeriod} ${noUs}`));
   buoc.push(await step('3. ... va higher_par IS NULL (thao thang tu tau)',
-    `SELECT COUNT(*) AS cnt FROM [NQT].[dbo].[on_off] o WHERE ${inPeriod} ${noUs} ${noHigher}`));
+    `SELECT COUNT(*) AS cnt FROM [NQT].[dbo].[on_off] o WHERE ${inPeriod} ${noUsNow} ${noHigher}`));
   buoc.push(await step('4. ... va CO ban ghi trong ROTABLES (theo psn)',
-    `SELECT COUNT(*) AS cnt FROM [NQT].[dbo].[on_off] o ${joinRo} WHERE ${inPeriod} ${noUs} ${noHigher}`));
+    `SELECT COUNT(*) AS cnt FROM [NQT].[dbo].[on_off] o ${joinRo} WHERE ${inPeriod} ${noUsNow} ${noHigher}`));
   buoc.push(await step('5. ... va ROTABLES.MUTATION > dau ky',
     `SELECT COUNT(*) AS cnt FROM [NQT].[dbo].[on_off] o ${joinRo}
-     WHERE ${inPeriod} ${noUs} ${noHigher} AND RO.MUTATION > @fromDay`));
+     WHERE ${inPeriod} ${noUsNow} ${noHigher} AND RO.MUTATION > @fromDay`));
   buoc.push(await step('6. ... va ROTABLES.condition = US  <<< KET QUA BAO CAO',
     `SELECT COUNT(*) AS cnt FROM [NQT].[dbo].[on_off] o ${joinRo}
-     WHERE ${inPeriod} ${noUs} ${noHigher} AND RO.MUTATION > @fromDay AND RO.condition = 'US'`));
+     WHERE ${inPeriod} ${noUsNow} ${noHigher} AND RO.MUTATION > @fromDay AND RO.condition = 'US'`));
 
   // So sanh 2 cach xac dinh "chua tra US": theo labelno (dang dung) va theo
   // historyno_ (khop dung lan thao nay). Chenh lech = so dong co the dang bi
@@ -4758,6 +4776,14 @@ app.get('/api/admin/diag/rnr', h(async (req, res) => {
     `SELECT COUNT(*) AS cnt FROM [NQT].[dbo].[on_off] o
      WHERE ${inPeriod} ${noUsHist}
        AND EXISTS (SELECT 1 FROM [NQT].[dbo].[real_us1] r WHERE r.[labelno] = o.[labelno])`));
+  // Quy tac DANG DUNG tu ban sua: historyno_ HOAC labelno nhung phai tra SAU
+  // lan thao nay (lan tra cua chu ky truoc khong duoc tinh).
+  buoc.push(await step('2d. QUY TAC MOI: historyno_ + labelno co del_time SAU gio thao',
+    `SELECT COUNT(*) AS cnt FROM [NQT].[dbo].[on_off] o
+     WHERE ${inPeriod} ${noUsHist}
+       AND NOT EXISTS (SELECT 1 FROM [NQT].[dbo].[real_us1] r2
+                       WHERE r2.[labelno] = o.[labelno]
+                         AND r2.[del_time] >= ${amosToVN('o')})`));
 
   // Cac thiet bi bi loai o buoc 6: hien nay condition la gi?
   let theoCondition = null;
@@ -4765,7 +4791,7 @@ app.get('/api/admin/diag/rnr', h(async (req, res) => {
     theoCondition = await query(`
       SELECT RTRIM(RO.condition) AS condition_hien_tai, COUNT(*) AS so_dong
       FROM [NQT].[dbo].[on_off] o ${joinRo}
-      WHERE ${inPeriod} ${noUs} ${noHigher} AND RO.MUTATION > @fromDay
+      WHERE ${inPeriod} ${noUsNow} ${noHigher} AND RO.MUTATION > @fromDay
       GROUP BY RTRIM(RO.condition)
       ORDER BY COUNT(*) DESC`, { ...params });
   } catch (e) { theoCondition = { loi: e.message }; }
