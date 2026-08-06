@@ -1370,6 +1370,10 @@ async function qRemovedNotReturned(range, f) {
          CASE WHEN LEFT(LTRIM(RTRIM(r.action_per)), 2) = 'PA' THEN 'PA' END,
          NULLIF(NULLIF(LTRIM(RTRIM(sm.DEPARTMENT)), ''), 'UNKNOWN'),
          'PA')  AS trung_tam,
+      -- VI TRI HIEN TAI: bang ROTABLES (RO) DA duoc noi san o duoi va dang dung
+      -- trong WHERE, nen lay them 2 cot nay KHONG ton them luot hoi linked server.
+      o.[psn]                AS psn,
+      RTRIM(RO.[location])   AS location,
       ${amosToVN('o')} AS removed_time_vn
     FROM [NQT].[dbo].[on_off] o
     LEFT JOIN [NQT].[dbo].[real_us1] r
