@@ -618,7 +618,9 @@ function pickslip(range, f) {
   const n = 260;
   for (let i = 0; i < n; i++) {
     const d = baseDevice(i);
-    const huy = rndInt(0, 9) < 2;           // ~20% dong bi huy
+    const r = rndInt(0, 9);
+    const loai = r < 2 ? 'CANCEL' : (r < 3 ? 'RETURN' : 'NORMAL');
+    const huy = loai !== 'NORMAL';
     const qtyB = rndInt(1, 8);
     rows.push({
       station: d.station,
@@ -631,6 +633,7 @@ function pickslip(range, f) {
       serialno: d.serialno,
       qty_booked: qtyB,
       qty_canceled: huy ? rndInt(1, qtyB) : 0,
+      loai,
       is_cancel: huy ? 1 : 0,
       owner: rnd(['VNA', 'VAECO', '']),
       created_by: d.staff,
@@ -640,20 +643,24 @@ function pickslip(range, f) {
       department: rnd(DEPARTMENTS),
       receiver: rnd(RECEIVERS),
       remarks: huy ? rnd(['Sai part', 'Khong du hang', 'Doi phuong an', '']) : '',
-      pickslip_text: rnd(['', 'AOG', 'Routine']),
+      pickslip_text: loai === 'CANCEL' ? rnd(['PS cancel', 'Booking cancel booking'])
+        : (loai === 'RETURN' ? 'PS return' : rnd(['', 'AOG', 'Routine'])),
     });
   }
   const kept = applyFilter(rows, f);
   const pct = (a, b) => (b ? Math.round((a / b) * 1000) / 10 : 0);
   const soDongHuy = kept.filter((r) => r.is_cancel).length;
+  const soCancel = kept.filter((r) => r.loai === 'CANCEL').length;
+  const soReturn = kept.filter((r) => r.loai === 'RETURN').length;
   const phieu = new Set(kept.map((r) => r.pickslipno));
   const phieuHuy = new Set(kept.filter((r) => r.is_cancel).map((r) => r.pickslipno));
 
   const g = new Map();
   kept.forEach((r) => {
     const k = r.department || 'PA';
-    const x = g.get(k) || { department: k, so_dong: 0, so_dong_huy: 0 };
-    x.so_dong++; if (r.is_cancel) x.so_dong_huy++;
+    const x = g.get(k) || { department: k, so_dong: 0, so_cancel: 0, so_return: 0 };
+    x.so_dong++;
+    if (r.loai === 'CANCEL') x.so_cancel++; else if (r.loai === 'RETURN') x.so_return++;
     g.set(k, x);
   });
   const byDept = [...g.values()].sort((a, b) => b.so_dong - a.so_dong);
@@ -675,6 +682,8 @@ function pickslip(range, f) {
     range: { from: range.from, to: range.to, label: range.label },
     kpis: {
       soDong: kept.length,
+      soCancel,
+      soReturn,
       soDongHuy,
       soDongThuc: kept.length - soDongHuy,
       tyLeHuy: pct(soDongHuy, kept.length),
@@ -685,9 +694,10 @@ function pickslip(range, f) {
     charts: {
       byDept: {
         labels: byDept.map((r) => r.department),
-        thuc: byDept.map((r) => r.so_dong - r.so_dong_huy),
-        huy: byDept.map((r) => r.so_dong_huy),
-        tyLe: byDept.map((r) => pct(r.so_dong_huy, r.so_dong)),
+        thuc: byDept.map((r) => r.so_dong - r.so_cancel - r.so_return),
+        cancel: byDept.map((r) => r.so_cancel),
+        ret: byDept.map((r) => r.so_return),
+        tyLe: byDept.map((r) => pct(r.so_cancel + r.so_return, r.so_dong)),
       },
       byDay: {
         labels: byDay.map((r) => r.ngay),

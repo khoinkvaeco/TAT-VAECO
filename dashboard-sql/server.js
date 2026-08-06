@@ -2177,6 +2177,27 @@ async function pickslipTemp(range, f) {
     ? `DATEADD(DAY, TRY_CONVERT(int, TRY_CONVERT(float, ${col})), TRY_CONVERT(datetime, @amosEpoch))`
     : `TRY_CONVERT(datetime, ${col})`;
 
+  // PHAN LOAI theo DUOI cua PICKSLIP_TEXT (lay tu cong cu AMOS_GUI cua nguoi
+  // dung): ket thuc bang 'cancel' / 'cancel booking' -> HUY; 'return' -> TRA.
+  // Chi tinh khi QTY_CANCELED <> 0.
+  const txt = `LOWER(RTRIM(ISNULL(h.[PICKSLIP_TEXT], '')))`;
+  const daHuy = `TRY_CONVERT(float, p.[QTY_CANCELED]) <> 0`;
+  const loai = `CASE
+        WHEN ${daHuy} AND (${txt} LIKE '%cancel' OR ${txt} LIKE '%cancel booking') THEN 'CANCEL'
+        WHEN ${daHuy} AND ${txt} LIKE '%return' THEN 'RETURN'
+        ELSE 'NORMAL' END`;
+
+  // BO LOC NGHIEP VU - lay nguyen tu cong cu AMOS_GUI:
+  //   QTY_BOOKED <> 0; STATUS khong phai 1 va 11; LOCATION_FROM khong chua 'u/s';
+  //   STORE ket thuc bang 'main' hoac 'vna'.
+  // (STATUS NULL cung bi loai - giong pandas: NA <> 1 ra NA nen dong do rot.)
+  const bizFilter = `
+      AND TRY_CONVERT(float, p.[QTY_BOOKED]) <> 0
+      AND p.[STATUS] <> 1 AND p.[STATUS] <> 11
+      AND LOWER(RTRIM(ISNULL(p.[LOCATION_FROM], ''))) NOT LIKE '%u/s%'
+      AND (LOWER(RTRIM(ISNULL(p.[STORE], ''))) LIKE '%main'
+        OR LOWER(RTRIM(ISNULL(p.[STORE], ''))) LIKE '%vna')`;
+
   const pull = `
     IF OBJECT_ID('tempdb..#ps') IS NOT NULL DROP TABLE #ps;
     SELECT
@@ -2190,7 +2211,8 @@ async function pickslipTemp(range, f) {
       ISNULL(LTRIM(RTRIM(p.[SERIALNO])), '') + ISNULL(LTRIM(RTRIM(p.[BATCHNO])), '') AS serialno,
       p.[QTY_BOOKED]            AS qty_booked,
       p.[QTY_CANCELED]          AS qty_canceled,
-      CASE WHEN TRY_CONVERT(float, p.[QTY_CANCELED]) > 0 THEN 1 ELSE 0 END AS is_cancel,
+      ${loai}                   AS loai,
+      CASE WHEN ${loai} = 'NORMAL' THEN 0 ELSE 1 END AS is_cancel,
       RTRIM(p.[OWNER])          AS owner,
       RTRIM(p.[CREATED_BY])     AS created_by,
       ${dateVN}                 AS pickslip_date,
@@ -2202,7 +2224,7 @@ async function pickslipTemp(range, f) {
     INTO #ps
     FROM [DWH_DB]..[STG_AMOS].[PICKSLIP_BOOKED] p
     JOIN [DWH_DB]..[STG_AMOS].[PICKSLIP_HEADER] h ON h.[PICKSLIPNO] = p.[PICKSLIPNO]
-    WHERE ${periodWhere};
+    WHERE ${periodWhere} ${bizFilter};
     CREATE INDEX IX_ps_mech ON #ps (mech_sign);`;
 
   // Trung tam: SIGN theo MECH_SIGN (nguoi nhan hang), lui ve 'PA' - giong moi
@@ -2215,7 +2237,8 @@ async function pickslipTemp(range, f) {
 /** Bo loc station/store/department cho bang tam #ps. */
 function pickslipWhere(f, dept, params) {
   let w = '';
-  if (f.station) { params.fStation = f.station; w += ' AND x.station = @fStation'; }
+  // AMOS_GUI loc station bang endswith (cot STATION co the la 'VNA-HAN'...)
+  if (f.station) { params.fStation = f.station; w += " AND LOWER(x.station) LIKE '%' + LOWER(@fStation)"; }
   if (f.store) { params.fStore = f.store; w += ' AND x.store = @fStore'; }
   if (f.department) { params.fDepartment = f.department; w += ` AND ${dept} = @fDepartment`; }
   return w;
@@ -2235,13 +2258,17 @@ async function qPickslip(range, f) {
 
     -- [0] KPI tong (don vi: SO DONG)
     SELECT COUNT(*) AS so_dong,
+           SUM(CASE WHEN x.loai = 'CANCEL' THEN 1 ELSE 0 END) AS so_cancel,
+           SUM(CASE WHEN x.loai = 'RETURN' THEN 1 ELSE 0 END) AS so_return,
            SUM(x.is_cancel) AS so_dong_huy,
            COUNT(DISTINCT x.pickslipno) AS so_phieu,
            COUNT(DISTINCT CASE WHEN x.is_cancel = 1 THEN x.pickslipno END) AS so_phieu_co_huy
     ${join} WHERE 1 = 1 ${w};
 
     -- [1] Theo Trung tam
-    SELECT ${dept} AS department, COUNT(*) AS so_dong, SUM(x.is_cancel) AS so_dong_huy
+    SELECT ${dept} AS department, COUNT(*) AS so_dong,
+           SUM(CASE WHEN x.loai = 'CANCEL' THEN 1 ELSE 0 END) AS so_cancel,
+           SUM(CASE WHEN x.loai = 'RETURN' THEN 1 ELSE 0 END) AS so_return
     ${join} WHERE 1 = 1 ${w}
     GROUP BY ${dept};
 
@@ -2261,7 +2288,7 @@ async function qPickslip(range, f) {
     -- [4] Bang chi tiet
     SELECT TOP (@top)
       x.station, x.store, x.location_from, x.picking_listno, x.pickslipno, x.seqno,
-      x.partno, x.serialno, x.qty_booked, x.qty_canceled, x.is_cancel,
+      x.partno, x.serialno, x.qty_booked, x.qty_canceled, x.loai, x.is_cancel,
       x.owner, x.created_by, x.pickslip_date, x.mech_sign, x.booking_sign,
       ${dept} AS department,
       x.receiver, x.remarks, x.pickslip_text
@@ -2272,8 +2299,8 @@ async function qPickslip(range, f) {
 
   const sets = await queryMulti(text, params);
   const pick = (k) => sets.find((s) => s.length && k in s[0]) || [];
-  const kpi = (pick('so_phieu')[0]) || { so_dong: 0, so_dong_huy: 0, so_phieu: 0, so_phieu_co_huy: 0 };
-  const byDept = pick('department').filter((r) => 'so_dong_huy' in r && !('partno' in r));
+  const kpi = (pick('so_phieu')[0]) || {};
+  const byDept = pick('department').filter((r) => 'so_cancel' in r);
   const byDay = pick('ngay');
   const topPart = pick('partno').filter((r) => 'so_dong_huy' in r && !('station' in r));
   const rows = sets.find((s) => s.length && 'pickslipno' in s[0] && 'remarks' in s[0]) || [];
@@ -2284,6 +2311,8 @@ async function qPickslip(range, f) {
     range: { from: range.from, to: range.to, label: range.label },
     kpis: {
       soDong: kpi.so_dong || 0,
+      soCancel: kpi.so_cancel || 0,
+      soReturn: kpi.so_return || 0,
       soDongHuy: kpi.so_dong_huy || 0,
       soDongThuc: (kpi.so_dong || 0) - (kpi.so_dong_huy || 0),
       tyLeHuy: pct(kpi.so_dong_huy || 0, kpi.so_dong || 0),
@@ -2294,9 +2323,10 @@ async function qPickslip(range, f) {
     charts: {
       byDept: {
         labels: deptSorted.map((r) => r.department),
-        thuc: deptSorted.map((r) => r.so_dong - r.so_dong_huy),
-        huy: deptSorted.map((r) => r.so_dong_huy),
-        tyLe: deptSorted.map((r) => pct(r.so_dong_huy, r.so_dong)),
+        thuc: deptSorted.map((r) => r.so_dong - r.so_cancel - r.so_return),
+        cancel: deptSorted.map((r) => r.so_cancel),
+        ret: deptSorted.map((r) => r.so_return),
+        tyLe: deptSorted.map((r) => pct(r.so_cancel + r.so_return, r.so_dong)),
       },
       byDay: {
         labels: byDay.map((r) => (r.ngay instanceof Date ? r.ngay.toISOString().slice(0, 10) : String(r.ngay).slice(0, 10))),

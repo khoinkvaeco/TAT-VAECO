@@ -1307,7 +1307,21 @@ let pickTable = null;
 let pickTotalRows = 0;
 let pickLoadSeq = 0;
 
+const PICK_LOAI_LABEL = { CANCEL: 'Cancel', RETURN: 'Return', NORMAL: 'Bình thường' };
+
 const COLS_PICKSLIP = [
+  {
+    title: 'Loại', field: 'loai', hozAlign: 'center', width: 110,
+    headerTooltip: 'Dò ĐUÔI của PICKSLIP_TEXT: …cancel / …cancel booking → Cancel; …return → Return (và QTY_CANCELED ≠ 0)',
+    formatter: (cell) => {
+      const v = cell.getValue();
+      if (v === 'CANCEL') return `<span class="tat-badge" style="background:${cssVar('--warning')}22;color:${cssVar('--warning')}">Cancel</span>`;
+      if (v === 'RETURN') return `<span class="tat-badge" style="background:${cssVar('--series-4')}22;color:${cssVar('--series-4')}">Return</span>`;
+      return '<span style="color:var(--text-muted)">Bình thường</span>';
+    },
+    headerFilter: 'list',
+    headerFilterParams: { values: { '': 'Tất cả', NORMAL: 'Bình thường', CANCEL: 'Cancel', RETURN: 'Return' } },
+  },
   { title: 'Ngày phiếu', field: 'pickslip_date', formatter: fmtDateCell },
   { title: 'Pickslip', field: 'pickslipno', headerFilter: 'input' },
   { title: 'Seq', field: 'seqno', formatter: fmtIntCell, hozAlign: 'right', width: 70 },
@@ -1350,10 +1364,10 @@ function renderPickKpis(k) {
   const cards = [
     { label: 'Số dòng xuất', value: k.soDong, unit: 'dòng', accent: '--series-1' },
     { label: 'Thực xuất', value: k.soDongThuc, unit: 'dòng', accent: '--good' },
-    { label: 'Dòng bị hủy', value: k.soDongHuy, unit: 'dòng', accent: '--warning' },
-    { label: 'Tỷ lệ hủy', value: k.tyLeHuy, unit: '%', accent: '--critical' },
-    { label: 'Số phiếu', value: k.soPhieu, unit: 'phiếu', accent: '--series-4' },
-    { label: 'Phiếu có hủy', value: `${k.soPhieuCoHuy} (${k.tyLePhieuCoHuy}%)`, unit: '', accent: '--series-3' },
+    { label: 'Cancel', value: k.soCancel, unit: 'dòng', accent: '--warning' },
+    { label: 'Return', value: k.soReturn, unit: 'dòng', accent: '--series-4' },
+    { label: 'Tỷ lệ hủy/trả', value: k.tyLeHuy, unit: '%', accent: '--critical' },
+    { label: 'Phiếu có hủy/trả', value: `${k.soPhieuCoHuy}/${k.soPhieu}`, unit: `(${k.tyLePhieuCoHuy}%)`, accent: '--series-3' },
   ];
   $('#pickKpi').innerHTML = cards.map((c) => `
     <div class="kpi-card" style="border-left-color: var(${c.accent})">
@@ -1372,7 +1386,8 @@ function renderPickCharts(c) {
       labels: c.byDept.labels,
       datasets: [
         { label: 'Thực xuất', data: c.byDept.thuc, backgroundColor: cssVar('--good') },
-        { label: 'Hủy', data: c.byDept.huy, backgroundColor: cssVar('--warning'), borderRadius: 4 },
+        { label: 'Cancel', data: c.byDept.cancel, backgroundColor: cssVar('--warning') },
+        { label: 'Return', data: c.byDept.ret, backgroundColor: cssVar('--series-4'), borderRadius: 4 },
       ],
     },
     options: {
@@ -1390,7 +1405,7 @@ function renderPickCharts(c) {
             footer: (items) => {
               const i = items[0].dataIndex;
               const t = items.reduce((s, it) => s + (Number(it.parsed.y) || 0), 0);
-              return `Tổng: ${t} dòng · Tỷ lệ hủy: ${c.byDept.tyLe[i]}%`;
+              return `Tổng: ${t} dòng · Tỷ lệ hủy/trả: ${c.byDept.tyLe[i]}%`;
             },
           },
         },
@@ -1458,8 +1473,9 @@ async function loadPickslip() {
     renderPickKpis(data.kpis);
     renderPickCharts(data.charts);
     $('#pickDesc').textContent =
-      'PICKSLIP_BOOKED × PICKSLIP_HEADER. Kỳ tính theo PICKSLIP_DATE; đơn vị đếm là SỐ DÒNG; '
-      + '“hủy” là dòng có QTY_CANCELED > 0 (kể cả hủy một phần).';
+      'PICKSLIP_BOOKED × PICKSLIP_HEADER. Kỳ theo PICKSLIP_DATE (ngày AMOS); đơn vị đếm là SỐ DÒNG. '
+      + 'Cancel / Return phân biệt bằng ĐUÔI của PICKSLIP_TEXT (…cancel · …cancel booking · …return) kèm QTY_CANCELED ≠ 0. '
+      + 'Đã áp bộ lọc nghiệp vụ: QTY_BOOKED ≠ 0, STATUS ∉ {1, 11}, LOCATION_FROM không chứa “U/S”, STORE thuộc MAIN/VNA.';
     pickTotalRows = data.count;
     $('#pickCount').textContent =
       `${data.count.toLocaleString('vi')} dòng` + (data.truncated ? ' ⚠ chạm giới hạn MAX_ROWS' : '');
