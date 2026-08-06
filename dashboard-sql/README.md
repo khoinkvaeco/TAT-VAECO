@@ -89,7 +89,7 @@ Sau khi sửa code: `git pull` (hoặc copy) rồi `sc stop DashboardTAT & sc st
 npm run smoke
 ```
 
-Bật server ở chế độ **live** nhưng trỏ vào một địa chỉ DB không tồn tại, rồi gọi lần lượt **17 endpoint** có chạy truy vấn. Mỗi endpoint sẽ chạy **hết** phần dựng câu SQL rồi mới chết ở bước kết nối:
+Bật server ở chế độ **live** nhưng trỏ vào một địa chỉ DB không tồn tại, rồi gọi lần lượt **16 endpoint** có chạy truy vấn. Mỗi endpoint sẽ chạy **hết** phần dựng câu SQL rồi mới chết ở bước kết nối:
 
 - báo **lỗi kết nối** → ĐẠT (code chạy tốt)
 - báo **bất kỳ lỗi nào khác** → TRƯỢT, in rõ endpoint và thông báo lỗi
