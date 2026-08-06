@@ -119,6 +119,7 @@
       <button data-tab="dashboard" class="mainTab">📊 Tổng quan</button>
       <button data-tab="reports" class="mainTab">📋 Các Báo cáo khác </button>
       <button data-tab="pickslip" class="mainTab">📦 Quản lý xuất kho</button>
+      <button data-tab="receiving" class="mainTab">📥 Receiving</button>
       <button data-tab="partlookup" class="mainTab">🔎 Tra cứu Part On/Off</button>
     </div>
   </nav>
@@ -210,6 +211,7 @@
     <!-- ============ TAB QUẢN LÝ XUẤT KHO ============ -->
     <section id="tab-pickslip" class="hidden">
       <div id="pickPane">
+        <div id="pickScanBar" class="scanbar mb-3 hidden"></div>
         <div id="pickKpi" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 mb-5"></div>
 
         <div class="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-5">
@@ -221,9 +223,13 @@
             <h3 class="card-title">Xu hướng theo ngày <span class="unit">(số dòng · % hủy)</span></h3>
             <div class="chart-box"><canvas id="chartPickDay"></canvas></div>
           </div>
-          <div class="card xl:col-span-2">
+          <div class="card">
             <h3 class="card-title">Top 10 Part No bị hủy nhiều nhất <span class="unit">(số dòng)</span></h3>
             <div class="chart-box"><canvas id="chartPickPart"></canvas></div>
+          </div>
+          <div class="card">
+            <h3 class="card-title">TAT return <span class="unit">(số ngày từ khi xuất kho đến khi trả về kho)</span></h3>
+            <div class="chart-box"><canvas id="chartPickTat"></canvas></div>
           </div>
         </div>
 
@@ -239,12 +245,56 @@
                 <input type="checkbox" id="pickOnlyCancel" class="w-4 h-4" />
                 <span>Chỉ dòng bị hủy</span>
               </label>
+              <label class="flex items-center gap-1.5 text-sm cursor-pointer select-none"
+                     title="Chỉ hiện các dòng chưa tìm thấy file scan PDF trong thư mục">
+                <input type="checkbox" id="pickOnlyNoScan" class="w-4 h-4" />
+                <span>Chỉ dòng chưa scan</span>
+              </label>
               <input id="pickSearch" type="text" placeholder="Tìm kiếm…" class="finput" />
               <span id="pickCount" class="text-xs text-muted"></span>
               <button id="pickExport" class="btn-export">⬇ Excel</button>
             </div>
           </div>
           <div id="pickTable"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ TAB RECEIVING (NHẬP KHO) ============ -->
+    <section id="tab-receiving" class="hidden">
+      <div id="recvPane">
+        <div id="recvScanBar" class="scanbar mb-3 hidden"></div>
+        <div id="recvKpi" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 mb-5"></div>
+
+        <div class="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-5">
+          <div class="card">
+            <h3 class="card-title">Phiếu nhập theo Trung tâm <span class="unit">(đã scan / chưa scan)</span></h3>
+            <div class="chart-box"><canvas id="chartRecvDept"></canvas></div>
+          </div>
+          <div class="card">
+            <h3 class="card-title">Xu hướng theo ngày nhập <span class="unit">(số dòng · DEL_DATE)</span></h3>
+            <div class="chart-box"><canvas id="chartRecvDay"></canvas></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="flex items-center justify-between gap-3 flex-wrap mb-3">
+            <div>
+              <h3 class="card-title mb-0">Chi tiết phiếu nhập kho</h3>
+              <p id="recvDesc" class="text-xs text-muted mt-0.5"></p>
+            </div>
+            <div class="flex items-center gap-2">
+              <label class="flex items-center gap-1.5 text-sm cursor-pointer select-none"
+                     title="Chỉ hiện các phiếu chưa tìm thấy file scan PDF trong thư mục">
+                <input type="checkbox" id="recvOnlyNoScan" class="w-4 h-4" />
+                <span>Chỉ phiếu chưa scan</span>
+              </label>
+              <input id="recvSearch" type="text" placeholder="Tìm kiếm…" class="finput" />
+              <span id="recvCount" class="text-xs text-muted"></span>
+              <button id="recvExport" class="btn-export">⬇ Excel</button>
+            </div>
+          </div>
+          <div id="recvTable"></div>
         </div>
       </div>
     </section>

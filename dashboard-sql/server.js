@@ -48,6 +48,11 @@ const CONFIG = {
   dataDir: (process.env.DATA_DIR || '').trim()
     ? path.resolve(process.env.DATA_DIR.trim())
     : path.join(__dirname, 'data'),
+  // --- Thu muc chua FILE SCAN PDF (doi chieu phieu da scan hay chua) ---
+  // Day chi la GIA TRI MAC DINH. Nguoi dung o trang /admin co the sua va luu
+  // vao data/scan-folders.json; may khac chi XEM duoc (khong sua duoc).
+  scanPickingDir: (process.env.SCAN_PICKING_DIR || '\\\\10.99.7.7\\picking list\\2026').trim(),
+  scanReceivingDir: (process.env.SCAN_RECEIVING_DIR || '\\\\10.99.7.7\\certificates\\2026').trim(),
   signCache: String(process.env.SIGN_CACHE || 'true').toLowerCase() !== 'false',
   signCacheMinutes: parseInt(process.env.SIGN_CACHE_MINUTES || '360', 10), // mac dinh 6h
   // --- Bao cao dinh ky day len Teams / SharePoint (phuong an 3) - MAC DINH TAT ---
@@ -549,6 +554,120 @@ function loadManualPairs() {
 
 function saveManualPairs(arr) {
   saveJsonSafe(MANUAL_PAIR_FILE, arr);
+}
+
+// ---------------------------------------------------------------------------
+// 3e. THU MUC FILE SCAN PDF (doi chieu "da scan hay chua")
+//     Nghiep vu (lay tu cong cu AMOS_GUI cua nguoi dung):
+//       - Picking list : ten file = <PICKING_LISTNO_I>-....pdf  -> lay PHAN DAU
+//         truoc dau '-' lam khoa. Phieu TRA (return) dung khoa <HISTORYNO_I>.
+//       - Receiving    : ten file = <VOUCHERNO>.pdf (nguyen ten, khong tach).
+//         VOUCHERNO trong AMOS co tien to "R-" -> bo di truoc khi so.
+//     Duong dan MAC DINH nam trong CONFIG; nguoi dung o trang /admin sua duoc
+//     va luu vao data/scan-folders.json TREN MAY BACKEND (may khac chi xem).
+// ---------------------------------------------------------------------------
+const SCAN_DIR_FILE = path.join(DATA_DIR_EARLY(), 'scan-folders.json');
+const _scanCache = new Map();
+const SCAN_CACHE_MS = 60 * 1000;
+
+/** Doc duong dan da luu (neu co), lui ve mac dinh trong CONFIG. */
+function loadScanDirs() {
+  let saved = {};
+  try {
+    if (fs.existsSync(SCAN_DIR_FILE)) saved = JSON.parse(fs.readFileSync(SCAN_DIR_FILE, 'utf8')) || {};
+  } catch (e) {
+    console.warn('[SCAN] Khong doc duoc scan-folders.json:', e.message);
+  }
+  const s = (v, dflt) => (typeof v === 'string' && v.trim() ? v.trim() : dflt);
+  return {
+    picking: s(saved.picking, CONFIG.scanPickingDir),
+    receiving: s(saved.receiving, CONFIG.scanReceivingDir),
+    updatedAt: saved.updatedAt || null,
+    updatedBy: saved.updatedBy || null,
+    // De giao dien chi ro dang dung ban SUA hay ban MAC DINH
+    custom: {
+      picking: !!(saved.picking && saved.picking.trim()),
+      receiving: !!(saved.receiving && saved.receiving.trim()),
+    },
+    defaults: { picking: CONFIG.scanPickingDir, receiving: CONFIG.scanReceivingDir },
+  };
+}
+
+/** Ghi duong dan moi (chi goi tu API admin - da qua adminGuard theo IP). */
+function saveScanDirs({ picking, receiving }, ip) {
+  const cur = loadScanDirs();
+  const next = {
+    picking: typeof picking === 'string' ? picking.trim() : (cur.custom.picking ? cur.picking : ''),
+    receiving: typeof receiving === 'string' ? receiving.trim() : (cur.custom.receiving ? cur.receiving : ''),
+    updatedAt: new Date().toISOString(),
+    updatedBy: ip || 'unknown',
+  };
+  saveJsonSafe(SCAN_DIR_FILE, next);
+  _scanCache.clear(); // duong dan doi -> bo cache danh sach file cu
+  return loadScanDirs();
+}
+
+/**
+ * Doc danh sach file PDF trong thu muc -> tap khoa de doi chieu.
+ * @param {string} dir   duong dan (co the la UNC \\\\may\\thu muc)
+ * @param {'prefix'|'full'} mode  'prefix' = cat truoc dau '-' (picking list)
+ * KHONG NEM LOI: thu muc mang co the tam thoi khong voi toi duoc -> tra ve
+ * { ok:false, error } de giao dien bao ro "khong kiem tra duoc" thay vi bao
+ * nham la "chua scan".
+ */
+async function readScanFolder(dir, mode) {
+  const key = `${dir}|${mode}`;
+  const hit = _scanCache.get(key);
+  if (hit && Date.now() - hit.at < SCAN_CACHE_MS) return hit;
+  const out = { at: Date.now(), dir, mode, ok: false, count: 0, keys: new Set(), error: '' };
+  if (!dir) {
+    out.error = 'Chua cau hinh duong dan thu muc scan.';
+    _scanCache.set(key, out);
+    return out;
+  }
+  const t0 = Date.now();
+  try {
+    const files = await fs.promises.readdir(dir);
+    for (const f of files) {
+      if (!/\.pdf$/i.test(f)) continue;
+      const name = f.slice(0, -4).trim();
+      out.keys.add(mode === 'prefix' ? name.split('-')[0].trim() : name);
+    }
+    out.ok = true;
+    out.count = out.keys.size;
+    out.ms = Date.now() - t0;
+    console.log(`[SCAN] ${dir} -> ${out.count} file PDF (${out.ms}ms)`);
+  } catch (e) {
+    out.error = e.code === 'ENOENT' ? 'Khong tim thay thu muc.'
+      : e.code === 'EACCES' || e.code === 'EPERM' ? 'Khong co quyen doc thu muc.'
+        : e.message;
+    out.ms = Date.now() - t0;
+    console.warn(`[SCAN] Khong doc duoc thu muc ${dir}: ${out.error}`);
+  }
+  _scanCache.set(key, out);
+  return out;
+}
+
+/** Trang thai thu muc de tra ve cho giao dien (KHONG kem danh sach file). */
+function scanFolderStatus(s) {
+  return { dir: s.dir, ok: s.ok, count: s.count, error: s.error, ms: s.ms || 0 };
+}
+
+/**
+ * Chuan hoa MOT SO ID (PICKING_LISTNO_I, HISTORYNO_I...) thanh chuoi so nguyen
+ * de so voi ten file. Driver co the tra ve number / string / '123.0'.
+ */
+function idStr(v) {
+  if (v === null || v === undefined || v === '') return '';
+  const n = Number(v);
+  if (Number.isFinite(n)) return String(Math.trunc(n));
+  return String(v).trim();
+}
+
+/** Trang thai scan cua 1 dong: '' khi KHONG doc duoc thu muc (khong ket luan). */
+function scanState(folder, key) {
+  if (!folder.ok) return '';
+  return key && folder.keys.has(key) ? 'SCANNED' : 'CHUA_SCAN';
 }
 
 /** Danh sach cot cua 1 bang trong NQT (cache) - de dung cot TUY CHON ma khong
@@ -2245,6 +2364,149 @@ function pickslipWhere(f, dept, params) {
 }
 
 /**
+ * PHIEU NHAP LAI KHO (return) cua cac dong "RETURN": tra ve theo PICKSLIPSEQNO_I.
+ * Nguon: [STG_AMOS].HISTORY voi VM IN ('EA','TC') - dung y het cong cu AMOS_GUI.
+ * MUTATION = SO NGAY AMOS -> ngay tra ve kho thuc te.
+ *
+ * LINKED SERVER: KHONG join theo tung dong. Goi theo LO (400 ID/lan) bang
+ * "PICKSLIPSEQNO_I IN (@s0..@sN)" giong fetchWoInstalls().
+ *
+ * Mot seqno co the co NHIEU dong lich su (vd tra lam nhieu lan). Lay lan
+ * SOM NHAT (MUTATION nho nhat) - do la lan tra ve dau tien, dung de tinh TAT.
+ * @returns {Map<string, {historyno:number, return_date:Date, vm:string, so_lan:number}>}
+ */
+async function fetchReturnHistory(seqnos) {
+  const out = new Map();
+  const ids = [...new Set(seqnos.map((v) => idStr(v)).filter((v) => v && v !== '0'))];
+  if (!ids.length) return out;
+  const CHUNK = 400;
+  for (let i = 0; i < ids.length; i += CHUNK) {
+    const part = ids.slice(i, i + CHUNK);
+    const params = { amosEpoch: CONFIG.amosEpoch };
+    const names = [];
+    part.forEach((s, j) => { params['s' + j] = Number(s); names.push('@s' + j); });
+    try {
+      const res = await query(
+        `SELECT TRY_CONVERT(bigint, HIS.[PICKSLIPSEQNO_I]) AS seqno,
+                TRY_CONVERT(bigint, HIS.[HISTORYNO_I])     AS historyno,
+                TRY_CONVERT(float,  HIS.[MUTATION])        AS mutation_day,
+                DATEADD(DAY, TRY_CONVERT(int, TRY_CONVERT(float, HIS.[MUTATION])),
+                        TRY_CONVERT(datetime, @amosEpoch)) AS return_date,
+                RTRIM(HIS.[VM]) AS vm
+         FROM [DWH_DB]..[STG_AMOS].[HISTORY] HIS
+         WHERE HIS.[PICKSLIPSEQNO_I] IN (${names.join(', ')})
+           AND HIS.[VM] IN ('EA', 'TC')`,
+        params
+      );
+      for (const r of res) {
+        const k = idStr(r.seqno);
+        const cur = out.get(k);
+        if (!cur) out.set(k, { ...r, so_lan: 1 });
+        else {
+          cur.so_lan += 1;
+          // Giu lan SOM NHAT
+          if ((r.mutation_day ?? Infinity) < (cur.mutation_day ?? Infinity)) {
+            Object.assign(cur, r, { so_lan: cur.so_lan });
+          }
+        }
+      }
+    } catch (e) {
+      // Loi linked server -> KHONG lam vo bao cao: coi nhu chua tim thay phieu tra
+      console.warn('[HISTORY] Khong lay duoc phieu tra (bo qua):', e.message);
+      return out;
+    }
+  }
+  return out;
+}
+
+/** So NGAY tron giua 2 moc (b - a). Tra null neu thieu mot dau. */
+function dayDiff(a, b) {
+  const da = a instanceof Date ? a : (a ? new Date(a) : null);
+  const db = b instanceof Date ? b : (b ? new Date(b) : null);
+  if (!da || !db || isNaN(da) || isNaN(db)) return null;
+  return Math.round((db - da) / 86400000);
+}
+
+/** Cac khoang TAT return de ve bieu do phan bo. */
+const TAT_RETURN_BUCKETS = [
+  { label: 'Trong ngay', min: -Infinity, max: 0 },
+  { label: '1-3 ngay', min: 1, max: 3 },
+  { label: '4-7 ngay', min: 4, max: 7 },
+  { label: '8-14 ngay', min: 8, max: 14 },
+  { label: '15-30 ngay', min: 15, max: 30 },
+  { label: '> 30 ngay', min: 31, max: Infinity },
+];
+
+/**
+ * BO SUNG cho tung dong pickslip (SUA TRUC TIEP tren `rows`):
+ *   - scan        : SCANNED / CHUA_SCAN ('' neu khong doc duoc thu muc)
+ *   - return_no   : <HISTORYNO_I>-R cua phieu nhap lai kho (NOT FOUND neu chua co)
+ *   - return_date : ngay tra ve kho thuc te
+ *   - tat_return  : SO NGAY tu ngay xuat kho (PICKSLIP_DATE) den ngay tra ve kho
+ *   - return_scan : phieu tra da scan hay chua (cung thu muc picking list)
+ * Chi cac dong loai 'RETURN' moi hoi HISTORY.
+ */
+async function enrichPickslipRows(rows) {
+  const dirs = loadScanDirs();
+  const folder = await readScanFolder(dirs.picking, 'prefix');
+
+  const retRows = rows.filter((r) => r.loai === 'RETURN');
+  const hist = retRows.length ? await fetchReturnHistory(retRows.map((r) => r.seqno)) : new Map();
+
+  const st = {
+    daScan: 0, chuaScan: 0,
+    returnCoPhieu: 0, returnKhongPhieu: 0,
+    returnDaScan: 0, returnChuaScan: 0,
+    tatReturnAvg: null, tatReturnMax: null,
+  };
+  const tats = [];
+  const buckets = TAT_RETURN_BUCKETS.map(() => 0);
+
+  for (const r of rows) {
+    r.scan = scanState(folder, idStr(r.picking_listno));
+    if (r.scan === 'SCANNED') st.daScan += 1;
+    else if (r.scan === 'CHUA_SCAN') st.chuaScan += 1;
+
+    r.return_no = '';
+    r.return_date = null;
+    r.tat_return = null;
+    r.return_scan = '';
+    if (r.loai !== 'RETURN') continue;
+
+    const h = hist.get(idStr(r.seqno));
+    if (!h) { st.returnKhongPhieu += 1; r.return_no = 'NOT FOUND'; continue; }
+    st.returnCoPhieu += 1;
+    const base = idStr(h.historyno);
+    r.return_no = base + '-R';
+    r.return_date = h.return_date;
+    r.return_scan = scanState(folder, base);
+    if (r.return_scan === 'SCANNED') st.returnDaScan += 1;
+    else if (r.return_scan === 'CHUA_SCAN') st.returnChuaScan += 1;
+
+    const d = dayDiff(r.pickslip_date, h.return_date);
+    if (d !== null) {
+      r.tat_return = d;
+      tats.push(d);
+      const bi = TAT_RETURN_BUCKETS.findIndex((b) => d >= b.min && d <= b.max);
+      if (bi >= 0) buckets[bi] += 1;
+    }
+  }
+
+  if (tats.length) {
+    st.tatReturnAvg = Math.round((tats.reduce((a, b) => a + b, 0) / tats.length) * 10) / 10;
+    st.tatReturnMax = Math.max(...tats);
+  }
+
+  return {
+    stats: st,
+    folder: scanFolderStatus(folder),
+    charts: {
+      tatReturn: { labels: TAT_RETURN_BUCKETS.map((b) => b.label), values: buckets },
+    },
+  };
+}
+
+/**
  * DU LIEU TAB "QUAN LY XUAT KHO": KPI + bieu do + bang chi tiet.
  * Tat ca tinh tren #ps (da o local) nen nhieu phep gom cung chi ton 1 luot
  * hoi linked server duy nhat.
@@ -2305,8 +2567,12 @@ async function qPickslip(range, f) {
   const topPart = pick('partno').filter((r) => 'so_dong_huy' in r && !('station' in r));
   const rows = sets.find((s) => s.length && 'pickslipno' in s[0] && 'remarks' in s[0]) || [];
 
+  // --- DOI CHIEU FILE SCAN + PHIEU TRA + TAT RETURN (tinh o Node, khong SQL) ---
+  const scan = await enrichPickslipRows(rows);
+
   const pct = (a, b) => (b ? Math.round((a / b) * 1000) / 10 : 0);
   const deptSorted = [...byDept].sort((a, b) => b.so_dong - a.so_dong);
+  const sc = scan.stats;
   return {
     range: { from: range.from, to: range.to, label: range.label },
     kpis: {
@@ -2319,8 +2585,21 @@ async function qPickslip(range, f) {
       soPhieu: kpi.so_phieu || 0,
       soPhieuCoHuy: kpi.so_phieu_co_huy || 0,
       tyLePhieuCoHuy: pct(kpi.so_phieu_co_huy || 0, kpi.so_phieu || 0),
+      // Doi chieu file scan (tinh tren cac dong hien trong bang chi tiet)
+      daScan: sc.daScan,
+      chuaScan: sc.chuaScan,
+      tyLeScan: pct(sc.daScan, sc.daScan + sc.chuaScan),
+      // Phieu tra + TAT return
+      returnCoPhieu: sc.returnCoPhieu,
+      returnKhongPhieu: sc.returnKhongPhieu,
+      tatReturnAvg: sc.tatReturnAvg,
+      tatReturnMax: sc.tatReturnMax,
+      returnDaScan: sc.returnDaScan,
+      returnChuaScan: sc.returnChuaScan,
     },
+    scanFolder: scan.folder,
     charts: {
+      tatReturn: scan.charts.tatReturn,
       byDept: {
         labels: deptSorted.map((r) => r.department),
         thuc: deptSorted.map((r) => r.so_dong - r.so_cancel - r.so_return),
@@ -2336,6 +2615,175 @@ async function qPickslip(range, f) {
       topPart: {
         labels: topPart.map((r) => r.partno),
         values: topPart.map((r) => r.so_dong_huy),
+      },
+    },
+    rows,
+    count: rows.length,
+    truncated: rows.length >= CONFIG.maxRows,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 5d. RECEIVING (nhap kho) - [STG_AMOS].HISTORY, VM = 'B1'
+//     Nghiep vu (lay tu cong cu AMOS_GUI cua nguoi dung):
+//       - Keo ca VM 'B1' (phieu nhap) va 'CR' (huy nhap) trong ky theo DEL_DATE.
+//       - LOAI BO dong B1 nao co RECDETAILNO_I trung voi mot dong CR
+//         -> do la phieu nhap DA BI HUY.
+//       - Loc: STATION CHUA station chon; CONDITION KHONG chua 'us';
+//         STORE ket thuc 'main' hoac 'vna'; loai rieng STORE = 'main' ma
+//         LOCATION thuoc ('shoploc','lg5').
+//       - Doi chieu file scan: ten file PDF = VOUCHERNO (da bo tien to 'R-').
+// ---------------------------------------------------------------------------
+
+/**
+ * Khoang SO NGAY AMOS CHINH XAC cua ky (khong dem +/-2 nhu amosDayParams).
+ * Dung cho cot chi co NGAY (DEL_DATE) - khong co gio nen khong lech mui gio.
+ */
+function amosDayExact(range) {
+  const epoch = new Date(CONFIG.amosEpoch + 'T00:00:00Z');
+  const DAY = 86400000;
+  return {
+    fromDayX: Math.floor((new Date(String(range.from) + 'Z') - epoch) / DAY),
+    toDayX: Math.floor((new Date(String(range.to) + 'Z') - epoch) / DAY),
+  };
+}
+
+async function qReceiving(range, f) {
+  const params = {
+    from: range.from, to: range.to, top: CONFIG.maxRows,
+    amosEpoch: CONFIG.amosEpoch, ...amosDayExact(range),
+  };
+  const d2v = (col) =>
+    `DATEADD(DAY, TRY_CONVERT(int, TRY_CONVERT(float, ${col})), TRY_CONVERT(datetime, @amosEpoch))`;
+
+  // Trung tam: theo nguoi tao phieu (CREATED_BY), lui ve 'PA' - giong cac bao
+  // cao khac. LEFT JOIN SIGN nen khong the lam mat dong.
+  const dept = deptFromStaff('x.[created_by]', 'sm');
+  const join = `FROM #hi x ${signJoin('x.[created_by]', 'sm')}`;
+
+  // Bo loc nghiep vu (nguyen van tu AMOS_GUI). STATION dung CONTAINS.
+  let w = `
+      AND LOWER(ISNULL(x.tinh_trang, '')) NOT LIKE '%us%'
+      AND (LOWER(x.store) LIKE '%main' OR LOWER(x.store) LIKE '%vna')
+      AND NOT (LOWER(x.store) = 'main' AND LOWER(x.location) IN ('shoploc', 'lg5'))`;
+  if (f.station) { params.fStation = f.station; w += " AND LOWER(x.station) LIKE '%' + LOWER(@fStation) + '%'"; }
+  if (f.store) { params.fStore = f.store; w += ' AND x.store = @fStore'; }
+  if (f.department) { params.fDepartment = f.department; w += ` AND ${dept} = @fDepartment`; }
+
+  // Dong B1 con hieu luc = khong co dong CR nao cung RECDETAILNO_I
+  const conLai = `x.vm = 'B1' AND NOT EXISTS (
+        SELECT 1 FROM #hi c WHERE c.vm = 'CR' AND c.recdetailno = x.recdetailno)`;
+
+  const text = `
+    IF OBJECT_ID('tempdb..#hi') IS NOT NULL DROP TABLE #hi;
+    SELECT
+      RTRIM(h.[VOUCHERNO])                  AS voucherno,
+      RTRIM(h.[PARTNO])                     AS partno,
+      RTRIM(h.[SERIALNO])                   AS serialno,
+      RTRIM(h.[BATCHNO])                    AS batchno,
+      RTRIM(h.[PSN])                        AS psn,
+      RTRIM(h.[LABELNO])                    AS labelno,
+      TRY_CONVERT(bigint, h.[HISTORYNO_I])  AS historyno,
+      TRY_CONVERT(bigint, h.[RECDETAILNO_I]) AS recdetailno,
+      RTRIM(h.[STATION])                    AS station,
+      RTRIM(h.[STORE])                      AS store,
+      RTRIM(h.[LOCATION])                   AS location,
+      RTRIM(h.[VM])                         AS vm,
+      RTRIM(h.[CONDITION])                  AS tinh_trang,
+      RTRIM(h.[MAT_CLASS])                  AS mat_class,
+      RTRIM(h.[ORDERNO])                    AS orderno,
+      RTRIM(h.[OWNER])                      AS owner,
+      RTRIM(h.[CREATED_BY])                 AS created_by,
+      TRY_CONVERT(float, h.[QTY])           AS qty,
+      ${d2v('h.[DEL_DATE]')}                AS del_date,
+      ${d2v('h.[ORDERDATE]')}               AS orderdate,
+      ${d2v('h.[MUTATION]')}                AS mutation_date
+    INTO #hi
+    FROM [DWH_DB]..[STG_AMOS].[HISTORY] h
+    WHERE h.[VM] IN ('B1', 'CR')
+      AND h.[DEL_DATE] >= @fromDayX AND h.[DEL_DATE] < @toDayX;
+    CREATE INDEX IX_hi_rec ON #hi (recdetailno);
+    CREATE INDEX IX_hi_by  ON #hi (created_by);
+
+    -- [0] Dem tong quan (truoc/sau khi loai phieu huy nhap)
+    SELECT
+      SUM(CASE WHEN x.vm = 'B1' THEN 1 ELSE 0 END) AS b1_tho,
+      SUM(CASE WHEN x.vm = 'CR' THEN 1 ELSE 0 END) AS cr_huy,
+      SUM(CASE WHEN x.vm = 'B1' AND EXISTS (
+            SELECT 1 FROM #hi c WHERE c.vm = 'CR' AND c.recdetailno = x.recdetailno)
+          THEN 1 ELSE 0 END) AS b1_bi_huy
+    FROM #hi x;
+
+    -- [1] Tong so dong sau khi loc (de biet bang chi tiet co bi cat khong)
+    SELECT COUNT(*) AS tong_dong, COUNT(DISTINCT x.voucherno) AS tong_phieu
+    ${join} WHERE ${conLai} ${w};
+
+    -- [2] Bang chi tiet
+    SELECT TOP (@top)
+      x.station, x.store, x.location, x.voucherno, x.partno, x.serialno, x.batchno,
+      x.psn, x.labelno, x.qty, x.tinh_trang, x.mat_class, x.orderno, x.orderdate,
+      x.del_date, x.mutation_date, x.owner, x.created_by, ${dept} AS department,
+      x.historyno, x.recdetailno
+    ${join} WHERE ${conLai} ${w}
+    ORDER BY x.del_date DESC, x.voucherno;
+
+    DROP TABLE #hi;`;
+
+  const sets = await queryMulti(text, params);
+  const pick = (k) => sets.find((s) => s.length && k in s[0]) || [];
+  const cnt = pick('b1_tho')[0] || {};
+  const tot = pick('tong_dong')[0] || {};
+  const rows = pick('voucherno').filter((r) => 'del_date' in r);
+
+  // --- Doi chieu file scan PDF (ten file = VOUCHERNO da bo tien to 'R-') ---
+  const dirs = loadScanDirs();
+  const folder = await readScanFolder(dirs.receiving, 'full');
+  let daScan = 0;
+  let chuaScan = 0;
+  const byDept = new Map();
+  const byDay = new Map();
+  for (const r of rows) {
+    r.voucher_scan = String(r.voucherno || '').replace(/^R-/i, '').trim();
+    r.scan = scanState(folder, r.voucher_scan);
+    if (r.scan === 'SCANNED') daScan += 1;
+    else if (r.scan === 'CHUA_SCAN') chuaScan += 1;
+
+    const dp = r.department || 'PA';
+    if (!byDept.has(dp)) byDept.set(dp, { daScan: 0, chuaScan: 0, tong: 0 });
+    const g = byDept.get(dp);
+    g.tong += 1;
+    if (r.scan === 'SCANNED') g.daScan += 1; else if (r.scan === 'CHUA_SCAN') g.chuaScan += 1;
+
+    const day = r.del_date instanceof Date ? r.del_date.toISOString().slice(0, 10) : String(r.del_date || '').slice(0, 10);
+    if (day) byDay.set(day, (byDay.get(day) || 0) + 1);
+  }
+
+  const pct = (a, b) => (b ? Math.round((a / b) * 1000) / 10 : 0);
+  const deptSorted = [...byDept.entries()].sort((a, b) => b[1].tong - a[1].tong);
+  const daySorted = [...byDay.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+
+  return {
+    range: { from: range.from, to: range.to, label: range.label },
+    kpis: {
+      soDong: tot.tong_dong || 0,
+      soPhieu: tot.tong_phieu || 0,
+      b1Tho: cnt.b1_tho || 0,
+      crHuy: cnt.cr_huy || 0,
+      b1BiHuy: cnt.b1_bi_huy || 0,
+      daScan: daScan,
+      chuaScan: chuaScan,
+      tyLeScan: pct(daScan, daScan + chuaScan),
+    },
+    scanFolder: scanFolderStatus(folder),
+    charts: {
+      byDept: {
+        labels: deptSorted.map(([k]) => k),
+        daScan: deptSorted.map(([, v]) => v.daScan),
+        chuaScan: deptSorted.map(([, v]) => v.chuaScan),
+      },
+      byDay: {
+        labels: daySorted.map(([k]) => k),
+        values: daySorted.map(([, v]) => v),
       },
     },
     rows,
@@ -4256,6 +4704,58 @@ app.get(
     res.json(await qPickslip(range, f));
   })
 );
+
+// --- RECEIVING (nhap kho): KPI + bieu do + bang chi tiet + doi chieu file scan ---
+app.get(
+  '/api/receiving',
+  cached(60 * 1000, async (req, res) => {
+    const range = resolveRange(req.query);
+    const f = readFilters(req.query);
+    if (CONFIG.demoMode) return res.json(DEMO.receiving(range, f));
+    res.json(await qReceiving(range, f));
+  })
+);
+
+// --- THU MUC FILE SCAN: AI CUNG XEM DUOC, chi may quan tri moi SUA duoc ---
+//     (POST nam duoi /api/admin/... nen tu dong di qua adminGuard theo IP.)
+app.get('/api/scan-config', h(async (req, res) => {
+  const dirs = loadScanDirs();
+  const [pk, rc] = await Promise.all([
+    readScanFolder(dirs.picking, 'prefix'),
+    readScanFolder(dirs.receiving, 'full'),
+  ]);
+  res.json({
+    picking: { ...scanFolderStatus(pk), custom: dirs.custom.picking, default: dirs.defaults.picking },
+    receiving: { ...scanFolderStatus(rc), custom: dirs.custom.receiving, default: dirs.defaults.receiving },
+    updatedAt: dirs.updatedAt,
+    updatedBy: dirs.updatedBy,
+    // Bao cho giao dien biet co hien nut Luu hay khong. Dung IP SOCKET that
+    // (giong adminGuard, khong tin header) - server VAN chan lai o POST.
+    canEdit: isAdminAllowed(String(req.socket.remoteAddress || '').replace(/^::ffff:/, '')),
+  });
+}));
+
+app.post('/api/admin/scan-config', h(async (req, res) => {
+  const b = req.body || {};
+  const bad = ['picking', 'receiving'].find(
+    (k) => b[k] !== undefined && typeof b[k] !== 'string'
+  );
+  if (bad) return res.status(400).json({ error: true, message: `Truong "${bad}" phai la chuoi duong dan.` });
+  const ip = String(req.socket.remoteAddress || '').replace(/^::ffff:/, '');
+  const dirs = saveScanDirs({ picking: b.picking, receiving: b.receiving }, ip);
+  console.log(`[SCAN] IP ${ip} cap nhat thu muc scan: picking="${dirs.picking}" receiving="${dirs.receiving}"`);
+  const [pk, rc] = await Promise.all([
+    readScanFolder(dirs.picking, 'prefix'),
+    readScanFolder(dirs.receiving, 'full'),
+  ]);
+  res.json({
+    ok: true,
+    picking: { ...scanFolderStatus(pk), custom: dirs.custom.picking, default: dirs.defaults.picking },
+    receiving: { ...scanFolderStatus(rc), custom: dirs.custom.receiving, default: dirs.defaults.receiving },
+    updatedAt: dirs.updatedAt,
+    updatedBy: dirs.updatedBy,
+  });
+}));
 
 // --- Bang du lieu chi tiet TAT theo don vi (van giu endpoint rieng) ---
 app.get(

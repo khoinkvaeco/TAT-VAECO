@@ -647,6 +647,21 @@ function pickslip(range, f) {
         : (loai === 'RETURN' ? 'PS return' : rnd(['', 'AOG', 'Routine'])),
     });
   }
+  // Doi chieu file scan + phieu tra + TAT return (demo: sinh ngau nhien)
+  rows.forEach((r) => {
+    r.scan = rndInt(0, 9) < 7 ? 'SCANNED' : 'CHUA_SCAN';
+    r.return_no = '';
+    r.return_date = null;
+    r.tat_return = null;
+    r.return_scan = '';
+    if (r.loai !== 'RETURN') return;
+    if (rndInt(0, 9) === 0) { r.return_no = 'NOT FOUND'; return; }
+    const tat = rndInt(0, 40);
+    r.return_no = rndInt(3000000, 3999999) + '-R';
+    r.return_date = new Date(Date.parse(r.pickslip_date) + tat * 86400000).toISOString();
+    r.tat_return = tat;
+    r.return_scan = rndInt(0, 9) < 6 ? 'SCANNED' : 'CHUA_SCAN';
+  });
   const kept = applyFilter(rows, f);
   const pct = (a, b) => (b ? Math.round((a / b) * 1000) / 10 : 0);
   const soDongHuy = kept.filter((r) => r.is_cancel).length;
@@ -678,6 +693,20 @@ function pickslip(range, f) {
   kept.filter((r) => r.is_cancel).forEach((r) => pm.set(r.partno, (pm.get(r.partno) || 0) + 1));
   const topPart = [...pm.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
 
+  const daScan = kept.filter((r) => r.scan === 'SCANNED').length;
+  const chuaScan = kept.filter((r) => r.scan === 'CHUA_SCAN').length;
+  const retOk = kept.filter((r) => r.loai === 'RETURN' && r.tat_return !== null);
+  const tats = retOk.map((r) => r.tat_return);
+  const TB = [
+    { label: 'Trong ngay', min: -Infinity, max: 0 },
+    { label: '1-3 ngay', min: 1, max: 3 },
+    { label: '4-7 ngay', min: 4, max: 7 },
+    { label: '8-14 ngay', min: 8, max: 14 },
+    { label: '15-30 ngay', min: 15, max: 30 },
+    { label: '> 30 ngay', min: 31, max: Infinity },
+  ];
+  const buckets = TB.map((b) => tats.filter((d) => d >= b.min && d <= b.max).length);
+
   return {
     range: { from: range.from, to: range.to, label: range.label },
     kpis: {
@@ -690,8 +719,18 @@ function pickslip(range, f) {
       soPhieu: phieu.size,
       soPhieuCoHuy: phieuHuy.size,
       tyLePhieuCoHuy: pct(phieuHuy.size, phieu.size),
+      daScan, chuaScan,
+      tyLeScan: pct(daScan, daScan + chuaScan),
+      returnCoPhieu: kept.filter((r) => r.loai === 'RETURN' && r.return_no && r.return_no !== 'NOT FOUND').length,
+      returnKhongPhieu: kept.filter((r) => r.return_no === 'NOT FOUND').length,
+      tatReturnAvg: tats.length ? Math.round((tats.reduce((a, b) => a + b, 0) / tats.length) * 10) / 10 : null,
+      tatReturnMax: tats.length ? Math.max(...tats) : null,
+      returnDaScan: kept.filter((r) => r.return_scan === 'SCANNED').length,
+      returnChuaScan: kept.filter((r) => r.return_scan === 'CHUA_SCAN').length,
     },
+    scanFolder: { dir: '(DEMO) \\\\10.99.7.7\\picking list\\2026', ok: true, count: 1234, error: '', ms: 5 },
     charts: {
+      tatReturn: { labels: TB.map((b) => b.label), values: buckets },
       byDept: {
         labels: byDept.map((r) => r.department),
         thuc: byDept.map((r) => r.so_dong - r.so_cancel - r.so_return),
@@ -705,6 +744,87 @@ function pickslip(range, f) {
         tyLe: byDay.map((r) => pct(r.so_dong_huy, r.so_dong)),
       },
       topPart: { labels: topPart.map((x) => x[0]), values: topPart.map((x) => x[1]) },
+    },
+    rows: kept,
+    count: kept.length,
+  };
+}
+
+/** DEMO tab RECEIVING (nhap kho) - cau truc giong qReceiving() o server.js. */
+function receiving(range, f) {
+  const rows = [];
+  const n = 320;
+  for (let i = 0; i < n; i++) {
+    const d = baseDevice(i);
+    const del = rndDate(range.from, range.to);
+    rows.push({
+      station: d.station,
+      store: d.store,
+      location: rnd(['A01', 'B12', 'LG3', 'RACK-7', 'QUAR']),
+      voucherno: 'R-' + rndInt(200000, 299999),
+      partno: d.partno,
+      serialno: d.serialno,
+      batchno: '',
+      psn: 'P' + rndInt(100000, 999999),
+      labelno: d.labelno,
+      qty: rndInt(1, 6),
+      tinh_trang: rnd(['SV', 'NEW', 'OH', 'RP']),
+      mat_class: rnd(['ROT', 'CON', 'EXP']),
+      orderno: 'PO' + rndInt(10000, 99999),
+      orderdate: new Date(del.getTime() - rndInt(5, 60) * 86400000).toISOString(),
+      del_date: del.toISOString(),
+      mutation_date: del.toISOString(),
+      owner: rnd(['VNA', 'VAECO', '']),
+      created_by: d.staff,
+      department: rnd(DEPARTMENTS),
+      historyno: rndInt(4000000, 4999999),
+      recdetailno: rndInt(500000, 599999),
+    });
+  }
+  const kept = applyFilter(rows, f);
+  kept.forEach((r) => {
+    r.voucher_scan = r.voucherno.replace(/^R-/i, '');
+    r.scan = rndInt(0, 9) < 7 ? 'SCANNED' : 'CHUA_SCAN';
+  });
+  const pct = (a, b) => (b ? Math.round((a / b) * 1000) / 10 : 0);
+  const daScan = kept.filter((r) => r.scan === 'SCANNED').length;
+  const chuaScan = kept.length - daScan;
+
+  const g = new Map();
+  kept.forEach((r) => {
+    const k = r.department || 'PA';
+    const x = g.get(k) || { k, daScan: 0, chuaScan: 0, tong: 0 };
+    x.tong++; if (r.scan === 'SCANNED') x.daScan++; else x.chuaScan++;
+    g.set(k, x);
+  });
+  const byDept = [...g.values()].sort((a, b) => b.tong - a.tong);
+
+  const dm = new Map();
+  kept.forEach((r) => {
+    const k = r.del_date.slice(0, 10);
+    dm.set(k, (dm.get(k) || 0) + 1);
+  });
+  const byDay = [...dm.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+
+  return {
+    range: { from: range.from, to: range.to, label: range.label },
+    kpis: {
+      soDong: kept.length,
+      soPhieu: new Set(kept.map((r) => r.voucherno)).size,
+      b1Tho: kept.length + 24,
+      crHuy: 24,
+      b1BiHuy: 24,
+      daScan, chuaScan,
+      tyLeScan: pct(daScan, kept.length),
+    },
+    scanFolder: { dir: '(DEMO) \\\\10.99.7.7\\certificates\\2026', ok: true, count: 987, error: '', ms: 4 },
+    charts: {
+      byDept: {
+        labels: byDept.map((r) => r.k),
+        daScan: byDept.map((r) => r.daScan),
+        chuaScan: byDept.map((r) => r.chuaScan),
+      },
+      byDay: { labels: byDay.map((x) => x[0]), values: byDay.map((x) => x[1]) },
     },
     rows: kept,
     count: kept.length,
@@ -730,4 +850,5 @@ module.exports = {
   other,
   repairAdmin,
   pickslip,
+  receiving,
 };

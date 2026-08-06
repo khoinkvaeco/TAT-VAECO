@@ -1284,6 +1284,7 @@ function switchTab(tab) {
   $('#tab-dashboard').classList.toggle('hidden', tab !== 'dashboard');
   $('#tab-reports').classList.toggle('hidden', tab !== 'reports');
   $('#tab-pickslip').classList.toggle('hidden', tab !== 'pickslip');
+  $('#tab-receiving').classList.toggle('hidden', tab !== 'receiving');
   $('#tab-partlookup').classList.toggle('hidden', tab !== 'partlookup');
   if (tab === 'reports') {
     // LUON tai lai khi mo tab (cache lam viec nay re); tranh cap nhat bang khi
@@ -1291,6 +1292,8 @@ function switchTab(tab) {
     loadReport(state.currentReport);
   } else if (tab === 'pickslip') {
     loadPickslip();
+  } else if (tab === 'receiving') {
+    loadReceiving();
   } else if (tab === 'partlookup') {
     if (partTable) partTable.redraw(true); // ve lai sau khi container hien thi
     $('#poPartno').focus();
@@ -1309,6 +1312,55 @@ let pickLoadSeq = 0;
 
 const PICK_LOAI_LABEL = { CANCEL: 'Cancel', RETURN: 'Return', NORMAL: 'Bình thường' };
 
+// --- Doi chieu FILE SCAN PDF (dung chung cho tab Xuat kho va tab Receiving) ---
+// Gia tri '' = KHONG doc duoc thu muc -> hien '—' chu KHONG bao "chua scan"
+// (bao nham se khien nguoi dung di tim file khong ton tai van de).
+const SCAN_LABEL = { SCANNED: 'Đã scan', CHUA_SCAN: 'Chưa scan' };
+
+/** Chan HTML trong du lieu tu server (duong dan / thong bao loi). */
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
+}
+
+function fmtScanCell(cell) {
+  const v = cell.getValue();
+  if (v === 'SCANNED') {
+    const c = cssVar('--good');
+    return `<span class="tat-badge" style="background:${c}22;color:${c}">Đã scan</span>`;
+  }
+  if (v === 'CHUA_SCAN') {
+    const c = cssVar('--critical');
+    return `<span class="tat-badge" style="background:${c}22;color:${c}">Chưa scan</span>`;
+  }
+  return '<span style="color:var(--text-muted)" title="Không đọc được thư mục scan">—</span>';
+}
+
+const SCAN_HEADER_FILTER = {
+  headerFilter: 'list',
+  headerFilterParams: { values: { '': 'Tất cả', SCANNED: 'Đã scan', CHUA_SCAN: 'Chưa scan' } },
+};
+
+/** Thanh trang thai thu muc scan (duong dan + so file + loi neu co). */
+function renderScanBar(sel, folder) {
+  const el = $(sel);
+  if (!el) return;
+  if (!folder) { el.classList.add('hidden'); return; }
+  el.classList.remove('hidden');
+  const dir = `<code>${escapeHtml(folder.dir || '(chưa cấu hình)')}</code>`;
+  if (folder.ok) {
+    el.className = 'scanbar scanbar-ok mb-3';
+    el.innerHTML = `📁 Thư mục scan: ${dir} — <b>${(folder.count || 0).toLocaleString('vi')}</b> file PDF`
+      + `<span class="text-xs text-muted"> (đọc ${folder.ms || 0}ms · làm mới mỗi 60 giây)</span>`;
+  } else {
+    el.className = 'scanbar scanbar-warn mb-3';
+    el.innerHTML = `⚠ <b>Không đọc được thư mục scan</b> ${dir} — ${escapeHtml(folder.error || '')}`
+      + '<span class="text-xs"> · Cột “Scan” tạm để trống (—), KHÔNG kết luận là chưa scan.'
+      + ' Sửa đường dẫn ở trang <a href="/admin.html" target="_blank">Quản trị</a>.</span>';
+  }
+}
+
 const COLS_PICKSLIP = [
   {
     title: 'Loại', field: 'loai', hozAlign: 'center', width: 110,
@@ -1326,6 +1378,11 @@ const COLS_PICKSLIP = [
   { title: 'Pickslip', field: 'pickslipno', headerFilter: 'input' },
   { title: 'Seq', field: 'seqno', formatter: fmtIntCell, hozAlign: 'right', width: 70 },
   { title: 'Picking list', field: 'picking_listno', formatter: fmtIntCell, hozAlign: 'right', headerFilter: 'input' },
+  {
+    title: 'Scan', field: 'scan', hozAlign: 'center', width: 105, ...SCAN_HEADER_FILTER,
+    headerTooltip: 'Có file <PICKING_LISTNO_I>-….pdf trong thư mục scan hay chưa. “—” = không đọc được thư mục.',
+    formatter: fmtScanCell,
+  },
   { title: 'Part No', field: 'partno', headerFilter: 'input' },
   { title: 'Serial / Batch', field: 'serialno', headerFilter: 'input' },
   { title: 'SL đặt', field: 'qty_booked', hozAlign: 'right', sorter: 'number', width: 85 },
@@ -1337,6 +1394,37 @@ const COLS_PICKSLIP = [
       const c = cssVar('--warning');
       return `<span class="tat-badge" style="background:${c}22;color:${c}">${v}</span>`;
     },
+  },
+  // --- Phieu TRA LAI KHO (chi co o dong loai Return) ---
+  {
+    title: 'Phiếu trả', field: 'return_no', headerFilter: 'input', width: 120,
+    headerTooltip: 'HISTORY.HISTORYNO_I + “-R” (VM ∈ EA, TC) khớp theo PICKSLIPSEQNO_I. NOT FOUND = chưa có phiếu nhập lại kho.',
+    formatter: (cell) => {
+      const v = cell.getValue();
+      if (!v) return '';
+      if (v === 'NOT FOUND') {
+        const c = cssVar('--critical');
+        return `<span class="tat-badge" style="background:${c}22;color:${c}">NOT FOUND</span>`;
+      }
+      return v;
+    },
+  },
+  { title: 'Ngày trả kho', field: 'return_date', formatter: fmtDateCell, width: 115 },
+  {
+    title: 'TAT return', field: 'tat_return', hozAlign: 'right', sorter: 'number', width: 105,
+    headerTooltip: 'Số NGÀY từ ngày xuất kho (PICKSLIP_DATE) đến ngày trả về kho (HISTORY.MUTATION).',
+    formatter: (cell) => {
+      const v = cell.getValue();
+      if (v === null || v === undefined || v === '') return '';
+      const n = Number(v);
+      const c = n > 14 ? cssVar('--critical') : (n > 7 ? cssVar('--warning') : cssVar('--good'));
+      return `<span class="tat-badge" style="background:${c}22;color:${c}">${n} ngày</span>`;
+    },
+  },
+  {
+    title: 'Scan phiếu trả', field: 'return_scan', hozAlign: 'center', width: 125, ...SCAN_HEADER_FILTER,
+    headerTooltip: 'Có file <HISTORYNO_I>-….pdf trong thư mục scan hay chưa.',
+    formatter: fmtScanCell,
   },
   { title: 'Station', field: 'station', headerFilter: 'input', width: 90 },
   { title: 'Store', field: 'store', headerFilter: 'input', width: 100 },
@@ -1355,25 +1443,56 @@ const COLS_PICKSLIP = [
  *  Gop vao MOT ham vi Tabulator khong cho dat 2 ham loc chong nhau. */
 function pickCancelFilter(row) {
   if ($('#pickOnlyCancel').checked && !(Number(row.qty_canceled) > 0)) return false;
+  if ($('#pickOnlyNoScan').checked && row.scan !== 'CHUA_SCAN') return false;
   const q = ($('#pickSearch').value || '').trim().toLowerCase();
   if (!q) return true;
   return Object.values(row).some((v) => String(v ?? '').toLowerCase().includes(q));
 }
 
+/** Ve mot luoi the KPI tu danh sach { label, value, unit, accent }. */
+function renderKpiCards(sel, cards) {
+  $(sel).innerHTML = cards.map((c) => `
+    <div class="kpi-card" style="border-left-color: var(${c.accent})"${c.title ? ` title="${escapeHtml(c.title)}"` : ''}>
+      <div class="kpi-label">${c.label}</div>
+      <div class="kpi-value">${c.value} <span class="kpi-unit">${c.unit}</span></div>
+    </div>`).join('');
+}
+
 function renderPickKpis(k) {
-  const cards = [
+  const n = (v) => (v === null || v === undefined ? '—' : v);
+  renderKpiCards('#pickKpi', [
     { label: 'Số dòng xuất', value: k.soDong, unit: 'dòng', accent: '--series-1' },
     { label: 'Thực xuất', value: k.soDongThuc, unit: 'dòng', accent: '--good' },
     { label: 'Cancel', value: k.soCancel, unit: 'dòng', accent: '--warning' },
     { label: 'Return', value: k.soReturn, unit: 'dòng', accent: '--series-4' },
     { label: 'Tỷ lệ hủy/trả', value: k.tyLeHuy, unit: '%', accent: '--critical' },
     { label: 'Phiếu có hủy/trả', value: `${k.soPhieuCoHuy}/${k.soPhieu}`, unit: `(${k.tyLePhieuCoHuy}%)`, accent: '--series-3' },
-  ];
-  $('#pickKpi').innerHTML = cards.map((c) => `
-    <div class="kpi-card" style="border-left-color: var(${c.accent})">
-      <div class="kpi-label">${c.label}</div>
-      <div class="kpi-value">${c.value} <span class="kpi-unit">${c.unit}</span></div>
-    </div>`).join('');
+    {
+      label: 'Đã scan', value: n(k.daScan), unit: `dòng (${k.tyLeScan ?? 0}%)`, accent: '--good',
+      title: 'Có file PDF picking list trong thư mục scan.',
+    },
+    {
+      label: 'Chưa scan', value: n(k.chuaScan), unit: 'dòng', accent: '--critical',
+      title: 'Không tìm thấy file PDF picking list tương ứng trong thư mục scan.',
+    },
+    {
+      label: 'TAT return TB', value: n(k.tatReturnAvg), unit: 'ngày', accent: '--series-2',
+      title: 'Trung bình số ngày từ khi xuất kho đến khi trả về kho (chỉ tính dòng Return đã tìm được phiếu nhập lại).',
+    },
+    {
+      label: 'TAT return lâu nhất', value: n(k.tatReturnMax), unit: 'ngày', accent: '--warning',
+      title: 'Dòng Return có thời gian nằm ngoài kho lâu nhất trong kỳ.',
+    },
+    {
+      label: 'Return có phiếu trả', value: `${n(k.returnCoPhieu)}/${(k.returnCoPhieu || 0) + (k.returnKhongPhieu || 0)}`,
+      unit: 'dòng', accent: '--series-4',
+      title: 'Số dòng Return đã tìm được phiếu nhập lại kho trong HISTORY (VM ∈ EA, TC).',
+    },
+    {
+      label: 'Phiếu trả chưa scan', value: n(k.returnChuaScan), unit: 'dòng', accent: '--critical',
+      title: 'Phiếu nhập lại kho chưa có file PDF <HISTORYNO_I> trong thư mục scan.',
+    },
+  ]);
 }
 
 function renderPickCharts(c) {
@@ -1458,6 +1577,41 @@ function renderPickCharts(c) {
       scales: { x: { ...d.common.scales.y, beginAtZero: true }, y: d.common.scales.x },
     },
   });
+
+  // Phan bo TAT return: cang lech ve phai = thiet bi nam ngoai kho cang lau
+  destroyChart('pickTat');
+  const tat = c.tatReturn || { labels: [], values: [] };
+  const tatTong = tat.values.reduce((a, b) => a + b, 0);
+  charts.pickTat = new Chart($('#chartPickTat'), {
+    type: 'bar',
+    data: {
+      labels: tat.labels,
+      datasets: [{
+        label: 'Số dòng Return',
+        data: tat.values,
+        backgroundColor: tat.labels.map((_, i) => cssVar(i >= 4 ? '--critical' : (i >= 2 ? '--warning' : '--good'))),
+        borderRadius: 4,
+      }],
+    },
+    options: {
+      ...d.common,
+      plugins: {
+        ...d.common.plugins,
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: (it) => {
+              const v = Number(it.parsed.y) || 0;
+              const p = tatTong ? Math.round((v / tatTong) * 1000) / 10 : 0;
+              return `${v} dòng (${p}%)`;
+            },
+          },
+        },
+      },
+      scales: { x: d.common.scales.x, y: { ...d.common.scales.y, beginAtZero: true, grace: '10%' } },
+    },
+    plugins: [stackTotalLabel],
+  });
 }
 
 async function loadPickslip() {
@@ -1472,10 +1626,12 @@ async function loadPickslip() {
     $('#rangeLabel').textContent = `${data.range.label}: ${fmtDateTime(data.range.from)} → ${fmtRangeEnd(data.range.to)}`;
     renderPickKpis(data.kpis);
     renderPickCharts(data.charts);
+    renderScanBar('#pickScanBar', data.scanFolder);
     $('#pickDesc').textContent =
       'PICKSLIP_BOOKED × PICKSLIP_HEADER. Kỳ theo PICKSLIP_DATE (ngày AMOS); đơn vị đếm là SỐ DÒNG. '
       + 'Cancel / Return phân biệt bằng ĐUÔI của PICKSLIP_TEXT (…cancel · …cancel booking · …return) kèm QTY_CANCELED ≠ 0. '
-      + 'Đã áp bộ lọc nghiệp vụ: QTY_BOOKED ≠ 0, STATUS ∉ {1, 11}, LOCATION_FROM không chứa “U/S”, STORE thuộc MAIN/VNA.';
+      + 'Đã áp bộ lọc nghiệp vụ: QTY_BOOKED ≠ 0, STATUS ∉ {1, 11}, LOCATION_FROM không chứa “U/S”, STORE thuộc MAIN/VNA. '
+      + 'Cột Scan đối chiếu file PDF trong thư mục scan; TAT return = số ngày từ ngày xuất kho đến ngày trả về kho (HISTORY, VM ∈ EA/TC).';
     pickTotalRows = data.count;
     $('#pickCount').textContent =
       `${data.count.toLocaleString('vi')} dòng` + (data.truncated ? ' ⚠ chạm giới hạn MAX_ROWS' : '');
@@ -1511,15 +1667,190 @@ async function loadPickslip() {
 }
 
 function initPickslip() {
-  $('#pickOnlyCancel').addEventListener('change', () => {
-    if (pickTable) pickTable.setFilter(pickCancelFilter);
+  // Tabulator khong ghep duoc nhieu ham loc -> gop TAT CA dieu kien vao mot ham
+  ['#pickOnlyCancel', '#pickOnlyNoScan'].forEach((sel) => {
+    $(sel).addEventListener('change', () => {
+      if (pickTable) pickTable.setFilter(pickCancelFilter);
+    });
   });
-  // Tabulator khong ghep duoc 2 ham loc -> gop CA HAI dieu kien vao mot ham
   $('#pickSearch').addEventListener('input', () => {
     if (pickTable) pickTable.setFilter(pickCancelFilter);
   });
   $('#pickExport').addEventListener('click', () => {
     if (pickTable) pickTable.download('xlsx', `XuatKho_${Date.now()}.xlsx`, { sheetName: 'XuatKho' });
+  });
+}
+
+// --------------------------------------------------------------------------
+// 11d. Tab RECEIVING (nhap kho) - HISTORY VM='B1', da loai phieu huy nhap (CR)
+//      Doi chieu file scan PDF theo VOUCHERNO (bo tien to "R-").
+// --------------------------------------------------------------------------
+let recvTable = null;
+let recvTotalRows = 0;
+let recvLoadSeq = 0;
+
+const COLS_RECEIVING = [
+  {
+    title: 'Scan', field: 'scan', hozAlign: 'center', width: 105, ...SCAN_HEADER_FILTER,
+    headerTooltip: 'Có file <VOUCHERNO>.pdf trong thư mục scan hay chưa (VOUCHERNO đã bỏ tiền tố “R-”). “—” = không đọc được thư mục.',
+    formatter: fmtScanCell,
+  },
+  { title: 'Ngày nhập', field: 'del_date', formatter: fmtDateCell, width: 110 },
+  { title: 'Voucher', field: 'voucherno', headerFilter: 'input', width: 120 },
+  { title: 'Tên file cần có', field: 'voucher_scan', headerFilter: 'input', width: 130 },
+  { title: 'Part No', field: 'partno', headerFilter: 'input' },
+  { title: 'Serial', field: 'serialno', headerFilter: 'input' },
+  { title: 'Batch', field: 'batchno', headerFilter: 'input', width: 100 },
+  { title: 'SL', field: 'qty', hozAlign: 'right', sorter: 'number', width: 70 },
+  { title: 'Tình trạng', field: 'tinh_trang', headerFilter: 'input', width: 100 },
+  { title: 'Station', field: 'station', headerFilter: 'input', width: 90 },
+  { title: 'Store', field: 'store', headerFilter: 'input', width: 100 },
+  { title: 'Location', field: 'location', headerFilter: 'input', width: 110 },
+  { title: 'Center', field: 'department', headerFilter: 'input', width: 95 },
+  { title: 'PSN', field: 'psn', headerFilter: 'input' },
+  { title: 'Label', field: 'labelno', headerFilter: 'input' },
+  { title: 'Mat class', field: 'mat_class', headerFilter: 'input', width: 100 },
+  { title: 'Order No', field: 'orderno', headerFilter: 'input' },
+  { title: 'Ngày order', field: 'orderdate', formatter: fmtDateCell, width: 110 },
+  { title: 'Owner', field: 'owner', headerFilter: 'input', width: 90 },
+  { title: 'Người tạo', field: 'created_by', headerFilter: 'input' },
+  { title: 'History No', field: 'historyno', formatter: fmtIntCell, hozAlign: 'right' },
+  { title: 'Rec detail', field: 'recdetailno', formatter: fmtIntCell, hozAlign: 'right' },
+];
+
+/** O tich "Chi phieu chua scan" + o tim kiem, gop vao MOT ham loc. */
+function recvFilter(row) {
+  if ($('#recvOnlyNoScan').checked && row.scan !== 'CHUA_SCAN') return false;
+  const q = ($('#recvSearch').value || '').trim().toLowerCase();
+  if (!q) return true;
+  return Object.values(row).some((v) => String(v ?? '').toLowerCase().includes(q));
+}
+
+function renderRecvKpis(k) {
+  renderKpiCards('#recvKpi', [
+    { label: 'Dòng nhập kho', value: k.soDong, unit: 'dòng', accent: '--series-1' },
+    { label: 'Số voucher', value: k.soPhieu, unit: 'phiếu', accent: '--series-3' },
+    {
+      label: 'Đã scan', value: k.daScan, unit: `dòng (${k.tyLeScan ?? 0}%)`, accent: '--good',
+      title: 'Đã có file PDF trùng VOUCHERNO trong thư mục scan.',
+    },
+    {
+      label: 'Chưa scan', value: k.chuaScan, unit: 'dòng', accent: '--critical',
+      title: 'Chưa tìm thấy file PDF trùng VOUCHERNO trong thư mục scan.',
+    },
+    {
+      label: 'Phiếu bị hủy nhập', value: k.b1BiHuy, unit: 'dòng', accent: '--warning',
+      title: 'Dòng B1 có RECDETAILNO_I trùng với một dòng CR → đã bị hủy nhập, KHÔNG tính vào báo cáo.',
+    },
+    {
+      label: 'B1 thô trong kỳ', value: k.b1Tho, unit: 'dòng', accent: '--text-muted',
+      title: 'Số dòng VM = B1 lấy về trước khi lọc (station / condition / store / location).',
+    },
+  ]);
+}
+
+function renderRecvCharts(c) {
+  const d = chartDefaults();
+
+  destroyChart('recvDept');
+  charts.recvDept = new Chart($('#chartRecvDept'), {
+    type: 'bar',
+    data: {
+      labels: c.byDept.labels,
+      datasets: [
+        { label: 'Đã scan', data: c.byDept.daScan, backgroundColor: cssVar('--good') },
+        { label: 'Chưa scan', data: c.byDept.chuaScan, backgroundColor: cssVar('--critical'), borderRadius: 4 },
+      ],
+    },
+    options: {
+      ...d.common,
+      interaction: { mode: 'index', intersect: false },
+      scales: {
+        x: { ...d.common.scales.x, stacked: true },
+        y: { ...d.common.scales.y, stacked: true, grace: '8%' },
+      },
+      onClick: chartDrill(c.byDept.labels, 'department'),
+    },
+    plugins: [segmentValueLabel, stackTotalLabel],
+  });
+
+  destroyChart('recvDay');
+  charts.recvDay = new Chart($('#chartRecvDay'), {
+    type: 'bar',
+    data: {
+      labels: c.byDay.labels,
+      datasets: [{ label: 'Số dòng nhập', data: c.byDay.values, backgroundColor: cssVar('--series-2'), borderRadius: 3 }],
+    },
+    options: {
+      ...d.common,
+      plugins: { ...d.common.plugins, legend: { display: false } },
+      scales: { x: d.common.scales.x, y: { ...d.common.scales.y, beginAtZero: true } },
+    },
+  });
+}
+
+async function loadReceiving() {
+  const seq = ++recvLoadSeq;
+  showError('');
+  showLoading(true);
+  setBusy('#recvPane', true);
+  setTabLoading('.mainTab', 'receiving', true);
+  try {
+    const data = await api('/api/receiving');
+    if (seq !== recvLoadSeq) return;
+    $('#rangeLabel').textContent = `${data.range.label}: ${fmtDateTime(data.range.from)} → ${fmtRangeEnd(data.range.to)}`;
+    renderRecvKpis(data.kpis);
+    renderRecvCharts(data.charts);
+    renderScanBar('#recvScanBar', data.scanFolder);
+    $('#recvDesc').textContent =
+      'HISTORY với VM = B1 (phiếu nhập kho), kỳ theo DEL_DATE (ngày AMOS). '
+      + 'Đã LOẠI các dòng B1 có RECDETAILNO_I trùng với dòng VM = CR (phiếu nhập đã bị hủy). '
+      + 'Bộ lọc: STATION chứa station đang chọn, CONDITION không chứa “us”, STORE thuộc MAIN/VNA, '
+      + 'loại riêng STORE = MAIN có LOCATION là SHOPLOC hoặc LG5. '
+      + 'Cột Scan đối chiếu file <VOUCHERNO>.pdf trong thư mục scan (VOUCHERNO đã bỏ tiền tố “R-”).';
+    recvTotalRows = data.count;
+    $('#recvCount').textContent =
+      `${data.count.toLocaleString('vi')} dòng` + (data.truncated ? ' ⚠ chạm giới hạn MAX_ROWS' : '');
+    if (!recvTable) {
+      recvTable = new Tabulator('#recvTable', {
+        data: data.rows,
+        columns: withHeaderFilters(COLS_RECEIVING),
+        layout: 'fitDataFill',
+        pagination: false,
+        placeholder: 'Không có dữ liệu',
+        height: '600px',
+      });
+      recvTable.on('dataFiltered', (filters, rowsFiltered) => {
+        const n = rowsFiltered.length;
+        $('#recvCount').textContent = n === recvTotalRows
+          ? `${recvTotalRows.toLocaleString('vi')} dòng`
+          : `${n.toLocaleString('vi')}/${recvTotalRows.toLocaleString('vi')} dòng`;
+      });
+    } else {
+      recvTable.replaceData(data.rows);
+      recvTable.redraw(true);
+    }
+    recvTable.setFilter(recvFilter);
+  } catch (err) {
+    showError(err.message);
+  } finally {
+    showLoading(false);
+    if (seq === recvLoadSeq) {
+      setBusy('#recvPane', false);
+      setTabLoading('.mainTab', 'receiving', false);
+    }
+  }
+}
+
+function initReceiving() {
+  $('#recvOnlyNoScan').addEventListener('change', () => {
+    if (recvTable) recvTable.setFilter(recvFilter);
+  });
+  $('#recvSearch').addEventListener('input', () => {
+    if (recvTable) recvTable.setFilter(recvFilter);
+  });
+  $('#recvExport').addEventListener('click', () => {
+    if (recvTable) recvTable.download('xlsx', `Receiving_${Date.now()}.xlsx`, { sheetName: 'Receiving' });
   });
 }
 
@@ -1696,6 +2027,8 @@ async function init() {
     reportCache.clear();
     loadDashboard();
     if (!$('#tab-reports').classList.contains('hidden')) loadReport(state.currentReport);
+    if (!$('#tab-pickslip').classList.contains('hidden')) loadPickslip();
+    if (!$('#tab-receiving').classList.contains('hidden')) loadReceiving();
   };
   window.__applyFilters = applyFilters; // cho drill-down tu bieu do (chartDrill)
 
@@ -1749,6 +2082,7 @@ async function init() {
   initChat();
   initPartLookup();
   initPickslip();
+  initReceiving();
   checkHealth();
   await loadFilters(); // doi nap xong option roi moi khoi phuc gia tri da luu
   $('#stationSelect').value = state.station;

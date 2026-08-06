@@ -34,6 +34,7 @@ const ENDPOINTS = [
   '/api/reports/return-store-tat',
   '/api/reports/repair-admin',
   '/api/pickslip',
+  '/api/receiving',
   // Cac endpoint chan doan (chi IP quan tri - chay tu localhost nen qua duoc)
   '/api/admin/diag/dept',
   '/api/admin/diag/higher',

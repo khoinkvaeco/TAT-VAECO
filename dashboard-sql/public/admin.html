@@ -101,6 +101,41 @@
       <div id="rptOut" style="font-size:13px;margin-top:8px"></div>
     </div>
 
+    <!-- ===== Thu muc FILE SCAN PDF (picking list / receiving) ===== -->
+    <div class="panel" style="margin-bottom:14px">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <b style="font-size:14px">📁 Thư mục file scan PDF</b>
+        <span id="scanUpdated" style="font-size:13px;color:var(--muted)">…</span>
+        <span style="margin-left:auto;display:flex;gap:6px">
+          <button id="scanReload" class="ghost">↻ Kiểm tra lại</button>
+          <button id="scanSave" class="act">💾 Lưu đường dẫn</button>
+        </span>
+      </div>
+      <div class="note" style="margin-top:8px">
+        Dùng để đối chiếu <b>phiếu đã scan hay chưa</b> ở tab <b>Quản lý xuất kho</b> và tab <b>Receiving</b>.
+        Đường dẫn lưu trong file JSON <b>trên máy chủ dashboard</b> (<code id="scanFile">data/scan-folders.json</code>),
+        <b>KHÔNG ghi vào SQL Server</b>. Chỉ máy quản trị (localhost hoặc IP trong <code>ADMIN_IPS</code>) sửa được;
+        máy khác chỉ xem. Để trống ô = quay về giá trị mặc định.
+      </div>
+      <div style="margin-top:10px;display:grid;gap:10px">
+        <div>
+          <label style="font-size:13px;display:block;margin-bottom:3px">
+            Picking list <span style="color:var(--muted)">— tên file <code>&lt;PICKING_LISTNO_I&gt;-….pdf</code>, cũng dùng cho phiếu trả <code>&lt;HISTORYNO_I&gt;</code></span>
+          </label>
+          <input id="scanPicking" type="text" spellcheck="false" style="width:100%;font-family:ui-monospace,Menlo,monospace" />
+          <div id="scanPickingState" style="font-size:12px;margin-top:3px;color:var(--muted)">…</div>
+        </div>
+        <div>
+          <label style="font-size:13px;display:block;margin-bottom:3px">
+            Receiving <span style="color:var(--muted)">— tên file <code>&lt;VOUCHERNO&gt;.pdf</code> (đã bỏ tiền tố <code>R-</code>)</span>
+          </label>
+          <input id="scanReceiving" type="text" spellcheck="false" style="width:100%;font-family:ui-monospace,Menlo,monospace" />
+          <div id="scanReceivingState" style="font-size:12px;margin-top:3px;color:var(--muted)">…</div>
+        </div>
+      </div>
+      <div id="scanOut" style="font-size:13px;margin-top:8px"></div>
+    </div>
+
     <!-- ===== Cap doi ung THU CONG da xac nhan ===== -->
     <div class="panel" style="margin-bottom:14px">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
@@ -473,6 +508,64 @@
     $('#mpReload').addEventListener('click', loadManualPairs);
     $('#mpExport').addEventListener('click', () => { location.href = '/api/admin/manual-pairs/export'; });
     loadManualPairs();
+
+    // ---- Thu muc file scan PDF ----
+    // Cho hien trang thai THAT (doc duoc bao nhieu file / loi gi) ngay tai cho
+    // de nguoi dung biet duong dan vua go co dung khong, khong phai doan.
+    function renderScanState(sel, s) {
+      const el = $(sel);
+      if (!s) { el.textContent = ''; return; }
+      if (s.ok) {
+        el.style.color = 'var(--ok, #16a34a)';
+        el.textContent = `✔ Đọc được ${s.count.toLocaleString('vi')} file PDF (${s.ms} ms)`
+          + (s.custom ? '' : ` · đang dùng MẶC ĐỊNH`);
+      } else {
+        el.style.color = 'var(--danger, #dc2626)';
+        el.textContent = `✖ ${s.error || 'Không đọc được thư mục'}`
+          + (s.default ? ` · mặc định: ${s.default}` : '');
+      }
+    }
+
+    function applyScanCfg(d) {
+      $('#scanPicking').value = d.picking.dir || '';
+      $('#scanReceiving').value = d.receiving.dir || '';
+      renderScanState('#scanPickingState', d.picking);
+      renderScanState('#scanReceivingState', d.receiving);
+      $('#scanUpdated').textContent = d.updatedAt
+        ? `sửa lần cuối ${d.updatedAt.slice(0, 16).replace('T', ' ')} từ IP ${d.updatedBy || '?'}`
+        : 'đang dùng đường dẫn mặc định';
+      if (d.canEdit === false) {
+        $('#scanSave').disabled = true;
+        $('#scanSave').title = 'Máy này không có quyền sửa (chỉ máy quản trị).';
+      }
+    }
+
+    async function loadScanCfg() {
+      $('#scanOut').textContent = 'Đang kiểm tra thư mục…';
+      try {
+        applyScanCfg(await getJSON('/api/scan-config'));
+        $('#scanOut').textContent = '';
+      } catch (e) { $('#scanOut').textContent = 'Lỗi: ' + e.message; }
+    }
+
+    $('#scanReload').addEventListener('click', loadScanCfg);
+    $('#scanSave').addEventListener('click', async () => {
+      $('#scanOut').textContent = 'Đang lưu và kiểm tra thư mục…';
+      try {
+        const res = await fetch('/api/admin/scan-config', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            picking: $('#scanPicking').value,
+            receiving: $('#scanReceiving').value,
+          }),
+        });
+        const d = await res.json();
+        if (!res.ok || d.error) throw new Error(d.message || 'Lưu thất bại');
+        applyScanCfg(d);
+        $('#scanOut').textContent = '✔ Đã lưu. Dashboard sẽ dùng đường dẫn mới ở lần tải kế tiếp.';
+      } catch (e) { $('#scanOut').textContent = 'Lỗi: ' + e.message; }
+    });
+    loadScanCfg();
 
     load();
   </script>
