@@ -272,3 +272,31 @@ body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
   background: var(--brand-2); color: #fff; font-size: 15px;
 }
 .chat-input button:hover { background: var(--brand-1); }
+
+/* ---- Bang TONG HOP cua bao cao (Repair Admin) ------------------------------
+   Dung ngay tren trinh duyet tu du lieu bang chi tiet ben duoi. */
+.ra-table {
+  width: auto;
+  border-collapse: collapse;
+  font-size: 13px;
+  background: var(--surface-1);
+  border: 1px solid var(--hair);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.ra-table th,
+.ra-table td { padding: 6px 12px; border-bottom: 1px solid var(--hair); white-space: nowrap; }
+.ra-table thead th {
+  background: color-mix(in srgb, var(--series-1) 12%, transparent);
+  color: var(--text-primary);
+  font-weight: 600;
+  text-align: left;
+}
+.ra-table .ra-num { text-align: right; }
+.ra-table .ra-zero { color: var(--text-muted); }
+.ra-table tbody tr:nth-child(even) { background: color-mix(in srgb, var(--text-primary) 3%, transparent); }
+.ra-table tfoot .ra-total td {
+  font-weight: 700;
+  background: color-mix(in srgb, var(--series-1) 18%, transparent);
+  border-bottom: none;
+}

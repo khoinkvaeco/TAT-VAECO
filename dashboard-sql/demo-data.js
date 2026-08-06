@@ -576,37 +576,21 @@ function repairAdminItems(f) {
   for (const st of stations) {
     for (const loc of REPAIR_LOCS[st] || []) {
       for (let i = 0; i < rndInt(2, 18); i++) {
-        const isRot = rndInt(0, 4) > 0;   // phan lon la rotable
-        if (isRot) {
-          const age = rndInt(1, 200);
-          // ~75% dong dat backorder=1 & state='O' -> duoc tinh vao bang tong hop
-          const bo = rndInt(0, 3) > 0 ? 1 : 0;
-          const st2 = bo === 1 && rndInt(0, 9) > 0 ? 'O' : rnd(['C', 'P', 'O']);
-          items.push({
-            loai: 'ROTABLE', station: st, store: rnd(STORES), location: loc,
-            partno: 'PN-' + pad(rndInt(100, 999)), serialno: 'SN' + rndInt(10000, 99999),
-            labelno: rndInt(100000, 299999), psn: rndInt(1000000, 1999999),
-            orderno: 'O-' + rndInt(100000, 999999),
-            order_date_vn: new Date(Date.now() - age * 86400000).toISOString(),
-            owner: '', batchno: '', qty: null,
-            od_status: 0, od_state: st2, od_backorder: bo,
-            od_ext_state: rnd(['', 'AOG', 'RTN']),
-            age_days: age, nhom: age < 30 ? 'less30' : 'over30',
-            tinh_tong_hop: bo === 1 && st2 === 'O',
-          });
-        } else {
-          items.push({
-            loai: 'CONSUMABLE', station: st, store: rnd(STORES), location: loc,
-            partno: 'PN-' + pad(rndInt(100, 999)), serialno: '',
-            labelno: rndInt(100000, 299999), psn: null,
-            orderno: '', order_date_vn: null,
-            owner: rnd(['VNA', 'VAECO', '']), batchno: 'B' + rndInt(1000, 9999),
-            qty: rndInt(1, 25),
-            od_status: null, od_state: '', od_backorder: null, od_ext_state: '',
-            age_days: null, nhom: 'unknown',
-            tinh_tong_hop: false,   // khong noi duoc sang OD_DETAIL
-          });
-        }
+        const age = rndInt(1, 200);
+        // ~75% dong dat backorder=1 & state='O' -> duoc tinh vao bao cao
+        const bo = rndInt(0, 3) > 0 ? 1 : 0;
+        const st2 = bo === 1 && rndInt(0, 9) > 0 ? 'O' : rnd(['C', 'P', 'O']);
+        items.push({
+          station: st, store: rnd(STORES), location: loc,
+          partno: 'PN-' + pad(rndInt(100, 999)), serialno: 'SN' + rndInt(10000, 99999),
+          labelno: rndInt(100000, 299999), psn: rndInt(1000000, 1999999),
+          orderno: 'O-' + rndInt(100000, 999999),
+          order_date_vn: new Date(Date.now() - age * 86400000).toISOString(),
+          od_status: 0, od_state: st2, od_backorder: bo,
+          od_ext_state: rnd(['', 'AOG', 'RTN']),
+          age_days: age, nhom: age < 30 ? 'less30' : 'over30',
+          tinh_tong_hop: bo === 1 && st2 === 'O',
+        });
       }
     }
   }
@@ -615,36 +599,12 @@ function repairAdminItems(f) {
 }
 
 function repairAdmin(range, f) {
-  const map = new Map();
-  let boQua = 0;
-  for (const it of repairAdminItems(f)) {
-    if (!it.tinh_tong_hop) { boQua++; continue; }
-    const key = it.station + '|' + it.store + '|' + it.location;
-    let g = map.get(key);
-    if (!g) {
-      g = { station: it.station, store: it.store, location: it.location, less30: 0, over30: 0, unknown: 0, total: 0 };
-      map.set(key, g);
-    }
-    g[it.nhom]++; g.total++;
-  }
-  const rows = [...map.values()].sort((a, b) => a.station.localeCompare(b.station) || b.total - a.total);
-  if (rows.length) {
-    const sum = (k) => rows.reduce((s, r) => s + r[k], 0);
-    rows.push({
-      station: '', store: '', location: 'TỔNG CỘNG', isTotal: true,
-      less30: sum('less30'), over30: sum('over30'), unknown: sum('unknown'),
-      total: sum('total'), boQua,
-    });
-  }
-  return rows;
-}
-
-function repairAdminDetail(range, f) {
-  return repairAdminItems(f).sort(
-    (a, b) => a.station.localeCompare(b.station)
+  return repairAdminItems(f)
+    .filter((it) => it.tinh_tong_hop)
+    .map(({ od_status, od_state, od_backorder, od_ext_state, tinh_tong_hop, ...rest }) => rest)
+    .sort((a, b) => a.station.localeCompare(b.station)
       || a.location.localeCompare(b.location)
-      || (b.age_days ?? -1) - (a.age_days ?? -1)
-  );
+      || (b.age_days ?? -1) - (a.age_days ?? -1));
 }
 
 module.exports = {
@@ -665,5 +625,4 @@ module.exports = {
   removedBeforeInstalled,
   other,
   repairAdmin,
-  repairAdminDetail,
 };

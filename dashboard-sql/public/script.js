@@ -855,48 +855,17 @@ const REPORT_DEFS = {
 
   // --- REPAIR ADMIN: ton dong tai cac vi tri UNSERVICEABLE (location_type=-4) ---
   'repair-admin': {
-    title: 'Repair Admin — tồn đọng tại vị trí Unserviceable (theo Station)',
-    desc: 'Đếm số item đang nằm ở các vị trí U/S (LOCATION.location_type = -4) và có đơn sửa chữa OD_DETAIL với status = 0, '
-      + 'tách theo tuổi tồn đọng: dưới 30 ngày / từ 30 ngày trở lên. '
-      + 'CHỈ đếm các dòng có OD_DETAIL.backorder = 1 VÀ state = \'O\' — dòng không đạt vẫn nằm đầy đủ trong tab "Repair Admin (chi tiết)" với cột "Tính tổng hợp" = Không. '
+    title: 'Repair Admin — tồn đọng tại vị trí Unserviceable',
+    desc: 'Thiết bị đang nằm ở vị trí U/S (LOCATION.location_type = -4) có đơn sửa chữa OD_DETAIL với '
+      + 'status = 0, backorder = 1 và state = O. Nguồn: LOCATION × ROTABLES × OD_DETAIL (nối psn + labelno). '
       + 'Đây là ẢNH CHỤP HIỆN TRẠNG nên KHÔNG phụ thuộc kỳ báo cáo — chỉ lọc theo Station/Store đang chọn. '
-      + 'Tuổi tính theo ROTABLES.orderdate. Vật tư tiêu hao (CONSUMABLES) không nối được sang OD_DETAIL (không có psn) nên không xuất hiện ở bảng này.',
+      + 'Tuổi tồn đọng tính từ ROTABLES.orderdate. Bảng tổng hợp bên dưới dựng từ chính danh sách này nên luôn khớp; '
+      + 'nút ⬇ Excel xuất danh sách chi tiết.',
+    // Bang TONG HOP dung tu chinh du lieu bang duoi -> khong the lech nhau.
+    summary: (rows) => repairAdminSummary(rows),
     columns: [
       { title: 'Station', field: 'station', headerFilter: 'input', width: 100 },
       { title: 'Store', field: 'store', headerFilter: 'input', width: 110 },
-      { title: 'Vị trí (U/S)', field: 'location', headerFilter: 'input', widthGrow: 2 },
-      { title: '< 30 ngày', field: 'less30', hozAlign: 'right', sorter: 'number', formatter: fmtCountCell },
-      { title: '≥ 30 ngày', field: 'over30', hozAlign: 'right', sorter: 'number', formatter: fmtCountWarnCell },
-      {
-        title: 'Không rõ ngày', field: 'unknown', hozAlign: 'right', sorter: 'number',
-        headerTooltip: 'Chưa xác định được tuổi tồn đọng (vật tư tiêu hao chưa có cột ngày)',
-        formatter: fmtCountCell,
-      },
-      { title: 'Tổng', field: 'total', hozAlign: 'right', sorter: 'number', formatter: fmtCountBoldCell },
-    ],
-  },
-  'repair-admin-detail': {
-    title: 'Repair Admin — chi tiết từng item tại vị trí Unserviceable',
-    desc: 'Danh sách item đứng sau bảng tổng hợp. Nguồn: LOCATION × ROTABLES × OD_DETAIL (status = 0) và LOCATION × CONSUMABLES, đều lọc location_type = -4. '
-      + 'Cột "Tính tổng hợp" cho biết dòng đó có được đếm vào bảng tổng hợp hay không (điều kiện: backorder = 1 và state = O).',
-    columns: [
-      {
-        title: 'Tính tổng hợp', field: 'tinh_tong_hop', hozAlign: 'center', width: 120,
-        headerTooltip: 'Có = được đếm vào bảng Repair Admin (backorder = 1 và state = O)',
-        formatter: (cell) => (cell.getValue()
-          ? `<span style="color:${cssVar('--good')};font-weight:700">Có</span>`
-          : '<span style="color:var(--text-muted)">Không</span>'),
-        headerFilter: 'list',
-        headerFilterParams: { values: { '': 'Tất cả', true: 'Có', false: 'Không' } },
-      },
-      {
-        title: 'Loại', field: 'loai', hozAlign: 'center', width: 100,
-        formatter: (cell) => (cell.getValue() === 'ROTABLE' ? 'Rotable' : 'Tiêu hao'),
-        headerFilter: 'list',
-        headerFilterParams: { values: { '': 'Tất cả', ROTABLE: 'Rotable', CONSUMABLE: 'Tiêu hao' } },
-      },
-      { title: 'Station', field: 'station', headerFilter: 'input', width: 100 },
-      { title: 'Store', field: 'store', headerFilter: 'input' },
       { title: 'Vị trí (U/S)', field: 'location', headerFilter: 'input', widthGrow: 1.5 },
       { title: 'Part No', field: 'partno', headerFilter: 'input' },
       { title: 'Serial No', field: 'serialno', headerFilter: 'input' },
@@ -913,14 +882,6 @@ const REPORT_DEFS = {
           return `<span class="tat-badge" style="background:${color}22;color:${color}">${v}</span>`;
         },
       },
-      // --- OD_DETAIL (don sua chua) ---
-      { title: 'Status', field: 'od_status', hozAlign: 'center', width: 90, headerFilter: 'input' },
-      { title: 'State', field: 'od_state', hozAlign: 'center', width: 90, headerFilter: 'input' },
-      { title: 'Backorder', field: 'od_backorder', hozAlign: 'center', width: 100, headerFilter: 'input' },
-      { title: 'Ext state', field: 'od_ext_state', hozAlign: 'center', width: 100, headerFilter: 'input' },
-      { title: 'Owner', field: 'owner', headerFilter: 'input' },
-      { title: 'Batch No', field: 'batchno', headerFilter: 'input' },
-      { title: 'SL (qty)', field: 'qty', hozAlign: 'right', sorter: 'number' },
     ],
   },
 };
@@ -1050,6 +1011,52 @@ function resetRecalc() {
 // --------------------------------------------------------------------------
 let reportLoadSeq = 0; // chong race: doi bao cao/filter nhanh -> chi render cai moi nhat
 
+/** Bang TONG HOP cua Repair Admin: dong = Station + Store + Vi tri,
+ *  cot = < 30 ngay / >= 30 ngay / Khong ro ngay / Tong, kem dong TỔNG CỘNG.
+ *  Dung tu CHINH danh sach dang hien -> khong bao gio lech voi bang duoi. */
+function repairAdminSummary(rows) {
+  const map = new Map();
+  for (const r of rows || []) {
+    const key = `${r.station}|${r.store}|${r.location}`;
+    let g = map.get(key);
+    if (!g) {
+      g = { station: r.station || '', store: r.store || '', location: r.location || '',
+            less30: 0, over30: 0, unknown: 0, total: 0 };
+      map.set(key, g);
+    }
+    const a = r.age_days;
+    if (a === null || a === undefined) g.unknown++;
+    else if (Number(a) < 30) g.less30++;
+    else g.over30++;
+    g.total++;
+  }
+  const list = [...map.values()].sort(
+    (a, b) => a.station.localeCompare(b.station) || b.total - a.total
+  );
+  if (!list.length) return '';
+  const sum = (k) => list.reduce((s, r) => s + r[k], 0);
+  const coUnknown = sum('unknown') > 0;
+  const esc = (t) => String(t ?? '').replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  const num = (v, warn) => {
+    if (!v) return '<td class="ra-num ra-zero">0</td>';
+    return `<td class="ra-num"${warn ? ` style="color:${cssVar('--warning')};font-weight:600"` : ''}>${v}</td>`;
+  };
+  const head = `<tr><th>Station</th><th>Store</th><th>Vị trí (U/S)</th>`
+    + `<th class="ra-num">&lt; 30 ngày</th><th class="ra-num">≥ 30 ngày</th>`
+    + (coUnknown ? '<th class="ra-num">Không rõ ngày</th>' : '')
+    + `<th class="ra-num">Tổng</th></tr>`;
+  const body = list.map((r) =>
+    `<tr><td>${esc(r.station)}</td><td>${esc(r.store)}</td><td>${esc(r.location)}</td>`
+    + num(r.less30) + num(r.over30, true)
+    + (coUnknown ? num(r.unknown) : '')
+    + `<td class="ra-num"><b>${r.total}</b></td></tr>`).join('');
+  const foot = `<tr class="ra-total"><td colspan="3">TỔNG CỘNG (${list.length} vị trí)</td>`
+    + `<td class="ra-num">${sum('less30')}</td><td class="ra-num">${sum('over30')}</td>`
+    + (coUnknown ? `<td class="ra-num">${sum('unknown')}</td>` : '')
+    + `<td class="ra-num">${sum('total')}</td></tr>`;
+  return `<table class="ra-table"><thead>${head}</thead><tbody>${body}</tbody><tfoot>${foot}</tfoot></table>`;
+}
+
 async function loadReport(name) {
   const seq = ++reportLoadSeq;
   state.currentReport = name;
@@ -1084,6 +1091,13 @@ async function loadReport(name) {
       const order = ['NOI', 'ROB', 'DIR', 'CRO', '—'];
       const parts = order.filter((k) => cnt.has(k)).map((k) => `${k}: ${cnt.get(k)}`);
       if (parts.length) $('#reportDesc').textContent = def.desc + '  ▸ Thống kê kỳ này — ' + parts.join(' · ');
+    }
+    // Bang TONG HOP (chi bao cao nao khai bao `summary` moi co)
+    const sumBox = $('#reportSummary');
+    if (sumBox) {
+      const html = typeof def.summary === 'function' ? def.summary(data.rows || []) : '';
+      sumBox.innerHTML = html;
+      sumBox.classList.toggle('hidden', !html);
     }
     if (!reportTable) {
       reportTable = new Tabulator('#reportTable', {

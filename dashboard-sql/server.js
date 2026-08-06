@@ -1943,9 +1943,8 @@ function decodeOnAc(note) {
 
 // ---------------------------------------------------------------------------
 // 5b. REPAIR ADMIN - ton dong tai cac vi tri UNSERVICEABLE (location_type = -4)
-//     Hai nguon (2 cau SQL nguoi dung cung cap):
-//       [1] LOCATION x ROTABLES    - thiet bi quay vong (co orderno/orderdate)
-//       [2] LOCATION x CONSUMABLES - vat tu tieu hao (co batchno/qty/owner)
+//     Nguon: LOCATION x ROTABLES x OD_DETAIL (noi psn + labelno), loc san
+//     OD_DETAIL.status = 0; sau do chi giu backorder = 1 va state = 'O'.
 //     Bao cao la ANH CHUP HIEN TRANG (dang nam o vi tri U/S), KHONG loc theo ky
 //     bao cao; chi loc theo Station/Store dang chon tren dashboard.
 // ---------------------------------------------------------------------------
@@ -2042,23 +2041,10 @@ async function loadRepairAdmin(f) {
     params
   );
 
-  // [2] CONSUMABLES - cau SQL duoc cung cap KHONG co cot ngay nao -> khong tinh
-  //     duoc tuoi ton dong; cac dong nay se roi vao nhom "Khong ro ngay".
-  const con = await query(
-    `SELECT l.[locationno_i]     AS locationno_i,
-            RTRIM(l.[station])   AS station,
-            RTRIM(l.[store])     AS store,
-            RTRIM(l.[location])  AS location,
-            c.[labelno]          AS labelno,
-            RTRIM(c.[partno])    AS partno,
-            RTRIM(c.[owner])     AS owner,
-            RTRIM(c.[batchno])   AS batchno,
-            c.[qty]              AS qty
-     FROM [DWH_DB]..[STG_AMOS].[LOCATION] l
-     JOIN [DWH_DB]..[STG_AMOS].[CONSUMABLES] c ON l.[locationno_i] = c.[locationno_i]
-     WHERE l.[location_type] = @locType ${where}`,
-    params
-  );
+  // KHONG hoi [DWH_DB]..[STG_AMOS].[CONSUMABLES] nua: vat tu tieu hao khong co
+  // cot [psn] nen khong noi duoc sang OD_DETAIL -> khong bao gio dat dieu kien
+  // backorder = 1 & state = 'O', tuc moi dong deu bi loc bo. Giu lai chi ton
+  // them mot luot hoi linked server ma khong ra dong nao.
 
   const now = Date.now();
   const items = [];
@@ -2066,12 +2052,10 @@ async function loadRepairAdmin(f) {
     const d = amosValueToDate(r.orderdate);
     const age = d ? Math.floor((now - d.getTime()) / 86400000) : null;
     items.push({
-      loai: 'ROTABLE',
       station: r.station || '', store: r.store || '', location: r.location || '',
       partno: r.partno || '', serialno: r.serialno || '',
       labelno: r.labelno ?? null, psn: r.psn ?? null,
       orderno: r.orderno || '', order_date_vn: d ? d.toISOString() : null,
-      owner: '', batchno: '', qty: null,
       od_status: r.od_status ?? null,
       od_state: r.od_state || '',
       od_backorder: r.od_backorder ?? null,
@@ -2081,67 +2065,23 @@ async function loadRepairAdmin(f) {
       tinh_tong_hop: isRepairCounted(r.od_backorder, r.od_state),
     });
   }
-  for (const c of con) {
-    items.push({
-      loai: 'CONSUMABLE',
-      station: c.station || '', store: c.store || '', location: c.location || '',
-      partno: c.partno || '', serialno: '',
-      labelno: c.labelno ?? null, psn: null,
-      orderno: '', order_date_vn: null,
-      owner: c.owner || '', batchno: c.batchno || '', qty: c.qty ?? null,
-      od_status: null, od_state: '', od_backorder: null, od_ext_state: '',
-      age_days: null,
-      nhom: 'unknown',   // chua co cot ngay cho vat tu tieu hao
-      // CONSUMABLES khong noi duoc sang OD_DETAIL (khong co psn) -> khong co
-      // backorder/state -> KHONG duoc tinh vao bang tong hop.
-      tinh_tong_hop: false,
-    });
-  }
   return items;
 }
 
 /**
- * BAO CAO TONG HOP kieu pivot: dong = Station + Store + Vi tri, cot = nhom tuoi.
- * CHI dem cac dong dat OD_DETAIL.backorder = 1 AND state = 'O' (isRepairCounted);
- * cac dong khac van con nguyen trong bao cao CHI TIET.
+ * BAO CAO REPAIR ADMIN (mot tab duy nhat): tung thiet bi dang nam o vi tri U/S.
+ * CHI tra ve cac dong dat OD_DETAIL.backorder = 1 AND state = 'O'
+ * (status = 0 da loc trong cau SQL) - xem isRepairCounted().
+ * Cac cot OD_DETAIL khong tra ra ngoai: chung chi dung de LOC, hien len bang
+ * cung khong them thong tin gi vi moi dong deu co cung mot bo gia tri.
+ * Bang tong hop (< 30 ngay / >= 30 ngay theo Station+Store+Vi tri) duoc dung
+ * ngay tren trinh duyet tu chinh danh sach nay -> luon khop tuyet doi.
  */
 async function qRepairAdmin(range, f) {
   const items = await getRepairAdmin(f);
-  const map = new Map();
-  let boQua = 0;
-  for (const it of items) {
-    if (!it.tinh_tong_hop) { boQua++; continue; }
-    const key = it.station + '|' + it.store + '|' + it.location;
-    let g = map.get(key);
-    if (!g) {
-      g = {
-        station: it.station, store: it.store, location: it.location,
-        less30: 0, over30: 0, unknown: 0, total: 0,
-      };
-      map.set(key, g);
-    }
-    g[it.nhom]++;
-    g.total++;
-  }
-  const rows = [...map.values()].sort(
-    (a, b) => a.station.localeCompare(b.station) || b.total - a.total
-  );
-  if (rows.length) {
-    // Dong TONG CONG o cuoi (giong dong "Grand Total" cua pivot Excel)
-    const sum = (k) => rows.reduce((s, r) => s + r[k], 0);
-    rows.push({
-      station: '', store: '', location: 'TỔNG CỘNG', isTotal: true,
-      less30: sum('less30'), over30: sum('over30'), unknown: sum('unknown'),
-      total: sum('total'), boQua,
-    });
-  }
-  return rows;
-}
-
-/** BAO CAO CHI TIET: tung thiet bi/vat tu dang nam o vi tri U/S. */
-async function qRepairAdminDetail(range, f) {
-  const items = await getRepairAdmin(f);
   return items
+    .filter((it) => it.tinh_tong_hop)
+    .map(({ od_status, od_state, od_backorder, od_ext_state, tinh_tong_hop, ...rest }) => rest)
     .sort((a, b) => a.station.localeCompare(b.station)
       || a.location.localeCompare(b.location)
       || (b.age_days ?? -1) - (a.age_days ?? -1))
@@ -4084,7 +4024,6 @@ const REPORTS = {
   other: { live: qOther, demo: 'other' },
   'return-store-tat': { live: qTatReturnStore, demo: 'returnStoreTat' },
   'repair-admin': { live: qRepairAdmin, demo: 'repairAdmin' },
-  'repair-admin-detail': { live: qRepairAdminDetail, demo: 'repairAdminDetail' },
 };
 
 app.get(
