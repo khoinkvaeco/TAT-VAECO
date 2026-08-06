@@ -5805,6 +5805,15 @@ app.get('/admin', (req, res) => res.sendFile(path.join(__dirname, 'public', 'adm
 // Route: /beta -> trang dashboard beta (de xuat cai tien, lay y kien)
 app.get('/beta', (req, res) => res.sendFile(path.join(__dirname, 'public', 'beta.html')));
 
+// Route: /kho -> VAN LA index.html, chi khac diem vao. Frontend thay duong dan
+// la /kho thi mo thang nhom "Kho / Chung tu" va an cac tab TAT (che do KHO).
+// Lam nhu vay de nhan vien kho co mot dia chi rieng de danh dau (bookmark) MA
+// KHONG phai nhan doi trang/dich vu - moi thu van dung chung mot ban ma nguon.
+// LUU Y: day chi la don gian hoa GIAO DIEN, KHONG phai phan quyen. Ai go '/'
+// cung van xem duoc day du - dung nhu hien nay (moi don vi deu duoc xem).
+app.get(['/kho', '/kho.html'], (req, res) =>
+  res.sendFile(path.join(__dirname, 'public', 'index.html')));
+
 // Route mac dinh -> tra index.html (SPA)
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 

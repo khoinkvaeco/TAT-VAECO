@@ -72,10 +72,17 @@ const state = {
   isAdmin: false,   // may nay co quyen SUA (xac nhan doi ung) khong - hoi server
   clientIp: '',
   currentReport: 'returned-unservice',
+  khoTab: 'pickslip',   // tab con dang mo trong nhom Kho / Chung tu
 };
 
+/**
+ * CHE DO KHO (/kho hoac /kho.html): nhan vien kho vao THANG nhom "Kho / Chung tu",
+ * cac tab TAT cua don vi khac duoc AN di cho do roi. Van la CUNG MOT trang,
+ * cung script - chi khac diem vao - nen khong co ban sao thu hai de lech nhau.
+ */
+const KHO_ONLY = /^\/kho(\.html)?\/?$/.test(location.pathname);
+
 let mainTable = null;   // Tabulator bang chinh
-let reportTable = null; // Tabulator bang bao cao
 const charts = {};      // luu instance Chart.js
 
 // Cache du lieu bao cao PHIA TRINH DUYET theo (ten bao cao + filter):
@@ -85,8 +92,8 @@ const reportCache = new Map();
 // --- Luu / khoi phuc cau hinh filter (localStorage) de lan sau mo lai dung ngay ---
 const FILTER_STORE_KEY = 'tat-filters-v1';
 function saveFilters() {
-  const { periodType, month, week, quarter, year, station, store, department, excludeCC } = state;
-  localStorage.setItem(FILTER_STORE_KEY, JSON.stringify({ periodType, month, week, quarter, year, station, store, department, excludeCC }));
+  const { periodType, month, week, quarter, year, station, store, department, excludeCC, khoTab } = state;
+  localStorage.setItem(FILTER_STORE_KEY, JSON.stringify({ periodType, month, week, quarter, year, station, store, department, excludeCC, khoTab }));
 }
 function loadSavedFilters() {
   try {
@@ -954,7 +961,6 @@ let baseKpiUsret = 0;   // TAT US return goc
 let baseKpiCuvt = 0;    // TAT CUVT goc (chang 3 - khong co trong bang chi tiet)
 let baseKpiTotal = 0;   // TAT tong goc (3 chang cong lai)
 let mainTotalRows = 0;  // tong so dong bang chi tiet (cho bo dem X/Y)
-let reportTotalRows = 0; // tong so dong bang bao cao (cho bo dem X/Y)
 
 let dashLoadSeq = 0; // chong race: doi filter nhanh -> chi render response MOI nhat
 
@@ -1075,7 +1081,30 @@ function resetRecalc() {
 // --------------------------------------------------------------------------
 // 7. Tai & render Bao cao
 // --------------------------------------------------------------------------
-let reportLoadSeq = 0; // chong race: doi bao cao/filter nhanh -> chi render cai moi nhat
+/**
+ * NOI DAT bao cao. Cung mot ham loadReport() phuc vu 2 cho:
+ *   'report'    - tab "Cac Bao cao khac" (co thanh tab con .reportTab)
+ *   'khoRepair' - tab con "Repair Admin" trong nhom Kho / Chung tu
+ * Nho vay cot / mo ta / bang tong hop chi khai bao MOT lan trong REPORT_DEFS,
+ * chuyen cho hien thi khong sinh ra ban sao thu hai de lech nhau.
+ */
+const REPORT_HOSTS = {
+  report: {
+    pane: '#reportPane', title: '#reportTitle', desc: '#reportDesc',
+    summary: '#reportSummary', table: '#reportTable', count: '#reportCount',
+    search: '#reportSearch', tabSel: '.reportTab', tabAttr: 'report',
+    remember: true, // ghi nho bao cao dang mo vao state (de doi filter tai lai dung cai do)
+  },
+  khoRepair: {
+    pane: '#khoRepairPane', title: '#khoRepairTitle', desc: '#khoRepairDesc',
+    summary: '#khoRepairSummary', table: '#khoRepairTable', count: '#khoRepairCount',
+    search: '#khoRepairSearch', tabSel: null, tabAttr: null,
+    remember: false, // chi co MOT bao cao -> khong ghi de state.currentReport
+  },
+};
+const reportTables = {};    // hostKey -> Tabulator
+const reportTotals = {};    // hostKey -> tong so dong (cho bo dem X/Y)
+const reportSeqs = {};      // hostKey -> chong race RIENG tung cho
 
 /** Bang TONG HOP cua Repair Admin: dong = Station + Store + Vi tri,
  *  cot = < 30 ngay / >= 30 ngay / Khong ro ngay / Tong, kem dong TỔNG CỘNG.
@@ -1123,28 +1152,29 @@ function repairAdminSummary(rows) {
   return `<table class="ra-table"><thead>${head}</thead><tbody>${body}</tbody><tfoot>${foot}</tfoot></table>`;
 }
 
-async function loadReport(name) {
-  const seq = ++reportLoadSeq;
-  state.currentReport = name;
+async function loadReport(name, hostKey = 'report') {
+  const H = REPORT_HOSTS[hostKey];
+  const seq = (reportSeqs[hostKey] = (reportSeqs[hostKey] || 0) + 1);
+  if (H.remember) state.currentReport = name;
   const def = REPORT_DEFS[name];
-  $('#reportTitle').textContent = def.title;
-  $('#reportDesc').textContent = def.desc;
-  $$('.reportTab').forEach((b) => b.classList.toggle('active', b.dataset.report === name));
+  $(H.title).textContent = def.title;
+  $(H.desc).textContent = def.desc;
+  if (H.tabSel) $$(H.tabSel).forEach((b) => b.classList.toggle('active', b.dataset[H.tabAttr] === name));
 
   // DON SACH du lieu cua bao cao TRUOC ngay lap tuc: neu de nguyen, nguoi dung
   // se doc nham so lieu tab cu tuong la tab moi. Dat cot moi + rong du lieu ->
   // thay dung khung bang cua bao cao sap toi (kieu "skeleton").
-  $('#reportCount').textContent = '';
-  $('#reportSearch').value = '';
-  const sumBoxEarly = $('#reportSummary');
+  $(H.count).textContent = '';
+  $(H.search).value = '';
+  const sumBoxEarly = $(H.summary);
   if (sumBoxEarly) { sumBoxEarly.innerHTML = ''; sumBoxEarly.classList.add('hidden'); }
-  if (reportTable) {
-    reportTable.clearFilter(true);
-    reportTable.setColumns(withHeaderFilters(def.columns));
-    reportTable.replaceData([]);
+  if (reportTables[hostKey]) {
+    reportTables[hostKey].clearFilter(true);
+    reportTables[hostKey].setColumns(withHeaderFilters(def.columns));
+    reportTables[hostKey].replaceData([]);
   }
-  setBusy('#reportPane', true);
-  setTabLoading('.reportTab', name, true);
+  setBusy(H.pane, true);
+  if (H.tabSel) setTabLoading(H.tabSel, name, true);
 
   showError('');
   showLoading(true);
@@ -1156,9 +1186,9 @@ async function loadReport(name) {
       data = await api(`/api/reports/${name}`);
       reportCache.set(cacheKey, data);
     }
-    if (seq !== reportLoadSeq) return; // da co request moi hon -> bo qua
-    reportTotalRows = data.count;
-    $('#reportCount').textContent =
+    if (seq !== reportSeqs[hostKey]) return; // da co request moi hon -> bo qua
+    reportTotals[hostKey] = data.count;
+    $(H.count).textContent =
       `${data.count.toLocaleString('vi')} dòng` +
       (data.truncated ? ' ⚠ chạm giới hạn MAX_ROWS' : '');
 
@@ -1171,17 +1201,17 @@ async function loadReport(name) {
       });
       const order = ['NOI', 'ROB', 'DIR', 'CRO', '—'];
       const parts = order.filter((k) => cnt.has(k)).map((k) => `${k}: ${cnt.get(k)}`);
-      if (parts.length) $('#reportDesc').textContent = def.desc + '  ▸ Thống kê kỳ này — ' + parts.join(' · ');
+      if (parts.length) $(H.desc).textContent = def.desc + '  ▸ Thống kê kỳ này — ' + parts.join(' · ');
     }
     // Bang TONG HOP (chi bao cao nao khai bao `summary` moi co)
-    const sumBox = $('#reportSummary');
+    const sumBox = $(H.summary);
     if (sumBox) {
       const html = typeof def.summary === 'function' ? def.summary(data.rows || []) : '';
       sumBox.innerHTML = html;
       sumBox.classList.toggle('hidden', !html);
     }
-    if (!reportTable) {
-      reportTable = new Tabulator('#reportTable', {
+    if (!reportTables[hostKey]) {
+      reportTables[hostKey] = new Tabulator(H.table, {
         data: data.rows,
         columns: withHeaderFilters(def.columns),
         layout: 'fitDataFill',
@@ -1190,25 +1220,25 @@ async function loadReport(name) {
         height: '600px',
       });
       // Khi tim kiem/loc cot: hien "X/Y dong"
-      reportTable.on('dataFiltered', (filters, rowsFiltered) => {
+      reportTables[hostKey].on('dataFiltered', (filters, rowsFiltered) => {
         const n = rowsFiltered.length;
-        $('#reportCount').textContent =
-          n === reportTotalRows
-            ? `${reportTotalRows.toLocaleString('vi')} dòng`
-            : `${n.toLocaleString('vi')}/${reportTotalRows.toLocaleString('vi')} dòng`;
+        const tot = reportTotals[hostKey] || 0;
+        $(H.count).textContent = n === tot
+          ? `${tot.toLocaleString('vi')} dòng`
+          : `${n.toLocaleString('vi')}/${tot.toLocaleString('vi')} dòng`;
       });
     } else {
       // Cot da duoc dat o dau ham (luc don sach du lieu cu)
-      reportTable.replaceData(data.rows);
-      reportTable.redraw(true); // dam bao ve lai day du sau khi tab vua duoc hien thi
+      reportTables[hostKey].replaceData(data.rows);
+      reportTables[hostKey].redraw(true); // ve lai day du sau khi tab vua duoc hien thi
     }
   } catch (err) {
     showError(err.message);
   } finally {
     showLoading(false);
-    if (seq === reportLoadSeq) {
-      setBusy('#reportPane', false);
-      setTabLoading('.reportTab', name, false);
+    if (seq === reportSeqs[hostKey]) {
+      setBusy(H.pane, false);
+      if (H.tabSel) setTabLoading(H.tabSel, name, false);
     }
   }
 }
@@ -1279,27 +1309,104 @@ function initTheme() {
 // --------------------------------------------------------------------------
 // 11. Chuyen tab chinh
 // --------------------------------------------------------------------------
+const MAIN_TABS = ['dashboard', 'reports', 'kho', 'partlookup'];
+
+/**
+ * O LOC NAO CO TAC DUNG o man hinh dang xem.
+ * Truoc day thanh loc hien DU MOI O o moi tab, ke ca o KHONG duoc truy van nao
+ * dung den (vd "Bo qua xuat costcenter" khong he co trong nhanh pickslip /
+ * receiving / repair-admin) -> nguoi dung chinh ma man hinh khong doi gi, tuong
+ * la loi. Nay chi hien o nao that su tac dong len so lieu dang xem.
+ */
+const FILTER_VIEWS = {
+  dashboard: { period: 1, station: 1, store: 1, dept: 1, cc: 1 },
+  reports: { period: 1, station: 1, store: 1, dept: 1, cc: 1 },
+  'kho:pickslip': { period: 1, station: 1, store: 1, dept: 1, cc: 0 },
+  'kho:receiving': { period: 1, station: 1, store: 1, dept: 1, cc: 0 },
+  // Repair Admin la ANH CHUP HIEN TRANG: khong theo ky, chi loc station/store.
+  'kho:repair': { period: 0, station: 1, store: 1, dept: 0, cc: 0 },
+  // Tra cuu Part On/Off co o tim rieng, khong dung o loc nao ben tren.
+  partlookup: { period: 0, station: 0, store: 0, dept: 0, cc: 0 },
+};
+
+/** Man hinh dang xem la gi (de biet nen hien nhung o loc nao). */
+function currentFilterView() {
+  if (!$('#tab-kho').classList.contains('hidden')) return 'kho:' + state.khoTab;
+  if (!$('#tab-reports').classList.contains('hidden')) return 'reports';
+  if (!$('#tab-partlookup').classList.contains('hidden')) return 'partlookup';
+  return 'dashboard';
+}
+
+function applyFilterVisibility(view) {
+  const v = FILTER_VIEWS[view] || FILTER_VIEWS.dashboard;
+  const set = (sel, on) => { const el = $(sel); if (el) el.classList.toggle('hidden', !on); };
+  set('#periodWrap', v.period);
+  ['#monthWrap', '#weekWrap', '#quarterWrap', '#yearWrap'].forEach((sel) => {
+    // O nhap cua ky nao dang chon thi moi hien - va chi khi con dung ky bao cao
+    set(sel, v.period && sel === `#${state.periodType}Wrap`);
+  });
+  set('#stationWrap', v.station);
+  set('#storeWrap', v.store);
+  set('#deptWrap', v.dept);
+  set('#ccWrap', v.cc);
+  set('#rangeLabel', v.period); // khong theo ky thi nhan "Thang: ... -> ..." gay hieu nham
+}
+
 function switchTab(tab) {
   $$('.mainTab').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
-  $('#tab-dashboard').classList.toggle('hidden', tab !== 'dashboard');
-  $('#tab-reports').classList.toggle('hidden', tab !== 'reports');
-  $('#tab-pickslip').classList.toggle('hidden', tab !== 'pickslip');
-  $('#tab-receiving').classList.toggle('hidden', tab !== 'receiving');
-  $('#tab-partlookup').classList.toggle('hidden', tab !== 'partlookup');
+  MAIN_TABS.forEach((t) => $(`#tab-${t}`).classList.toggle('hidden', t !== tab));
   if (tab === 'reports') {
     // LUON tai lai khi mo tab (cache lam viec nay re); tranh cap nhat bang khi
     // tab dang an (Tabulator ve rong neu container display:none).
+    applyFilterVisibility('reports');
     loadReport(state.currentReport);
-  } else if (tab === 'pickslip') {
-    loadPickslip();
-  } else if (tab === 'receiving') {
-    loadReceiving();
+  } else if (tab === 'kho') {
+    switchKhoTab(state.khoTab);
   } else if (tab === 'partlookup') {
+    applyFilterVisibility('partlookup');
     if (partTable) partTable.redraw(true); // ve lai sau khi container hien thi
     $('#poPartno').focus();
-  } else if (mainTable) {
-    mainTable.redraw(true); // ve lai sau khi tab hien thi tro lai
+  } else {
+    applyFilterVisibility('dashboard');
+    if (mainTable) mainTable.redraw(true); // ve lai sau khi tab hien thi tro lai
   }
+}
+
+/**
+ * Bat CHE DO KHO: an cac tab TAT, doi tieu de, va them mot loi thoat sang
+ * dashboard day du (khong khoa cung - nguoi kho van xem duoc phan con lai).
+ * KHONG phai phan quyen: day chi la don gian hoa giao dien. Muon CHAN that
+ * thi phai chan o server nhu adminGuard.
+ */
+function applyKhoOnlyMode() {
+  document.title = 'VAECO · Kho / Chứng từ';
+  const h1 = document.querySelector('header h1');
+  const sub = document.querySelector('header .brand-sub');
+  if (h1) h1.textContent = 'Kho / Chứng từ';
+  if (sub) sub.textContent = 'VAECO · Xuất kho · Receiving · Repair Admin';
+  $$('.mainTab').forEach((b) => { if (b.dataset.tab !== 'kho') b.classList.add('hidden'); });
+  const nav = document.querySelector('nav .flex');
+  if (nav) {
+    const a = document.createElement('a');
+    a.href = '/';
+    a.className = 'ml-auto self-center text-xs text-muted hover:underline pr-1';
+    a.textContent = 'Xem dashboard TAT đầy đủ →';
+    nav.appendChild(a);
+  }
+}
+
+/** Chuyen tab con trong nhom Kho / Chung tu (xuat kho · receiving · repair). */
+const KHO_TABS = ['pickslip', 'receiving', 'repair'];
+function switchKhoTab(sub) {
+  if (!KHO_TABS.includes(sub)) sub = 'pickslip';
+  state.khoTab = sub;
+  saveFilters();
+  $$('.khoTab').forEach((b) => b.classList.toggle('active', b.dataset.kho === sub));
+  KHO_TABS.forEach((t) => $(`#kho-${t}`).classList.toggle('hidden', t !== sub));
+  applyFilterVisibility('kho:' + sub);
+  if (sub === 'pickslip') loadPickslip();
+  else if (sub === 'receiving') loadReceiving();
+  else loadReport('repair-admin', 'khoRepair');
 }
 
 // --------------------------------------------------------------------------
@@ -1449,10 +1556,13 @@ function pickCancelFilter(row) {
   return Object.values(row).some((v) => String(v ?? '').toLowerCase().includes(q));
 }
 
-/** Ve mot luoi the KPI tu danh sach { label, value, unit, accent }. */
+/** Ve mot luoi the KPI tu danh sach { label, value, unit, accent, title }.
+ *  Dung dung class `.kpi` + bien `--accent` nhu the KPI o Tong quan (truoc day
+ *  cac tab moi ghi nham class `.kpi-card` - khong co trong style.css nen the
+ *  hien ra tro tren nen trang, khong co khung va vach mau). */
 function renderKpiCards(sel, cards) {
   $(sel).innerHTML = cards.map((c) => `
-    <div class="kpi-card" style="border-left-color: var(${c.accent})"${c.title ? ` title="${escapeHtml(c.title)}"` : ''}>
+    <div class="kpi" style="--accent:${cssVar(c.accent)}" title="${escapeHtml(c.title || `${c.label}: ${c.value} ${c.unit}`)}">
       <div class="kpi-label">${c.label}</div>
       <div class="kpi-value">${c.value} <span class="kpi-unit">${c.unit}</span></div>
     </div>`).join('');
@@ -1976,6 +2086,7 @@ async function init() {
     state.store = saved.store || '';
     state.department = saved.department || '';
     state.excludeCC = !!saved.excludeCC;
+    if (KHO_TABS.includes(saved.khoTab)) state.khoTab = saved.khoTab;
   }
   // URL co tham so (link duoc chia se) -> UU TIEN hon cau hinh da luu
   const urlQ = new URLSearchParams(location.search);
@@ -1997,12 +2108,9 @@ async function init() {
   if ([...ySel.options].some((o) => o.value === state.year)) ySel.value = state.year;
 
   // Period buttons: doi ky bao cao -> tu dong tai lai
-  const showPeriodInputs = () => {
-    $('#monthWrap').classList.toggle('hidden', state.periodType !== 'month');
-    $('#weekWrap').classList.toggle('hidden', state.periodType !== 'week');
-    $('#quarterWrap').classList.toggle('hidden', state.periodType !== 'quarter');
-    $('#yearWrap').classList.toggle('hidden', state.periodType !== 'year');
-  };
+  // Hien o nhap cua ky dang chon - nhung van an het neu man hinh dang xem
+  // khong dung ky bao cao (vd Repair Admin, Tra cuu Part On/Off).
+  const showPeriodInputs = () => applyFilterVisibility(currentFilterView());
   $$('.periodBtn').forEach((btn) =>
     btn.addEventListener('click', () => {
       state.periodType = btn.dataset.period;
@@ -2025,10 +2133,9 @@ async function init() {
     // Dua filter len URL -> copy link gui dong nghiep la ho thay dung man hinh nay
     history.replaceState(null, '', `${location.pathname}?${buildQuery()}`);
     reportCache.clear();
-    loadDashboard();
+    if (!KHO_ONLY) loadDashboard();
     if (!$('#tab-reports').classList.contains('hidden')) loadReport(state.currentReport);
-    if (!$('#tab-pickslip').classList.contains('hidden')) loadPickslip();
-    if (!$('#tab-receiving').classList.contains('hidden')) loadReceiving();
+    if (!$('#tab-kho').classList.contains('hidden')) switchKhoTab(state.khoTab);
   };
   window.__applyFilters = applyFilters; // cho drill-down tu bieu do (chartDrill)
 
@@ -2048,7 +2155,10 @@ async function init() {
     if (mainTable) mainTable.setFilter(matchAny, { value: e.target.value });
   });
   $('#reportSearch').addEventListener('input', (e) => {
-    if (reportTable) reportTable.setFilter(matchAny, { value: e.target.value });
+    if (reportTables.report) reportTables.report.setFilter(matchAny, { value: e.target.value });
+  });
+  $('#khoRepairSearch').addEventListener('input', (e) => {
+    if (reportTables.khoRepair) reportTables.khoRepair.setFilter(matchAny, { value: e.target.value });
   });
 
   // Tinh lai TAT (bo item da chon)
@@ -2060,12 +2170,19 @@ async function init() {
     if (mainTable) mainTable.download('xlsx', `TAT_TrungTam_${Date.now()}.xlsx`, { sheetName: 'TAT' });
   });
   $('#reportExport').addEventListener('click', () => {
-    if (reportTable) reportTable.download('xlsx', `${state.currentReport}_${Date.now()}.xlsx`, { sheetName: 'BaoCao' });
+    const t = reportTables.report;
+    if (t) t.download('xlsx', `${state.currentReport}_${Date.now()}.xlsx`, { sheetName: 'BaoCao' });
+  });
+  $('#khoRepairExport').addEventListener('click', () => {
+    const t = reportTables.khoRepair;
+    if (t) t.download('xlsx', `RepairAdmin_${Date.now()}.xlsx`, { sheetName: 'RepairAdmin' });
   });
 
   // Tab chinh
   $$('.mainTab').forEach((b) => b.addEventListener('click', () => switchTab(b.dataset.tab)));
-  switchTab('dashboard');
+  $$('.khoTab').forEach((b) => b.addEventListener('click', () => switchKhoTab(b.dataset.kho)));
+  if (KHO_ONLY) applyKhoOnlyMode();
+  switchTab(KHO_ONLY ? 'kho' : 'dashboard');
 
   // Report sub-tabs
   $$('.reportTab').forEach((b) => b.addEventListener('click', () => loadReport(b.dataset.report)));
@@ -2088,7 +2205,7 @@ async function init() {
   $('#stationSelect').value = state.station;
   $('#storeSelect').value = state.store;
   $('#deptSelect').value = state.department;
-  loadDashboard();
+  if (!KHO_ONLY) loadDashboard();
 }
 
 // --------------------------------------------------------------------------

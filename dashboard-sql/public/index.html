@@ -42,7 +42,7 @@
 
     <!-- ===================== FILTER BAR ===================== -->
     <div class="max-w-[1600px] mx-auto px-5 pb-3 flex items-end gap-3 flex-wrap">
-      <div>
+      <div id="periodWrap">
         <label class="flabel">Kỳ báo cáo</label>
         <div class="inline-flex rounded-lg overflow-hidden border border-hair">
           <button data-period="month" class="periodBtn px-3 py-1.5 text-sm">Tháng</button>
@@ -72,21 +72,21 @@
         <select id="yearInput" class="finput min-w-[100px]"></select>
       </div>
 
-      <div>
+      <div id="stationWrap">
         <label class="flabel">Station</label>
         <select id="stationSelect" class="finput min-w-[120px]">
           <option value="">Tất cả</option>
         </select>
       </div>
 
-      <div>
+      <div id="storeWrap">
         <label class="flabel">Store</label>
         <select id="storeSelect" class="finput min-w-[120px]">
           <option value="">Tất cả</option>
         </select>
       </div>
 
-      <div>
+      <div id="deptWrap">
         <label class="flabel">Trung tâm</label>
         <select id="deptSelect" class="finput min-w-[150px]">
           <option value="">Tất cả</option>
@@ -94,7 +94,7 @@
       </div>
 
       <!-- Bo qua phieu xuat cho costcenter: receiver la so (2 chu so / so thuan), khong phai so tau -->
-      <label class="flex items-center gap-1.5 text-sm pb-2 cursor-pointer select-none"
+      <label id="ccWrap" class="flex items-center gap-1.5 text-sm pb-2 cursor-pointer select-none"
              title="Loại các phiếu xuất có Receiver là số (đúng 2 chữ số hoặc số thuần, ví dụ 15, 1234, 12.5) — không phải số tàu — và tính lại KPI/biểu đồ">
         <input type="checkbox" id="ccToggle" class="w-4 h-4" />
         <span>Bỏ qua xuất costcenter</span>
@@ -118,8 +118,7 @@
     <div class="flex gap-1 border-b border-hair">
       <button data-tab="dashboard" class="mainTab">📊 Tổng quan</button>
       <button data-tab="reports" class="mainTab">📋 Các Báo cáo khác </button>
-      <button data-tab="pickslip" class="mainTab">📦 Quản lý xuất kho</button>
-      <button data-tab="receiving" class="mainTab">📥 Receiving</button>
+      <button data-tab="kho" class="mainTab">🏬 Kho / Chứng từ</button>
       <button data-tab="partlookup" class="mainTab">🔎 Tra cứu Part On/Off</button>
     </div>
   </nav>
@@ -184,7 +183,6 @@
         <button data-report="removed-before-installed" class="reportTab">Chỉ lắp / Chỉ tháo</button>
         <button data-report="other" class="reportTab">Other (on_ac)</button>
         <button data-report="return-store-tat" class="reportTab">TAT hoàn kho</button>
-        <button data-report="repair-admin" class="reportTab">🛠 Repair Admin</button>
       </div>
 
       <div class="card">
@@ -208,8 +206,20 @@
       </div>
     </section>
 
-    <!-- ============ TAB QUẢN LÝ XUẤT KHO ============ -->
-    <section id="tab-pickslip" class="hidden">
+    <!-- ============ TAB KHO / CHỨNG TỪ ============================================
+         Gom 3 việc CỦA NHÂN VIÊN KHO vào một chỗ (trước đây nằm rải rác: 2 tab
+         chính + 1 mục chôn cuối danh sách báo cáo). Các đơn vị khác không cần
+         quan tâm nhóm này → có thể vào thẳng bằng trang /kho.html.
+         ========================================================================= -->
+    <section id="tab-kho" class="hidden">
+      <div class="flex gap-1 flex-wrap mb-4">
+        <button data-kho="pickslip" class="khoTab active">📦 Quản lý xuất kho</button>
+        <button data-kho="receiving" class="khoTab">📥 Receiving</button>
+        <button data-kho="repair" class="khoTab">🛠 Repair Admin</button>
+      </div>
+
+    <!-- ---------- Kho ▸ Quản lý xuất kho ---------- -->
+    <div id="kho-pickslip">
       <div id="pickPane">
         <div id="pickScanBar" class="scanbar mb-3 hidden"></div>
         <div id="pickKpi" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 mb-5"></div>
@@ -258,10 +268,10 @@
           <div id="pickTable"></div>
         </div>
       </div>
-    </section>
+    </div><!-- /#kho-pickslip -->
 
-    <!-- ============ TAB RECEIVING (NHẬP KHO) ============ -->
-    <section id="tab-receiving" class="hidden">
+    <!-- ---------- Kho ▸ Receiving (nhập kho) ---------- -->
+    <div id="kho-receiving" class="hidden">
       <div id="recvPane">
         <div id="recvScanBar" class="scanbar mb-3 hidden"></div>
         <div id="recvKpi" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 mb-5"></div>
@@ -297,6 +307,31 @@
           <div id="recvTable"></div>
         </div>
       </div>
+    </div><!-- /#kho-receiving -->
+
+    <!-- ---------- Kho ▸ Repair Admin ----------
+         Dùng LẠI đúng bộ định nghĩa báo cáo 'repair-admin' (REPORT_DEFS) qua
+         loadReport(name, host) nên cột/mô tả/bảng tổng hợp chỉ khai báo MỘT
+         chỗ — chuyển tab không sinh ra bản sao thứ hai dễ lệch nhau. -->
+    <div id="kho-repair" class="hidden">
+      <div class="card">
+        <div class="flex items-center justify-between gap-3 flex-wrap mb-3">
+          <div>
+            <h3 id="khoRepairTitle" class="card-title mb-0">—</h3>
+            <p id="khoRepairDesc" class="text-xs text-muted mt-0.5"></p>
+          </div>
+          <div class="flex items-center gap-2">
+            <input id="khoRepairSearch" type="text" placeholder="Tìm kiếm…" class="finput" />
+            <span id="khoRepairCount" class="text-xs text-muted"></span>
+            <button id="khoRepairExport" class="btn-export">⬇ Excel</button>
+          </div>
+        </div>
+        <div id="khoRepairPane">
+          <div id="khoRepairSummary" class="hidden mb-3"></div>
+          <div id="khoRepairTable"></div>
+        </div>
+      </div>
+    </div><!-- /#kho-repair -->
     </section>
 
     <!-- ============ TAB TRA CỨU PART ON/OFF ============ -->
