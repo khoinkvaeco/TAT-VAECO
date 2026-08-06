@@ -702,7 +702,10 @@ const REPORT_DEFS = {
   'removed-not-returned': {
     title: 'Thiết bị tháo xuống từ tàu nhưng chưa trả unservice',
     desc: 'on_off vm=YA không có bản ghi real_us1 (liên kết qua historyno_). '
-      + 'Cột "Vị trí hiện tại" lấy từ ROTABLES (nối qua khóa psn) — cho biết thiết bị đã tháo xuống hiện đang nằm ở đâu.',
+      + 'Store và Location là VỊ TRÍ HIỆN TẠI của thiết bị (ROTABLES nối qua psn, rồi LOCATION theo locationno_i). '
+      + '⚠ Báo cáo còn lọc theo TRẠNG THÁI HIỆN TẠI (ROTABLES.condition = US và MUTATION > đầu kỳ), nên thiết bị đã được '
+      + 'nhận/xử lý sẽ biến mất khỏi danh sách — kể cả khi xem lại kỳ cũ. Vì vậy cùng một kỳ chạy lại lúc khác sẽ ra số ít hơn. '
+      + 'Xem /api/admin/diag/rnr để biết từng điều kiện cắt bớt bao nhiêu dòng.',
     columns: [
       { title: 'Part No', field: 'partno', headerFilter: 'input' },
       { title: 'Serial No', field: 'serialno', headerFilter: 'input' },
@@ -710,17 +713,21 @@ const REPORT_DEFS = {
       { title: 'History No', field: 'historyno' },
       { title: 'Aircraft', field: 'ac_registr', headerFilter: 'input' },
       { title: 'Station', field: 'station', headerFilter: 'input' },
-      { title: 'Store', field: 'store', headerFilter: 'input'  },
-      { title: 'Center', field: 'trung_tam', headerFilter: 'input'  },
-      { title: 'Staff', field: 'staff', headerFilter: 'input' },
-      { title: 'Ngày Giờ tháo', field: 'removed_time_vn', formatter: fmtDateCell },
-      // Vi tri hien tai tu ROTABLES (noi qua psn) - giong tab "Xuat kho chua lap"
-      { title: 'PSN', field: 'psn', headerFilter: 'input', formatter: fmtIntCell, hozAlign: 'right' },
+      // Store + Location = vi tri HIEN TAI, dat canh nhau cho de doc
       {
-        title: 'Vị trí hiện tại', field: 'location', headerFilter: 'input', widthGrow: 1.5,
+        title: 'Store', field: 'store_now', headerFilter: 'input',
+        headerTooltip: 'Store HIỆN TẠI (LOCATION.store theo locationno_i của ROTABLES); thiếu dữ liệu thì lùi về store lúc tháo',
+        formatter: (cell) => cell.getValue() || '<span style="color:var(--text-muted)">—</span>',
+      },
+      {
+        title: 'Location', field: 'location', headerFilter: 'input', widthGrow: 1.5,
         headerTooltip: 'ROTABLES.location — thiết bị hiện đang nằm ở đâu',
         formatter: (cell) => cell.getValue() || '<span style="color:var(--text-muted)">—</span>',
       },
+      { title: 'Center', field: 'trung_tam', headerFilter: 'input'  },
+      { title: 'Staff', field: 'staff', headerFilter: 'input' },
+      { title: 'Ngày Giờ tháo', field: 'removed_time_vn', formatter: fmtDateCell },
+      { title: 'PSN', field: 'psn', headerFilter: 'input', formatter: fmtIntCell, hozAlign: 'right' },
     ],
   },
   'not-reconciled': {

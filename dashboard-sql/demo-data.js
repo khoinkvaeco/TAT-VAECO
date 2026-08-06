@@ -183,8 +183,9 @@ function removedNotReturned(range, f) {
       ac_registr: d.ac_registr,
       trung_tam: rnd(DEPARTMENTS),
       removed_time_vn: rndDate(range.from, range.to).toISOString(),
-      // Vi tri hien tai tu ROTABLES (noi qua psn)
+      // Vi tri HIEN TAI: store (LOCATION) + location (ROTABLES), noi qua psn
       psn: rndInt(1000000, 1999999),
+      store_now: rnd(STORES),
       location: rnd(['SHOPLOC', 'HANSTORE', 'SGNSTORE', 'AOG-DAD', 'WORKSHOP-01', '']),
     });
   }

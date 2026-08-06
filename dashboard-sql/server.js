@@ -1370,16 +1370,25 @@ async function qRemovedNotReturned(range, f) {
          CASE WHEN LEFT(LTRIM(RTRIM(r.action_per)), 2) = 'PA' THEN 'PA' END,
          NULLIF(NULLIF(LTRIM(RTRIM(sm.DEPARTMENT)), ''), 'UNKNOWN'),
          'PA')  AS trung_tam,
-      -- VI TRI HIEN TAI: bang ROTABLES (RO) DA duoc noi san o duoi va dang dung
-      -- trong WHERE, nen lay them 2 cot nay KHONG ton them luot hoi linked server.
-      o.[psn]                AS psn,
+      -- VI TRI HIEN TAI (ROTABLES da duoc noi san o duoi va dang dung trong WHERE).
+      -- Store hien tai lay tu LOCATION theo locationno_i cua ROTABLES - dung
+      -- quan he ma chinh SQL cua Repair Admin dang dung. LEFT JOIN nen KHONG
+      -- the lam mat dong nao; thieu du lieu thi lui ve store cua on_off.
+      COALESCE(NULLIF(RTRIM(LOC.[store]), ''), RTRIM(o.[store])) AS store_now,
       RTRIM(RO.[location])   AS location,
+      o.[psn]                AS psn,
       ${amosToVN('o')} AS removed_time_vn
     FROM [NQT].[dbo].[on_off] o
     LEFT JOIN [NQT].[dbo].[real_us1] r
       ON o.[labelno] = r.[labelno]   -- so sanh so truc tiep (cot so; RTRIM lam float->chuoi 6 chu so -> ghep nham)
     LEFT JOIN [DWH_DB]..[STG_AMOS].ROTABLES RO ON o.PSN = RO.PSN
+    LEFT JOIN [DWH_DB]..[STG_AMOS].[LOCATION] LOC ON LOC.[locationno_i] = RO.[locationno_i]
     ${signJoin('o.[created_by]', 'sm')}
+    -- LUU Y: 2 dieu kien RO.MUTATION / RO.condition xet TRANG THAI HIEN TAI cua
+    -- thiet bi, khong phai trang thai luc thao. Thiet bi da duoc nhan/xu ly ->
+    -- condition doi khac 'US' -> BIEN MAT khoi bao cao, KE CA voi ky cu.
+    -- Vi vay chay lai cung mot ky vao thoi diem khac se ra so khac (giam dan).
+    -- Dung /api/admin/diag/rnr de xem tung buoc loc bot bao nhieu dong.
     WHERE o.[vm] = 'YA' AND RO.MUTATION > @fromDay and RO.condition ='US'
       AND r.[historyno_] IS NULL
       AND o.higher_par IS NULL
@@ -4691,6 +4700,70 @@ app.get('/api/admin/diag/higher', h(async (req, res) => {
     '(ví dụ 2-3 giá trị) chính là cột đánh dấu lắp vào tàu hay vào higher assembly. ' +
     'Báo tên cột + giá trị nào là "higher assembly" để cập nhật logic báo cáo.';
   res.json(out);
+}));
+
+// --- ADMIN: CHAN DOAN bao cao "Thao chua tra US" (vi sao so dong thay doi) ---
+//     Dem theo TUNG DIEU KIEN cong don -> thay ngay dieu kien nao cat bot bao
+//     nhieu dong. Quan trong nhat la 2 dieu kien tren ROTABLES: chung xet
+//     TRANG THAI HIEN TAI cua thiet bi chu khong phai trang thai luc thao, nen
+//     cung mot ky chay lai vao thoi diem khac se ra so khac (giam dan).
+app.get('/api/admin/diag/rnr', h(async (req, res) => {
+  if (CONFIG.demoMode) return res.json({ note: 'Dang o DEMO_MODE, khong co du lieu that.' });
+  const range = resolveRange(req.query);
+  const f = readFilters(req.query);
+  const params = { from: range.from, to: range.to, ...amosDayParams(range) };
+  const where = buildFilterClause(f, { station: 'o.[station]', store: 'o.[store]', department: null }, params);
+
+  const inPeriod = `o.[vm] = 'YA'
+      AND o.[mutation] BETWEEN @fromDay AND @toDay
+      AND ${amosToVN('o')} >= @from AND ${amosToVN('o')} < @to
+      ${where}`;
+  const noUs = `AND NOT EXISTS (SELECT 1 FROM [NQT].[dbo].[real_us1] r
+                    WHERE r.[labelno] = o.[labelno])`;
+  const noHigher = 'AND o.[higher_par] IS NULL';
+  const joinRo = 'INNER JOIN [DWH_DB]..[STG_AMOS].ROTABLES RO ON o.PSN = RO.PSN';
+
+  const step = async (label, sql) => {
+    try { return { buoc: label, so_dong: (await query(sql, { ...params }))[0].cnt }; }
+    catch (e) { return { buoc: label, loi: e.message }; }
+  };
+
+  const buoc = [];
+  buoc.push(await step('1. Thao (YA) trong ky',
+    `SELECT COUNT(*) AS cnt FROM [NQT].[dbo].[on_off] o WHERE ${inPeriod}`));
+  buoc.push(await step('2. ... va CHUA tra unservice',
+    `SELECT COUNT(*) AS cnt FROM [NQT].[dbo].[on_off] o WHERE ${inPeriod} ${noUs}`));
+  buoc.push(await step('3. ... va higher_par IS NULL (thao thang tu tau)',
+    `SELECT COUNT(*) AS cnt FROM [NQT].[dbo].[on_off] o WHERE ${inPeriod} ${noUs} ${noHigher}`));
+  buoc.push(await step('4. ... va CO ban ghi trong ROTABLES (theo psn)',
+    `SELECT COUNT(*) AS cnt FROM [NQT].[dbo].[on_off] o ${joinRo} WHERE ${inPeriod} ${noUs} ${noHigher}`));
+  buoc.push(await step('5. ... va ROTABLES.MUTATION > dau ky',
+    `SELECT COUNT(*) AS cnt FROM [NQT].[dbo].[on_off] o ${joinRo}
+     WHERE ${inPeriod} ${noUs} ${noHigher} AND RO.MUTATION > @fromDay`));
+  buoc.push(await step('6. ... va ROTABLES.condition = US  <<< KET QUA BAO CAO',
+    `SELECT COUNT(*) AS cnt FROM [NQT].[dbo].[on_off] o ${joinRo}
+     WHERE ${inPeriod} ${noUs} ${noHigher} AND RO.MUTATION > @fromDay AND RO.condition = 'US'`));
+
+  // Cac thiet bi bi loai o buoc 6: hien nay condition la gi?
+  let theoCondition = null;
+  try {
+    theoCondition = await query(`
+      SELECT RTRIM(RO.condition) AS condition_hien_tai, COUNT(*) AS so_dong
+      FROM [NQT].[dbo].[on_off] o ${joinRo}
+      WHERE ${inPeriod} ${noUs} ${noHigher} AND RO.MUTATION > @fromDay
+      GROUP BY RTRIM(RO.condition)
+      ORDER BY COUNT(*) DESC`, { ...params });
+  } catch (e) { theoCondition = { loi: e.message }; }
+
+  res.json({
+    range,
+    canhBao: 'Buoc 5 va 6 loc theo TRANG THAI HIEN TAI cua thiet bi trong ROTABLES, '
+      + 'khong phai trang thai luc thao. Thiet bi da duoc nhan/xu ly thi condition doi '
+      + 'khac US va BIEN MAT khoi bao cao - ke ca khi xem lai ky cu. Do la ly do so dong '
+      + 'giam dan theo thoi gian du du lieu lich su khong he thay doi.',
+    buoc,
+    phanBoConditionSauBuoc5: theoCondition,
+  });
 }));
 
 // --- ADMIN: SOI CACH XAC DINH TRUNG TAM (vi sao 1 trung tam la lai xuat hien
