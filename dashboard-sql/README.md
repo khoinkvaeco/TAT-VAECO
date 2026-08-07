@@ -294,7 +294,22 @@ nằm trên ổ mạng, để biết phiếu nào **chưa scan**:
 | Thư mục | Dùng cho | Cách khớp tên file | Mặc định |
 |---|---|---|---|
 | **Picking list** | cột *Scan* (phiếu xuất) và *Scan phiếu trả* | lấy **phần trước dấu `-` đầu tiên** của tên file (`123456-abc.pdf` → khóa `123456`) rồi so với `PICKING_LISTNO_I`, hoặc `HISTORYNO_I` với phiếu trả | `\\10.99.7.7\picking list\2026` |
-| **Receiving** | cột *Scan* của tab Receiving | so **nguyên tên file** (`R-259454.pdf` → `R-259454`) với `VOUCHERNO` **đã bỏ tiền tố `R-`** | `\\10.99.7.7\certificates\2026` |
+| **Receiving** | cột *Scan* của tab Receiving | so **nguyên tên file** với `VOUCHERNO`, chấp nhận **CẢ HAI** cách đặt tên (xem dưới) | `\\10.99.7.7\certificates\2026` |
+
+**⚠️ Tên file Receiving khác nhau theo station:**
+
+| Station | Cách đặt tên | Ví dụ với `VOUCHERNO = R-259454` |
+|---|---|---|
+| **HAN** | bỏ tiền tố `R-` | `259454.pdf` |
+| **SGN** | **giữ nguyên** `R-` | `R-259454.pdf` |
+
+Dashboard **thử cả hai dạng**, khớp dạng nào cũng tính là đã scan — hai dạng đều trỏ về **cùng
+một voucher** nên không thể nhầm sang phiếu khác. Cách này không cần khai báo thêm và tự chịu
+được nếu một station đổi quy ước. Cột **Tên file scan** hiển thị **đúng tên file thật** khi tìm
+thấy, và liệt kê **cả hai dạng chấp nhận được** khi chưa thấy — để biết cần đặt tên thế nào.
+
+*(Công cụ `AMOS_GUI` chỉ bỏ tiền tố `R-` vì nó chạy cho **một** station mỗi lần, mặc định HAN.
+Dashboard xem nhiều station cùng lúc nên phải chịu được cả hai.)*
 
 ### MỖI STATION MỘT THƯ MỤC RIÊNG
 

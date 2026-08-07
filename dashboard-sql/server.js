@@ -702,6 +702,21 @@ function scanStateTheoStation(index, station, key) {
   return scanState(folder, key);
 }
 
+/**
+ * Nhu tren nhung thu NHIEU cach dat ten file - moi station co the dat ten khac
+ * nhau (vd HAN bo tien to 'R-', SGN giu nguyen 'R-...'). Khop bat ky khoa nao
+ * la coi nhu DA SCAN.
+ * @returns {{trangThai:string, khoaKhop:string}} khoaKhop = ten file da tim thay
+ */
+function scanStateNhieuKhoa(index, station, keys) {
+  const folder = index[stationCode(station)] || index['*'];
+  if (!folder || !folder.ok) return { trangThai: '', khoaKhop: '' };
+  for (const k of keys) {
+    if (k && folder.keys.has(k)) return { trangThai: 'SCANNED', khoaKhop: k };
+  }
+  return { trangThai: 'CHUA_SCAN', khoaKhop: '' };
+}
+
 /** Trang thai TAT CA thu muc de hien tren giao dien. */
 function scanIndexStatus(index, bang) {
   return [...SCAN_STATIONS, '*']
@@ -3132,7 +3147,16 @@ async function qReceiving(range, f) {
   const dirs = loadScanDirs();
   // MOI STATION MOT THU MUC - tra cuu theo station cua tung voucher
   const index = await loadScanIndex(dirs.receiving, 'full');
-  const scanKey = (v) => String(v || '').replace(/^R-/i, '').trim();
+  // TEN FILE SCAN KHAC NHAU THEO STATION:
+  //   HAN bo tien to 'R-'  -> file '259454.pdf'
+  //   SGN giu nguyen       -> file 'R-259454.pdf'
+  // Thu CA HAI dang, khop dang nao cung coi la da scan. Hai dang deu tro ve
+  // CUNG mot voucher nen khong the nham sang phieu khac.
+  const scanKeys = (v) => {
+    const raw = String(v || '').trim();
+    const bo = raw.replace(/^R-/i, '').trim();
+    return [...new Set([raw, bo].filter(Boolean))];
+  };
 
   let daScan = 0;
   let chuaScan = 0;
@@ -3147,7 +3171,7 @@ async function qReceiving(range, f) {
     if (s === 'SCANNED') g.daScan += 1; else if (s === 'CHUA_SCAN') g.chuaScan += 1;
   };
   for (const v of vouchers) {
-    const s = scanStateTheoStation(index, v.station, scanKey(v.vc_all));
+    const { trangThai: s } = scanStateNhieuKhoa(index, v.station, scanKeys(v.vc_all));
     if (s === 'SCANNED') daScan += 1;
     else if (s === 'CHUA_SCAN') chuaScan += 1;
     gom(byStation, v.station, s);
@@ -3158,8 +3182,12 @@ async function qReceiving(range, f) {
   let daScanDong = 0;
   let chuaScanDong = 0;
   for (const r of rows) {
-    r.voucher_scan = scanKey(r.voucherno);
-    r.scan = scanStateTheoStation(index, r.station, r.voucher_scan);
+    const ung = scanKeys(r.voucherno);
+    const kq = scanStateNhieuKhoa(index, r.station, ung);
+    r.scan = kq.trangThai;
+    // Tim thay thi hien DUNG ten file da khop; chua thay thi liet ke ca hai
+    // dang de nguoi dung biet can dat ten the nao.
+    r.voucher_scan = kq.khoaKhop || ung.join(' hoặc ');
     if (r.scan === 'SCANNED') daScanDong += 1;
     else if (r.scan === 'CHUA_SCAN') chuaScanDong += 1;
     const day = r.del_date instanceof Date ? r.del_date.toISOString().slice(0, 10) : String(r.del_date || '').slice(0, 10);

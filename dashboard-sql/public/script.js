@@ -1964,12 +1964,17 @@ let recvLoadSeq = 0;
 const COLS_RECEIVING = [
   {
     title: 'Scan', field: 'scan', hozAlign: 'center', width: 105, ...SCAN_HEADER_FILTER,
-    headerTooltip: 'Có file <VOUCHERNO>.pdf trong thư mục scan hay chưa (VOUCHERNO đã bỏ tiền tố “R-”). “—” = không đọc được thư mục.',
+    headerTooltip: 'Có file PDF trùng VOUCHERNO trong thư mục scan hay chưa. Chấp nhận CẢ HAI cách đặt tên: '
+      + 'giữ nguyên “R-259454.pdf” (SGN) hoặc bỏ tiền tố “259454.pdf” (HAN). “—” = không đọc được thư mục.',
     formatter: fmtScanCell,
   },
   { title: 'Ngày nhập', field: 'del_date', formatter: fmtDateCell, width: 110 },
   { title: 'Voucher', field: 'voucherno', headerFilter: 'input', width: 120 },
-  { title: 'Tên file cần có', field: 'voucher_scan', headerFilter: 'input', width: 130 },
+  {
+    title: 'Tên file scan', field: 'voucher_scan', headerFilter: 'input', width: 190,
+    headerTooltip: 'Đã tìm thấy → tên file thật trong thư mục. Chưa thấy → liệt kê CẢ HAI dạng '
+      + 'chấp nhận được (mỗi station đặt tên một kiểu: HAN bỏ tiền tố “R-”, SGN giữ nguyên).',
+  },
   { title: 'Part No', field: 'partno', headerFilter: 'input' },
   { title: 'Serial', field: 'serialno', headerFilter: 'input' },
   { title: 'Batch', field: 'batchno', headerFilter: 'input', width: 100 },
@@ -2088,7 +2093,7 @@ async function loadReceiving() {
       + 'Bộ lọc: STATION chứa station đang chọn, CONDITION không chứa “us”, STORE thuộc MAIN/VNA, '
       + 'loại riêng STORE = MAIN có LOCATION là SHOPLOC hoặc LG5. '
       + 'Thống kê theo STATION và STORE (nhập kho không quy về Trung tâm). '
-      + 'Cột Scan đối chiếu file <VOUCHERNO>.pdf trong thư mục scan (VOUCHERNO đã bỏ tiền tố “R-”). '
+      + 'Cột Scan đối chiếu file PDF trùng VOUCHERNO — chấp nhận cả “R-259454.pdf” (SGN) lẫn “259454.pdf” (HAN). '
       + '⚠ Thẻ KPI và biểu đồ “Đã scan / Chưa scan” đếm theo PHIẾU (voucher) và tính trên TOÀN KỲ; '
       + 'bảng chi tiết bên dưới đếm theo DÒNG và bị cắt ở MAX_ROWS.';
     recvTotalRows = data.count;

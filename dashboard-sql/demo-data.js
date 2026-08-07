@@ -857,7 +857,11 @@ function receiving(range, f) {
   rows.forEach((r) => {
     const v = rnd(vcPool);
     r.voucherno = v.no;
-    r.voucher_scan = v.no.replace(/^R-/i, '');
+    // Ten file khac nhau theo station: SGN giu 'R-...', HAN bo tien to
+    const giuR = (r.station || '').toUpperCase() === 'SGN';
+    r.voucher_scan = v.scan === 'SCANNED'
+      ? (giuR ? v.no : v.no.replace(/^R-/i, ''))
+      : `${v.no} hoặc ${v.no.replace(/^R-/i, '')}`;
     r.scan = v.scan; // moi dong cung voucher PHAI cung trang thai scan
   });
   // Chi loc theo station/store - giong server (nhap kho khong theo Trung tam)
