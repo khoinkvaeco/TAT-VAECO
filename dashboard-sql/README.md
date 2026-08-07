@@ -293,7 +293,21 @@ nằm trên ổ mạng, để biết phiếu nào **chưa scan**:
 
 | Thư mục | Dùng cho | Cách khớp tên file | Mặc định |
 |---|---|---|---|
-| **Picking list** | cột *Scan* (phiếu xuất) và *Scan phiếu trả* | lấy **phần trước dấu `-` đầu tiên** của tên file (`123456-abc.pdf` → khóa `123456`) rồi so với `PICKING_LISTNO_I`, hoặc `HISTORYNO_I` với phiếu trả | `\\10.99.7.7\picking list\2026` |
+| **Picking list** | cột *Scan* (phiếu xuất) và *Scan phiếu trả* | lấy **phần trước dấu `-` đầu tiên** của tên file rồi so với `PICKING_LISTNO_I`, hoặc `HISTORYNO_I` với phiếu trả | `\\10.99.7.7\picking list\2026` |
+
+**Tên file Picking list — cách cắt này bao được cả hai quy ước:**
+
+| Station | Cách đặt tên | Ví dụ với picking list `700001` | Khóa cắt ra |
+|---|---|---|---|
+| **HAN** | số + phần đuôi | `700001-AOG.pdf` | `700001` |
+| **SGN** | **đúng số picking list** | `700001.pdf` | `700001` |
+
+Tên **không có** dấu `-` thì `split('-')[0]` trả về **nguyên tên**, nên dạng của SGN khớp sẵn —
+**không cần cấu hình gì thêm**. Áp dụng y hệt cho *phiếu trả* (khóa là `HISTORYNO_I`).
+
+> Điều **duy nhất** sẽ làm hỏng cách khớp này là tên file có **thêm ký tự ở ĐẦU** (ví dụ
+> `PL-700001.pdf` hay `0700001.pdf`) — khi đó khóa cắt ra không còn bằng số picking list.
+> Nếu gặp, báo lại để đổi cách khớp.
 | **Receiving** | cột *Scan* của tab Receiving | so **nguyên tên file** với `VOUCHERNO`, chấp nhận **CẢ HAI** cách đặt tên (xem dưới) | `\\10.99.7.7\certificates\2026` |
 
 **⚠️ Tên file Receiving khác nhau theo station:**
