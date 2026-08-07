@@ -1727,6 +1727,71 @@ const FILTER_VIEWS = {
   partlookup: { period: 0, station: 0, store: 0, dept: 0, cc: 0 },
 };
 
+/**
+ * HANG DIEU KIEN DANG LOC ("chip").
+ *
+ * Nut loc chi noi DANG CHON MAY thu ("4 station"), khong noi LA NHUNG GI -
+ * muon biet phai mo tung menu ra xem; ba o thi phai mo ba lan. Nguoi nhan link
+ * minh gui con khong biet dang xem pham vi nao. Hang nay liet ke thang ra, moi
+ * dieu kien mot chip co dau × de bo nhanh.
+ *
+ * CHI HIEN chip cua o loc DANG CO TAC DUNG tren man hinh nay (theo FILTER_VIEWS)
+ * - bay chip "Trung tam" o tab Receiving la noi doi, vi tab do khong loc theo
+ * trung tam.
+ */
+function renderChipBar(view) {
+  const bar = $('#chipBar');
+  if (!bar) return;
+  const v = FILTER_VIEWS[view] || FILTER_VIEWS.dashboard;
+
+  const chips = [];
+  const themDs = (bat, nhan, khoa) => {
+    if (!bat || !state[khoa].length) return;
+    chips.push({ nhan, gt: state[khoa].join(', '), khoa });
+  };
+  themDs(v.station, 'Station', 'station');
+  themDs(v.store, 'Kho', 'store');
+  themDs(v.dept, 'Trung tâm', 'department');
+  if (v.cc && state.excludeCC) chips.push({ nhan: 'Bỏ qua xuất costcenter', gt: '', khoa: 'excludeCC' });
+  if (v.cab && state.excludeCab) chips.push({ nhan: 'Bỏ qua các kho CAB', gt: '', khoa: 'excludeCab' });
+
+  bar.classList.toggle('hidden', !chips.length);
+  if (!chips.length) return;
+
+  $('#chipList').innerHTML = chips.map((c) => `
+    <span class="chip-loc">
+      <span class="chip-noi-dung">${escapeHtml(c.nhan)}${c.gt ? ': <b>' + escapeHtml(c.gt) + '</b>' : ''}</span>
+      <button type="button" class="chip-x" data-bo="${c.khoa}"
+              title="Bỏ điều kiện này" aria-label="Bỏ ${escapeHtml(c.nhan)}">×</button>
+    </span>`).join('');
+}
+
+function initChipBar(apply) {
+  const bar = $('#chipBar');
+  if (!bar) return;
+  $('#chipList').addEventListener('click', (e) => {
+    const nut = e.target.closest('[data-bo]');
+    if (!nut) return;
+    const khoa = nut.dataset.bo;
+    if (khoa === 'excludeCC' || khoa === 'excludeCab') {
+      state[khoa] = false;
+      $(khoa === 'excludeCC' ? '#ccToggle' : '#cabToggle').checked = false;
+    } else {
+      state[khoa] = [];
+    }
+    renderMultiSelects();
+    apply();
+  });
+  $('#chipClear').addEventListener('click', () => {
+    state.station = []; state.store = []; state.department = [];
+    state.excludeCC = false; state.excludeCab = false;
+    $('#ccToggle').checked = false;
+    $('#cabToggle').checked = false;
+    renderMultiSelects();
+    apply();
+  });
+}
+
 /** Man hinh dang xem la gi (de biet nen hien nhung o loc nao). */
 function currentFilterView() {
   if (!$('#tab-lgc').classList.contains('hidden')) return 'lgc:' + state.lgcTab;
@@ -1749,6 +1814,7 @@ function applyFilterVisibility(view) {
   set('#ccWrap', v.cc);
   set('#cabWrap', v.cab);
   set('#rangeLabel', v.period); // khong theo ky thi nhan "Thang: ... -> ..." gay hieu nham
+  renderChipBar(view);          // hang chip phai theo dung bo o loc dang hien
 }
 
 function switchTab(tab) {
@@ -2712,6 +2778,7 @@ async function init() {
   const applyFilters = () => {
     saveFilters();
     if (typeof window.__renderPresets === 'function') window.__renderPresets();
+    renderChipBar(currentFilterView());
     // Dua filter len URL -> copy link gui dong nghiep la ho thay dung man hinh nay
     history.replaceState(null, '', `${location.pathname}?${buildQuery()}`);
     reportCache.clear();
@@ -2728,6 +2795,7 @@ async function init() {
   $('#yearInput').addEventListener('change', (e) => { state.year = e.target.value; applyFilters(); });
   initMultiSelects(applyFilters);   // Station + Store + Trung tam (chon nhieu)
   initPresets(applyFilters);        // Bo loc da luu
+  initChipBar(applyFilters);        // Hang dieu kien dang loc
   // Checkbox "Bo qua xuat costcenter": loai receiver la so roi tinh lai KPI/bieu do tu server
   $('#ccToggle').addEventListener('change', (e) => { state.excludeCC = e.target.checked; applyFilters(); });
   // Checkbox "Bo qua cac kho CAB": loai han cac kho CAB/CAB-TD/P-THA/P-SAF/P-PAN

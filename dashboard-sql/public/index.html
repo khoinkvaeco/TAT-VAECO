@@ -179,6 +179,18 @@
       </div>
       <span id="rangeLabel" class="text-xs text-muted ml-auto"></span>
     </div>
+
+    <!-- HÀNG ĐIỀU KIỆN ĐANG LỌC: liệt kê thẳng ra những gì đang lọc, mỗi điều
+         kiện một "chip" có dấu × để bỏ nhanh. Nút lọc chỉ nói ĐANG CHỌN MẤY
+         thứ ("4 station"), không nói LÀ NHỮNG GÌ — muốn biết phải mở từng menu.
+         Hàng này tự ẩn khi không lọc gì. Không thêm chức năng lọc mới. -->
+    <div id="chipBar" class="max-w-[1600px] mx-auto px-5 pb-2 hidden">
+      <div class="flex items-center gap-2 flex-wrap">
+        <span class="chip-nhan">Đang lọc</span>
+        <div id="chipList" class="flex items-center gap-2 flex-wrap"></div>
+        <button type="button" id="chipClear" class="chip-clear">Xoá tất cả bộ lọc</button>
+      </div>
+    </div>
   </header>
 
   <!-- Thông báo lỗi -->
