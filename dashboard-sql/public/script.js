@@ -1523,6 +1523,11 @@ const COLS_PICKSLIP = [
     headerFilterParams: { values: { '': 'Tất cả', NORMAL: 'Bình thường', CANCEL: 'Cancel', RETURN: 'Return' } },
   },
   { title: 'Ngày phiếu', field: 'pickslip_date', formatter: fmtDateCell },
+  {
+    title: 'Giờ xuất kho', field: 'booked_time_vn', formatter: fmtDateCell, width: 145,
+    headerTooltip: 'PICKSLIP_BOOKED.MUTATION + MUTATION_TIME (số ms từ 00:00) → giờ VN (+7). '
+      + 'Trống = bảng AMOS không có cột MUTATION_TIME.',
+  },
   { title: 'Pickslip', field: 'pickslipno', headerFilter: 'input' },
   { title: 'Seq', field: 'seqno', formatter: fmtIntCell, hozAlign: 'right', width: 70 },
   { title: 'Picking list', field: 'picking_listno', formatter: fmtIntCell, hozAlign: 'right', headerFilter: 'input' },
@@ -1557,7 +1562,28 @@ const COLS_PICKSLIP = [
       return v;
     },
   },
+  {
+    title: 'Giờ hủy', field: 'cancel_time_vn', formatter: fmtDateCell, width: 145,
+    headerTooltip: 'Thời điểm dòng bị hủy (chỉ có ở dòng Cancel).',
+  },
   { title: 'Ngày trả kho', field: 'return_date', formatter: fmtDateCell, width: 115 },
+  {
+    title: 'Giờ trả kho', field: 'return_time_vn', formatter: fmtDateCell, width: 145,
+    headerTooltip: 'HISTORY.MUTATION + MUTATION_TIME → giờ VN (+7).',
+  },
+  {
+    title: 'TAT hoàn kho (giờ)', field: 'tat_gio', hozAlign: 'right', sorter: 'number', width: 150,
+    headerTooltip: 'Số GIỜ từ lúc xuất kho đến lúc hàng về kho — chính xác đến giờ, '
+      + 'khác với cột “TAT return” chỉ tính ngày tròn.',
+    formatter: (cell) => {
+      const v = cell.getValue();
+      if (v === null || v === undefined || v === '') return '';
+      const n = Number(v);
+      const c = n > 24 * 14 ? cssVar('--critical') : (n > 24 * 7 ? cssVar('--warning') : cssVar('--good'));
+      const nhan = n < 24 ? `${n} giờ` : `${Math.round((n / 24) * 10) / 10} ngày`;
+      return `<span class="tat-badge" style="background:${c}22;color:${c}" title="${n} giờ">${nhan}</span>`;
+    },
+  },
   {
     title: 'TAT return', field: 'tat_return', hozAlign: 'right', sorter: 'number', width: 105,
     headerTooltip: 'Số NGÀY từ ngày xuất kho (PICKSLIP_DATE) đến ngày trả về kho (HISTORY.MUTATION).',
@@ -1629,6 +1655,12 @@ function renderPickKpis(k) {
       label: 'Chưa scan', value: n(k.chuaScan), unit: 'phiếu', accent: k.chuaScan ? '--critical' : '--good',
       title: 'Số PICKING LIST chưa tìm thấy file PDF. Đếm theo PHIẾU (một phiếu nhiều dòng '
         + 'chỉ cần một file), tính trên toàn kỳ. Đây là số file thực sự còn phải scan.',
+    },
+    {
+      label: 'TAT hoàn kho TB', value: n(k.tatGioAvg), unit: 'giờ', accent: '--series-2',
+      title: 'Trung bình số GIỜ từ lúc xuất kho đến lúc hàng về kho, tính trên toàn kỳ. '
+        + 'Chính xác đến giờ nhờ cột MUTATION_TIME của AMOS. '
+        + '“—” = bảng AMOS không có MUTATION_TIME nên chỉ tính được theo ngày tròn.',
     },
     {
       label: 'TAT return TB', value: n(k.tatReturnAvg), unit: 'ngày', accent: '--series-2',
@@ -1770,6 +1802,46 @@ function renderPickCharts(c) {
       scales: { x: d.common.scales.x, y: { ...d.common.scales.y, beginAtZero: true, grace: '10%' } },
     },
     plugins: [stackTotalLabel],
+  });
+
+  // TAT hoan kho theo Trung tam - don vi GIO (chinh xac nho MUTATION_TIME)
+  destroyChart('pickTatTt');
+  const tt = c.tatTheoTt || { labels: [], gioTb: [], gioMax: [], soDong: [] };
+  charts.pickTatTt = new Chart($('#chartPickTatTt'), {
+    type: 'bar',
+    data: {
+      labels: tt.labels,
+      datasets: [
+        { label: 'TAT trung bình (giờ)', data: tt.gioTb, backgroundColor: cssVar('--series-1'), borderRadius: 4 },
+        { label: 'Lâu nhất (giờ)', data: tt.gioMax, backgroundColor: cssVar('--warning'), borderRadius: 4 },
+      ],
+    },
+    options: {
+      ...d.common,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        ...d.common.plugins,
+        tooltip: {
+          mode: 'index', intersect: false,
+          callbacks: {
+            label: (it) => {
+              const g = Number(it.parsed.y) || 0;
+              const ngay = Math.round((g / 24) * 10) / 10;
+              return `${it.dataset.label}: ${g} giờ (~${ngay} ngày)`;
+            },
+            footer: (items) => `Số dòng Return: ${tt.soDong[items[0].dataIndex] ?? 0}`,
+          },
+        },
+      },
+      scales: {
+        x: d.common.scales.x,
+        y: {
+          ...d.common.scales.y, beginAtZero: true, grace: '8%',
+          title: { display: true, text: 'Giờ', color: cssVar('--text-secondary') },
+        },
+      },
+      onClick: chartDrill(tt.labels, 'department'),
+    },
   });
 }
 

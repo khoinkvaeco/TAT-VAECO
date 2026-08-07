@@ -43,6 +43,7 @@ const ENDPOINTS = [
   '/api/admin/diag/rnr',
   '/api/admin/diag/remark',
   '/api/admin/diag/linkserver',
+  '/api/admin/diag/mutation-time',
 ];
 
 /** Loi NAY la binh thuong: khong co DB that de ket noi. */

@@ -659,9 +659,16 @@ function pickslip(range, f) {
     r.picking_listno = pl.no;
     r.scan = pl.scan; // moi dong cung phieu PHAI cung trang thai scan
 
+    // Ngay GIO (demo): gio xuat kho / gio huy
+    r.booked_time_vn = new Date(Date.parse(r.pickslip_date) + rndInt(7, 19) * 3600000).toISOString();
+    r.header_time_vn = r.booked_time_vn;
+    r.cancel_time_vn = r.loai === 'CANCEL'
+      ? new Date(Date.parse(r.booked_time_vn) + rndInt(1, 72) * 3600000).toISOString() : null;
     r.return_no = '';
     r.return_date = null;
+    r.return_time_vn = null;
     r.tat_return = null;
+    r.tat_gio = null;
     r.return_scan = '';
     if (r.loai !== 'RETURN') return;
     if (rndInt(0, 9) === 0) { r.return_no = 'NOT FOUND'; return; }
@@ -669,6 +676,10 @@ function pickslip(range, f) {
     r.return_no = rndInt(3000000, 3999999) + '-R';
     r.return_date = new Date(Date.parse(r.pickslip_date) + tat * 86400000).toISOString();
     r.tat_return = tat;
+    // Gio chinh xac (demo: cong them so gio le)
+    const gioLe = rndInt(0, 23);
+    r.return_time_vn = new Date(Date.parse(r.booked_time_vn) + tat * 86400000 + gioLe * 3600000).toISOString();
+    r.tat_gio = Math.round((tat * 24 + gioLe) * 10) / 10;
     r.return_scan = rndInt(0, 9) < 6 ? 'SCANNED' : 'CHUA_SCAN';
   });
   const kept = applyFilter(rows, f);
@@ -714,6 +725,17 @@ function pickslip(range, f) {
     .forEach((r) => retScan.set(r.return_no, r.return_scan));
   const retOk = kept.filter((r) => r.loai === 'RETURN' && r.tat_return !== null);
   const tats = retOk.map((r) => r.tat_return);
+  const gios = retOk.map((r) => r.tat_gio).filter((v) => v !== null && v !== undefined);
+  // TAT hoan kho theo Trung tam (gio)
+  const ttm = new Map();
+  retOk.forEach((r) => {
+    if (r.tat_gio === null || r.tat_gio === undefined) return;
+    const k = r.department || 'PA';
+    const t = ttm.get(k) || { so: 0, tong: 0, max: 0 };
+    t.so++; t.tong += r.tat_gio; t.max = Math.max(t.max, r.tat_gio);
+    ttm.set(k, t);
+  });
+  const ttArr = [...ttm.entries()].sort((a, b) => b[1].tong / b[1].so - a[1].tong / a[1].so);
   const TB = [
     { label: 'Trong ngay', min: -Infinity, max: 0 },
     { label: '1-3 ngay', min: 1, max: 3 },
@@ -744,12 +766,20 @@ function pickslip(range, f) {
       returnKhongPhieu: kept.filter((r) => r.return_no === 'NOT FOUND').length,
       tatReturnAvg: tats.length ? Math.round((tats.reduce((a, b) => a + b, 0) / tats.length) * 10) / 10 : null,
       tatReturnMax: tats.length ? Math.max(...tats) : null,
+      tatGioAvg: gios.length ? Math.round((gios.reduce((a, b) => a + b, 0) / gios.length) * 10) / 10 : null,
+      tatGioMax: gios.length ? Math.max(...gios) : null,
       returnDaScan: [...retScan.values()].filter((v) => v === 'SCANNED').length,
       returnChuaScan: [...retScan.values()].filter((v) => v === 'CHUA_SCAN').length,
     },
     scanFolder: { dir: '(DEMO) \\\\10.99.7.7\\picking list\\2026', ok: true, count: 1234, error: '', ms: 5 },
     charts: {
       tatReturn: { labels: TB.map((b) => b.label), values: buckets },
+      tatTheoTt: {
+        labels: ttArr.map(([k]) => k),
+        gioTb: ttArr.map(([, v]) => Math.round((v.tong / v.so) * 10) / 10),
+        gioMax: ttArr.map(([, v]) => Math.round(v.max * 10) / 10),
+        soDong: ttArr.map(([, v]) => v.so),
+      },
       byDept: {
         labels: byDept.map((r) => r.department),
         thuc: byDept.map((r) => r.so_dong - r.so_cancel - r.so_return),
