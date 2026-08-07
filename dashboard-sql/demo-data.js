@@ -662,6 +662,8 @@ function pickslip(range, f) {
     // Ngay GIO (demo): gio xuat kho / gio huy
     r.booked_time_vn = new Date(Date.parse(r.pickslip_date) + rndInt(7, 19) * 3600000).toISOString();
     r.header_time_vn = r.booked_time_vn;
+    // ~70% dong biet duoc GIO xuat kho that (MUTATION roi dung ngay phieu)
+    r.issue_time_vn = rndInt(0, 9) < 7 ? r.booked_time_vn : null;
     r.cancel_time_vn = r.loai === 'CANCEL'
       ? new Date(Date.parse(r.booked_time_vn) + rndInt(1, 72) * 3600000).toISOString() : null;
     r.return_no = '';
@@ -679,7 +681,7 @@ function pickslip(range, f) {
     // Gio chinh xac (demo: cong them so gio le)
     const gioLe = rndInt(0, 23);
     r.return_time_vn = new Date(Date.parse(r.booked_time_vn) + tat * 86400000 + gioLe * 3600000).toISOString();
-    r.tat_gio = Math.round((tat * 24 + gioLe) * 10) / 10;
+    r.tat_gio = r.issue_time_vn ? Math.round((tat * 24 + gioLe) * 10) / 10 : null;
     r.return_scan = rndInt(0, 9) < 6 ? 'SCANNED' : 'CHUA_SCAN';
   });
   const kept = applyFilter(rows, f);
@@ -771,7 +773,11 @@ function pickslip(range, f) {
       returnDaScan: [...retScan.values()].filter((v) => v === 'SCANNED').length,
       returnChuaScan: [...retScan.values()].filter((v) => v === 'CHUA_SCAN').length,
     },
-    scanFolder: { dir: '(DEMO) \\\\10.99.7.7\\picking list\\2026', ok: true, count: 1234, error: '', ms: 5 },
+    scanFolder: [
+      { station: 'HAN', dir: '(DEMO) \\\\10.99.7.7\\picking list\\2026', ok: true, count: 1234, error: '', ms: 5 },
+      { station: 'SGN', dir: '(DEMO) \\\\10.99.7.8\\picking list SGN\\2026', ok: true, count: 987, error: '', ms: 7 },
+      { station: 'DAD', dir: '', ok: false, count: 0, error: 'Chua cau hinh', ms: 0 },
+    ],
     charts: {
       tatReturn: { labels: TB.map((b) => b.label), values: buckets },
       tatTheoTt: {
@@ -880,7 +886,10 @@ function receiving(range, f) {
       tyLeScan: pct(daScan, vc.size),
       daScanDong, chuaScanDong,
     },
-    scanFolder: { dir: '(DEMO) \\\\10.99.7.7\\certificates\\2026', ok: true, count: 987, error: '', ms: 4 },
+    scanFolder: [
+      { station: 'HAN', dir: '(DEMO) \\\\10.99.7.7\\certificates\\2026', ok: true, count: 987, error: '', ms: 4 },
+      { station: 'SGN', dir: '(DEMO) \\\\10.99.7.8\\certificates SGN\\2026', ok: true, count: 654, error: '', ms: 6 },
+    ],
     charts: {
       byDept: {
         labels: byDept.map((r) => r.k),

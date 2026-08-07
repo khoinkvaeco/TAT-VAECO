@@ -1490,23 +1490,31 @@ const SCAN_HEADER_FILTER = {
   headerFilterParams: { values: { '': 'Tất cả', SCANNED: 'Đã scan', CHUA_SCAN: 'Chưa scan' } },
 };
 
-/** Thanh trang thai thu muc scan (duong dan + so file + loi neu co). */
-function renderScanBar(sel, folder) {
+/**
+ * Thanh trang thai thu muc scan. MOI STATION MOT THU MUC (giống công cụ
+ * AMOS_GUI), nên server trả về một DANH SÁCH — hiện hết để biết station nào
+ * đang đọc được, station nào không.
+ */
+function renderScanBar(sel, folders) {
   const el = $(sel);
   if (!el) return;
-  if (!folder) { el.classList.add('hidden'); return; }
+  const ds = Array.isArray(folders) ? folders : (folders ? [folders] : []);
+  if (!ds.length) { el.classList.add('hidden'); return; }
   el.classList.remove('hidden');
-  const dir = `<code>${escapeHtml(folder.dir || '(chưa cấu hình)')}</code>`;
-  if (folder.ok) {
-    el.className = 'scanbar scanbar-ok mb-3';
-    el.innerHTML = `📁 Thư mục scan: ${dir} — <b>${(folder.count || 0).toLocaleString('vi')}</b> file PDF`
-      + `<span class="text-xs text-muted"> (đọc ${folder.ms || 0}ms · làm mới mỗi 60 giây)</span>`;
-  } else {
-    el.className = 'scanbar scanbar-warn mb-3';
-    el.innerHTML = `⚠ <b>Không đọc được thư mục scan</b> ${dir} — ${escapeHtml(folder.error || '')}`
-      + '<span class="text-xs"> · Cột “Scan” tạm để trống (—), KHÔNG kết luận là chưa scan.'
-      + ' Sửa đường dẫn ở trang <a href="/admin.html" target="_blank">Quản trị</a>.</span>';
-  }
+  const loi = ds.filter((x) => !x.ok);
+  el.className = `scanbar ${loi.length ? 'scanbar-warn' : 'scanbar-ok'} mb-3`;
+  const dong = ds.map((x) => {
+    const dir = `<code>${escapeHtml(x.dir || '(chưa cấu hình)')}</code>`;
+    return x.ok
+      ? `<div>✔ <b>${escapeHtml(x.station)}</b> ${dir} — <b>${(x.count || 0).toLocaleString('vi')}</b> file PDF`
+        + `<span class="text-xs text-muted"> (${x.ms || 0}ms)</span></div>`
+      : `<div>⚠ <b>${escapeHtml(x.station)}</b> ${dir} — ${escapeHtml(x.error || 'không đọc được')}</div>`;
+  }).join('');
+  el.innerHTML = `<div class="font-semibold mb-1">📁 Thư mục scan theo Station</div>${dong}`
+    + (loi.length
+      ? '<div class="text-xs mt-1">Với station không đọc được, cột “Scan” để trống (—), '
+        + 'KHÔNG kết luận là chưa scan. Sửa ở trang <a href="/admin.html" target="_blank">Quản trị</a>.</div>'
+      : '<div class="text-xs text-muted mt-1">Làm mới mỗi 60 giây · đối chiếu theo station của từng phiếu.</div>');
 }
 
 const COLS_PICKSLIP = [
@@ -1524,9 +1532,14 @@ const COLS_PICKSLIP = [
   },
   { title: 'Ngày phiếu', field: 'pickslip_date', formatter: fmtDateCell },
   {
-    title: 'Giờ xuất kho', field: 'booked_time_vn', formatter: fmtDateCell, width: 145,
-    headerTooltip: 'PICKSLIP_BOOKED.MUTATION + MUTATION_TIME (số ms từ 00:00) → giờ VN (+7). '
-      + 'Trống = bảng AMOS không có cột MUTATION_TIME.',
+    title: 'Giờ xuất kho', field: 'issue_time_vn', formatter: fmtDateCell, width: 145,
+    headerTooltip: 'Chỉ điền khi MUTATION của phiếu RƠI ĐÚNG vào ngày phiếu (PICKSLIP_DATE) — '
+      + 'khi đó MUTATION_TIME mới đúng là giờ lập phiếu. Trống = AMOS chỉ cho biết NGÀY.',
+  },
+  {
+    title: 'Sửa cuối (dòng)', field: 'booked_time_vn', formatter: fmtDateCell, width: 145,
+    headerTooltip: 'PICKSLIP_BOOKED.MUTATION + MUTATION_TIME = lần sửa CUỐI của dòng, '
+      + 'KHÔNG phải giờ xuất kho (đã đo được có dòng lệch tới 8 tháng). Chỉ để đối chiếu.',
   },
   { title: 'Pickslip', field: 'pickslipno', headerFilter: 'input' },
   { title: 'Seq', field: 'seqno', formatter: fmtIntCell, hozAlign: 'right', width: 70 },
@@ -1563,8 +1576,9 @@ const COLS_PICKSLIP = [
     },
   },
   {
-    title: 'Giờ hủy', field: 'cancel_time_vn', formatter: fmtDateCell, width: 145,
-    headerTooltip: 'Thời điểm dòng bị hủy (chỉ có ở dòng Cancel).',
+    title: 'Sửa cuối (dòng hủy)', field: 'cancel_time_vn', formatter: fmtDateCell, width: 155,
+    headerTooltip: 'Lần sửa cuối của dòng Cancel — mốc gần nhất có thể coi là lúc hủy, '
+      + 'nhưng AMOS không có cột riêng cho giờ hủy nên KHÔNG chắc chắn.',
   },
   { title: 'Ngày trả kho', field: 'return_date', formatter: fmtDateCell, width: 115 },
   {
@@ -1658,9 +1672,9 @@ function renderPickKpis(k) {
     },
     {
       label: 'TAT hoàn kho TB', value: n(k.tatGioAvg), unit: 'giờ', accent: '--series-2',
-      title: 'Trung bình số GIỜ từ lúc xuất kho đến lúc hàng về kho, tính trên toàn kỳ. '
-        + 'Chính xác đến giờ nhờ cột MUTATION_TIME của AMOS. '
-        + '“—” = bảng AMOS không có MUTATION_TIME nên chỉ tính được theo ngày tròn.',
+      title: 'Trung bình số GIỜ từ lúc xuất kho đến lúc hàng về kho. '
+        + 'CHỈ tính trên các dòng biết được GIỜ xuất kho thật (xem cột “Giờ xuất kho”); '
+        + 'dòng chỉ biết ngày thì không đưa vào để khỏi làm sai số trung bình.',
     },
     {
       label: 'TAT return TB', value: n(k.tatReturnAvg), unit: 'ngày', accent: '--series-2',

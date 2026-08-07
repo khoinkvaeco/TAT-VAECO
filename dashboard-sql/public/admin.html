@@ -112,26 +112,22 @@
         </span>
       </div>
       <div class="note" style="margin-top:8px">
-        Dùng để đối chiếu <b>phiếu đã scan hay chưa</b> ở tab <b>Quản lý xuất kho</b> và tab <b>Receiving</b>.
+        Dùng để đối chiếu <b>phiếu đã scan hay chưa</b> ở tab <b>LGC ▸ Quản lý xuất kho</b> và <b>LGC ▸ Receiving</b>.
+        <b>MỖI STATION MỘT THƯ MỤC RIÊNG</b> — đúng như công cụ AMOS_GUI (ô <i>Station</i> và ô <i>Thư mục</i>
+        nằm cạnh nhau, đổi station thì đổi luôn thư mục). Dashboard xem được nhiều station cùng lúc nên
+        tra cứu <b>theo station của từng phiếu</b>; station nào chưa khai riêng thì dùng dòng <b>Mặc định</b>.<br>
         Đường dẫn lưu trong file JSON <b>trên máy chủ dashboard</b> (<code id="scanFile">data/scan-folders.json</code>),
         <b>KHÔNG ghi vào SQL Server</b>. Chỉ máy quản trị (localhost hoặc IP trong <code>ADMIN_IPS</code>) sửa được;
-        máy khác chỉ xem. Để trống ô = quay về giá trị mặc định.
+        máy khác chỉ xem. Ô để trống = dùng dòng Mặc định.
       </div>
-      <div style="margin-top:10px;display:grid;gap:10px">
-        <div>
-          <label style="font-size:13px;display:block;margin-bottom:3px">
-            Picking list <span style="color:var(--muted)">— tên file <code>&lt;PICKING_LISTNO_I&gt;-….pdf</code>, cũng dùng cho phiếu trả <code>&lt;HISTORYNO_I&gt;</code></span>
-          </label>
-          <input id="scanPicking" type="text" spellcheck="false" style="width:100%;font-family:ui-monospace,Menlo,monospace" />
-          <div id="scanPickingState" style="font-size:12px;margin-top:3px;color:var(--muted)">…</div>
-        </div>
-        <div>
-          <label style="font-size:13px;display:block;margin-bottom:3px">
-            Receiving <span style="color:var(--muted)">— tên file <code>&lt;VOUCHERNO&gt;.pdf</code> (đã bỏ tiền tố <code>R-</code>)</span>
-          </label>
-          <input id="scanReceiving" type="text" spellcheck="false" style="width:100%;font-family:ui-monospace,Menlo,monospace" />
-          <div id="scanReceivingState" style="font-size:12px;margin-top:3px;color:var(--muted)">…</div>
-        </div>
+      <div style="overflow-x:auto;margin-top:10px">
+        <table id="scanTable" style="width:100%;border-collapse:collapse;font-size:12.5px">
+          <tr style="background:var(--hover);text-align:left">
+            <th style="padding:6px;width:90px">Station</th>
+            <th style="padding:6px">Picking list <span style="font-weight:400;color:var(--muted)">— tên file <code>&lt;PICKING_LISTNO_I&gt;-….pdf</code>; phiếu trả dùng <code>&lt;HISTORYNO_I&gt;</code></span></th>
+            <th style="padding:6px">Receiving <span style="font-weight:400;color:var(--muted)">— tên file <code>&lt;VOUCHERNO&gt;.pdf</code> (đã bỏ <code>R-</code>)</span></th>
+          </tr>
+        </table>
       </div>
       <div id="scanOut" style="font-size:13px;margin-top:8px"></div>
     </div>
@@ -509,34 +505,52 @@
     $('#mpExport').addEventListener('click', () => { location.href = '/api/admin/manual-pairs/export'; });
     loadManualPairs();
 
-    // ---- Thu muc file scan PDF ----
-    // Cho hien trang thai THAT (doc duoc bao nhieu file / loi gi) ngay tai cho
-    // de nguoi dung biet duong dan vua go co dung khong, khong phai doan.
-    function renderScanState(sel, s) {
-      const el = $(sel);
-      if (!s) { el.textContent = ''; return; }
-      if (s.ok) {
-        el.style.color = 'var(--ok, #16a34a)';
-        el.textContent = `✔ Đọc được ${s.count.toLocaleString('vi')} file PDF (${s.ms} ms)`
-          + (s.custom ? '' : ` · đang dùng MẶC ĐỊNH`);
-      } else {
-        el.style.color = 'var(--danger, #dc2626)';
-        el.textContent = `✖ ${s.error || 'Không đọc được thư mục'}`
-          + (s.default ? ` · mặc định: ${s.default}` : '');
+    // ---- Thu muc file scan PDF (MOI STATION MOT THU MUC) ----
+    // Cong cu AMOS_GUI cua nghiep vu co o Station va o Thu muc canh nhau: doi
+    // station thi doi luon thu muc. Dashboard xem nhieu station cung luc nen
+    // phai khai bao rieng tung station; dong "Mac dinh" dung cho phan con lai.
+    const SCAN_ROWS = [];   // { st, nhan }
+    function scanRowKey(st) { return st === '*' ? 'mac-dinh' : st; }
+
+    function scanTrangThai(o) {
+      if (!o || !o.dir) return '<span style="color:var(--muted)">chưa cấu hình</span>';
+      if (o.ok) {
+        return `<span style="color:#16a34a">✔ ${o.count.toLocaleString('vi')} file PDF`
+          + ` <span style="color:var(--muted)">(${o.ms} ms)</span></span>`;
       }
+      return `<span style="color:#dc2626">✖ ${esc(o.error || 'không đọc được')}</span>`;
+    }
+
+    function scanO(loai, st, o) {
+      const id = `scan-${loai}-${scanRowKey(st)}`;
+      return `<input id="${id}" type="text" spellcheck="false" value="${esc((o && o.dir) || '')}"
+                style="width:100%;font-family:ui-monospace,Menlo,monospace;padding:5px 7px;
+                       border:1px solid var(--hair);border-radius:6px;background:var(--bg);color:var(--text)" />
+              <div id="${id}-state" style="font-size:11.5px;margin-top:2px">${scanTrangThai(o)}</div>`;
     }
 
     function applyScanCfg(d) {
-      $('#scanPicking').value = d.picking.dir || '';
-      $('#scanReceiving').value = d.receiving.dir || '';
-      renderScanState('#scanPickingState', d.picking);
-      renderScanState('#scanReceivingState', d.receiving);
+      SCAN_ROWS.length = 0;
+      (d.stations || ['HAN', 'SGN', 'DAD']).forEach((st) => SCAN_ROWS.push({ st, nhan: st }));
+      SCAN_ROWS.push({ st: '*', nhan: 'Mặc định' });
+
+      const t = $('#scanTable');
+      // Giu lai dong tieu de, ve lai cac dong con lai
+      while (t.rows.length > 1) t.deleteRow(1);
+      for (const r of SCAN_ROWS) {
+        const tr = t.insertRow();
+        tr.style.borderBottom = '1px dashed var(--hair)';
+        tr.innerHTML = `<td style="padding:6px;font-weight:600;vertical-align:top">${esc(r.nhan)}</td>`
+          + `<td style="padding:6px">${scanO('picking', r.st, d.picking && d.picking[r.st])}</td>`
+          + `<td style="padding:6px">${scanO('receiving', r.st, d.receiving && d.receiving[r.st])}</td>`;
+      }
       $('#scanUpdated').textContent = d.updatedAt
         ? `sửa lần cuối ${d.updatedAt.slice(0, 16).replace('T', ' ')} từ IP ${d.updatedBy || '?'}`
         : 'đang dùng đường dẫn mặc định';
       if (d.canEdit === false) {
         $('#scanSave').disabled = true;
         $('#scanSave').title = 'Máy này không có quyền sửa (chỉ máy quản trị).';
+        $('#scanTable').querySelectorAll('input').forEach((i2) => { i2.readOnly = true; });
       }
     }
 
@@ -548,21 +562,29 @@
       } catch (e) { $('#scanOut').textContent = 'Lỗi: ' + e.message; }
     }
 
+    function thuThapScan() {
+      const ra = { picking: {}, receiving: {} };
+      for (const r of SCAN_ROWS) {
+        for (const loai of ['picking', 'receiving']) {
+          const el = $(`#scan-${loai}-${scanRowKey(r.st)}`);
+          if (el) ra[loai][r.st] = el.value.trim();
+        }
+      }
+      return ra;
+    }
+
     $('#scanReload').addEventListener('click', loadScanCfg);
     $('#scanSave').addEventListener('click', async () => {
       $('#scanOut').textContent = 'Đang lưu và kiểm tra thư mục…';
       try {
         const res = await fetch('/api/admin/scan-config', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            picking: $('#scanPicking').value,
-            receiving: $('#scanReceiving').value,
-          }),
+          body: JSON.stringify(thuThapScan()),
         });
         const d = await res.json();
         if (!res.ok || d.error) throw new Error(d.message || 'Lưu thất bại');
         applyScanCfg(d);
-        $('#scanOut').textContent = '✔ Đã lưu. Dashboard sẽ dùng đường dẫn mới ở lần tải kế tiếp.';
+        $('#scanOut').textContent = '✔ Đã lưu. Dashboard sẽ dùng đường dẫn mới ở lần chạy kế tiếp.';
       } catch (e) { $('#scanOut').textContent = 'Lỗi: ' + e.message; }
     });
     loadScanCfg();

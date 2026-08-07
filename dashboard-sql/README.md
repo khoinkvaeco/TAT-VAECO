@@ -57,6 +57,7 @@ Mở `.env` và sửa:
 | `DEMO_MODE` | `true` để chạy thử với dữ liệu mẫu (không cần SQL Server) |
 | `SCAN_PICKING_DIR` | Thư mục chứa **file scan PDF phiếu xuất kho** (mặc định `\\10.99.7.7\picking list\2026`). Chỉ là **giá trị mặc định** — sửa được ngay trên trang `/admin` (xem §6c) |
 | `SCAN_RECEIVING_DIR` | Thư mục chứa **file scan PDF phiếu nhập kho** (mặc định `\\10.99.7.7\certificates\2026`). Cũng sửa được trên `/admin` |
+| `SCAN_PICKING_DIR_HAN` / `_SGN` / `_DAD`<br>`SCAN_RECEIVING_DIR_HAN` / `_SGN` / `_DAD` | Thư mục **riêng cho từng station** — mỗi station scan vào một thư mục khác nhau (xem §6c). Để trống = dùng thư mục mặc định ở trên |
 | `DB_REQUEST_TIMEOUT_MS` | Thời gian tối đa cho **một** câu truy vấn (mặc định `180000` = 3 phút). Cũ là 60 s nên hay báo *Timeout: Request failed to complete in 60000ms* |
 
 > ⚠️ **Không commit file `.env` thật** — nó đã được thêm vào `.gitignore`.
@@ -150,6 +151,19 @@ hàm **`amosDayTimeToVN(dayCol, timeCol)`** — truyền `timeCol = null` thì c
 
 Nhờ vậy *TAT hoàn kho* tính được **theo giờ** thay vì ngày tròn: trả lúc 22h cùng ngày trước
 đây ra **0 ngày**, trả 8h sáng hôm sau ra **1 ngày** — dù thực tế chỉ cách nhau 10 tiếng.
+
+**⚠️ `MUTATION` là lần SỬA CUỐI của bản ghi, KHÔNG phải giờ lập phiếu.** Đã đo thật
+(`diag/mutation-time`): trên `PICKSLIP_BOOKED` có dòng `MUTATION = 19943` (07/08/2026) trong khi
+`CREATED_DATE = 19701` (08/12/2025) — **lệch 8 tháng**. Vì vậy:
+
+- **Giờ xuất kho** chỉ điền khi `PICKSLIP_HEADER.MUTATION` **rơi đúng vào** `PICKSLIP_DATE` —
+  khi đó `MUTATION_TIME` mới đúng là giờ lập phiếu. Không trùng thì **để trống** (chỉ biết ngày),
+  và dòng đó **không** được đưa vào TAT trung bình theo giờ.
+- **Giờ trả kho** lấy từ `HISTORY.MUTATION + MUTATION_TIME` — `HISTORY` là bảng **sự kiện**
+  (mỗi dòng một lần dịch chuyển) nên `MUTATION` chính là thời điểm sự kiện; đo được `MUTATION`
+  lệch `DEL_DATE` 0–2 ngày, chấp nhận được.
+- AMOS **không có** cột riêng cho *giờ hủy*; cột hiển thị là **“Sửa cuối (dòng hủy)”** —
+  mốc gần nhất có thể coi là lúc hủy, và tên cột nói rõ điều đó thay vì hứa hẹn quá.
 
 **Không đoán bảng nào có cột nào.** `INFORMATION_SCHEMA` không dùng được cho `[DWH_DB]..`
 (máy chủ từ xa), nên `remoteHasColumn()` dò bằng `SELECT TOP 0 [cột]` — có thì trả về rỗng,
@@ -281,13 +295,27 @@ nằm trên ổ mạng, để biết phiếu nào **chưa scan**:
 | **Picking list** | cột *Scan* (phiếu xuất) và *Scan phiếu trả* | lấy **phần trước dấu `-` đầu tiên** của tên file (`123456-abc.pdf` → khóa `123456`) rồi so với `PICKING_LISTNO_I`, hoặc `HISTORYNO_I` với phiếu trả | `\\10.99.7.7\picking list\2026` |
 | **Receiving** | cột *Scan* của tab Receiving | so **nguyên tên file** (`R-259454.pdf` → `R-259454`) với `VOUCHERNO` **đã bỏ tiền tố `R-`** | `\\10.99.7.7\certificates\2026` |
 
-**Đường dẫn sửa được, không phải cố định trong code.** Thứ tự ưu tiên:
+### MỖI STATION MỘT THƯ MỤC RIÊNG
+
+Công cụ `AMOS_GUI` của nghiệp vụ có ô **Station** (SGN/HAN/DAD) và ô **Thư mục** **nằm cạnh
+nhau** — đổi station thì đổi luôn thư mục, và `save_config` lưu **cả hai**. Nghĩa là mỗi
+station scan vào một thư mục khác nhau.
+
+Dashboard **xem được nhiều station cùng lúc**, nên không thể dùng một thư mục chung: nó tra cứu
+**theo station của TỪNG phiếu** (cột `STATION` dạng `VNA-HAN` → khớp **đuôi** chuỗi). Station
+nào chưa khai riêng thì dùng dòng **Mặc định**.
+
+> ⚠️ *Trước đây dashboard chỉ có MỘT thư mục chung — chọn SGN vẫn đối chiếu vào thư mục HAN nên
+> **mọi phiếu SGN đều bị báo “Chưa scan” oan**. Đã sửa.*
+
+**Đường dẫn sửa được, không phải cố định trong code.** Thứ tự ưu tiên cho từng station:
 
 1. File `data/scan-folders.json` (do trang `/admin` ghi ra) — **cao nhất**;
-2. Biến `SCAN_PICKING_DIR` / `SCAN_RECEIVING_DIR` trong `.env`;
-3. Giá trị mặc định ở bảng trên.
+2. Biến `SCAN_PICKING_DIR_<STATION>` / `SCAN_RECEIVING_DIR_<STATION>` trong `.env`;
+3. Dòng **Mặc định**: `SCAN_PICKING_DIR` / `SCAN_RECEIVING_DIR`;
+4. Giá trị mặc định ở bảng trên.
 
-Vào **`/admin` → khối 📁 Thư mục file scan PDF**, sửa rồi bấm **💾 Lưu đường dẫn**: server lưu
+Vào **`/admin` → khối 📁 Thư mục file scan PDF** (bảng **Station × Picking / Receiving**), sửa rồi bấm **💾 Lưu đường dẫn**: server lưu
 file JSON **trên máy backend** (`saveJsonSafe`, chống hỏng file như mục §6b) và **đọc thử ngay**,
 hiện luôn *đọc được bao nhiêu file PDF* hoặc *lỗi gì*. Để trống ô = quay về giá trị mặc định.
 Đúng như nguyên tắc §6b: **chỉ máy quản trị** (localhost + `ADMIN_IPS`) sửa được — máy khác vẫn

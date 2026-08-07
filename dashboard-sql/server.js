@@ -28,6 +28,19 @@ const sql = require('mssql');
 // ---------------------------------------------------------------------------
 // 1. CAU HINH
 // ---------------------------------------------------------------------------
+/** Cac station co thu muc scan rieng (dung y cong cu AMOS_GUI cua nghiep vu). */
+const SCAN_STATIONS = ['HAN', 'SGN', 'DAD'];
+
+/** Doc SCAN_x_DIR_HAN / _SGN / _DAD tu bien moi truong -> { HAN, SGN, DAD }. */
+function envTheoStation(tienTo) {
+  const out = {};
+  for (const st of SCAN_STATIONS) {
+    const v = (process.env[`${tienTo}_${st}`] || '').trim();
+    if (v) out[st] = v;
+  }
+  return out;
+}
+
 const CONFIG = {
   port: parseInt(process.env.PORT || '3000', 10),
   maxRows: parseInt(process.env.MAX_ROWS || '5000', 10),
@@ -49,10 +62,16 @@ const CONFIG = {
     ? path.resolve(process.env.DATA_DIR.trim())
     : path.join(__dirname, 'data'),
   // --- Thu muc chua FILE SCAN PDF (doi chieu phieu da scan hay chua) ---
-  // Day chi la GIA TRI MAC DINH. Nguoi dung o trang /admin co the sua va luu
-  // vao data/scan-folders.json; may khac chi XEM duoc (khong sua duoc).
+  // MOI STATION MOT THU MUC RIENG: cong cu AMOS_GUI cua nghiep vu co o "Station"
+  // (SGN/HAN/DAD) va o "Thu muc" nam canh nhau, nguoi dung doi station thi doi
+  // luon thu muc. Dashboard cho xem NHIEU station cung luc nen phai tra cuu thu
+  // muc THEO STATION CUA TUNG DONG, khong the dung mot thu muc chung.
+  // SCAN_PICKING_DIR = thu muc MAC DINH (dung khi station khong ro);
+  // SCAN_PICKING_DIR_HAN / _SGN / _DAD = thu muc rieng tung station.
   scanPickingDir: (process.env.SCAN_PICKING_DIR || '\\\\10.99.7.7\\picking list\\2026').trim(),
   scanReceivingDir: (process.env.SCAN_RECEIVING_DIR || '\\\\10.99.7.7\\certificates\\2026').trim(),
+  scanPickingByStation: envTheoStation('SCAN_PICKING_DIR'),
+  scanReceivingByStation: envTheoStation('SCAN_RECEIVING_DIR'),
   // Thoi gian toi da cho MOT cau truy van (ms). Truy van qua linked server
   // (AMOS) co the lau; mac dinh cu 60s hay bao "Timeout: Request failed to
   // complete in 60000ms" tren cac ky dai.
@@ -574,7 +593,15 @@ const SCAN_DIR_FILE = path.join(DATA_DIR_EARLY(), 'scan-folders.json');
 const _scanCache = new Map();
 const SCAN_CACHE_MS = 60 * 1000;
 
-/** Doc duong dan da luu (neu co), lui ve mac dinh trong CONFIG. */
+/**
+ * Doc duong dan da luu (neu co), lui ve mac dinh trong CONFIG.
+ * Cau truc tra ve, moi loai la mot bang tra cuu THEO STATION:
+ *   { picking: { HAN, SGN, DAD, '*': mac dinh }, receiving: {...} }
+ * '*' dung khi station cua dong khong nam trong danh sach (hoac chua cau hinh
+ * rieng cho station do).
+ * TUONG THICH NGUOC: ban ghi cu luu picking/receiving la MOT CHUOI -> coi do
+ * la thu muc mac dinh '*'.
+ */
 function loadScanDirs() {
   let saved = {};
   try {
@@ -582,33 +609,104 @@ function loadScanDirs() {
   } catch (e) {
     console.warn('[SCAN] Khong doc duoc scan-folders.json:', e.message);
   }
-  const s = (v, dflt) => (typeof v === 'string' && v.trim() ? v.trim() : dflt);
+  const sach = (v) => (typeof v === 'string' && v.trim() ? v.trim() : '');
+
+  /** Gop 3 nguon theo thu tu uu tien: file JSON > bien moi truong > mac dinh. */
+  const gop = (luu, envSt, envMacDinh) => {
+    const cu = typeof luu === 'string' ? { '*': sach(luu) } : (luu || {});
+    const ra = {};
+    for (const st of SCAN_STATIONS) {
+      const v = sach(cu[st]) || sach(envSt[st]);
+      if (v) ra[st] = v;
+    }
+    ra['*'] = sach(cu['*']) || sach(envMacDinh);
+    return ra;
+  };
+
+  const picking = gop(saved.picking, CONFIG.scanPickingByStation, CONFIG.scanPickingDir);
+  const receiving = gop(saved.receiving, CONFIG.scanReceivingByStation, CONFIG.scanReceivingDir);
+  const daSua = (luu, st) => !!(luu && typeof luu === 'object' && sach(luu[st]));
   return {
-    picking: s(saved.picking, CONFIG.scanPickingDir),
-    receiving: s(saved.receiving, CONFIG.scanReceivingDir),
+    picking,
+    receiving,
     updatedAt: saved.updatedAt || null,
     updatedBy: saved.updatedBy || null,
-    // De giao dien chi ro dang dung ban SUA hay ban MAC DINH
+    // Cho giao dien biet o nao dang la ban SUA (nguoi dung tu dat)
     custom: {
-      picking: !!(saved.picking && saved.picking.trim()),
-      receiving: !!(saved.receiving && saved.receiving.trim()),
+      picking: Object.fromEntries([...SCAN_STATIONS, '*'].map((st) => [st, daSua(saved.picking, st)
+        || (typeof saved.picking === 'string' && st === '*' && !!sach(saved.picking))])),
+      receiving: Object.fromEntries([...SCAN_STATIONS, '*'].map((st) => [st, daSua(saved.receiving, st)
+        || (typeof saved.receiving === 'string' && st === '*' && !!sach(saved.receiving))])),
     },
-    defaults: { picking: CONFIG.scanPickingDir, receiving: CONFIG.scanReceivingDir },
+    stations: SCAN_STATIONS,
   };
 }
 
-/** Ghi duong dan moi (chi goi tu API admin - da qua adminGuard theo IP). */
-function saveScanDirs({ picking, receiving }, ip) {
-  const cur = loadScanDirs();
-  const next = {
-    picking: typeof picking === 'string' ? picking.trim() : (cur.custom.picking ? cur.picking : ''),
-    receiving: typeof receiving === 'string' ? receiving.trim() : (cur.custom.receiving ? cur.receiving : ''),
+/**
+ * Ghi duong dan moi (chi goi tu API admin - da qua adminGuard theo IP).
+ * Body: { picking: { HAN, SGN, DAD, '*' }, receiving: {...} } - o nao de trong
+ * thi bo di (quay ve bien moi truong / mac dinh).
+ */
+function saveScanDirs(body, ip) {
+  const loc = (o) => {
+    const ra = {};
+    if (!o || typeof o !== 'object') return ra;
+    for (const st of [...SCAN_STATIONS, '*']) {
+      const v = typeof o[st] === 'string' ? o[st].trim() : '';
+      if (v) ra[st] = v;
+    }
+    return ra;
+  };
+  saveJsonSafe(SCAN_DIR_FILE, {
+    picking: loc(body && body.picking),
+    receiving: loc(body && body.receiving),
     updatedAt: new Date().toISOString(),
     updatedBy: ip || 'unknown',
-  };
-  saveJsonSafe(SCAN_DIR_FILE, next);
+  });
   _scanCache.clear(); // duong dan doi -> bo cache danh sach file cu
   return loadScanDirs();
+}
+
+/**
+ * Cot STATION cua AMOS co dang 'VNA-HAN', 'VNA-SGN'... -> rut ra ma station.
+ * Dung DUOI chuoi giong bo loc cua cong cu AMOS_GUI (endswith).
+ */
+function stationCode(v) {
+  const s = String(v || '').trim().toUpperCase();
+  return SCAN_STATIONS.find((st) => s.endsWith(st) || s === st) || '';
+}
+
+/**
+ * Doc TAT CA thu muc can cho mot loai (picking / receiving) -> bang tra cuu
+ * theo station. readScanFolder() cache theo duong dan nen hai station tro vao
+ * CUNG mot thu muc chi ton MOT lan doc.
+ * @param {object} bang  { HAN, SGN, DAD, '*' } duong dan
+ * @param {'prefix'|'full'} mode  cach lay khoa tu ten file
+ */
+async function loadScanIndex(bang, mode) {
+  const khoa = [...SCAN_STATIONS, '*'].filter((st) => bang[st]);
+  const ket = await Promise.all(khoa.map((st) => readScanFolder(bang[st], mode)));
+  const out = {};
+  khoa.forEach((st, i) => { out[st] = ket[i]; });
+  return out;
+}
+
+/**
+ * Trang thai scan cua MOT dong: tra thu muc THEO STATION cua chinh dong do,
+ * khong co rieng thi dung thu muc mac dinh '*'.
+ * Tra '' khi khong doc duoc thu muc (KHONG ket luan la "chua scan").
+ */
+function scanStateTheoStation(index, station, key) {
+  const folder = index[stationCode(station)] || index['*'];
+  if (!folder) return '';
+  return scanState(folder, key);
+}
+
+/** Trang thai TAT CA thu muc de hien tren giao dien. */
+function scanIndexStatus(index, bang) {
+  return [...SCAN_STATIONS, '*']
+    .filter((st) => bang[st])
+    .map((st) => ({ station: st === '*' ? 'Mặc định' : st, ...scanFolderStatus(index[st]) }));
 }
 
 /**
@@ -2368,13 +2466,24 @@ async function pickslipTemp(range, f) {
   const colH = (hMut ? ', h.[MUTATION] AS H_MUT' : '') + (hMutT ? ', h.[MUTATION_TIME] AS H_MUTT' : '');
   const colB = (bMut ? ', p.[MUTATION] AS B_MUT' : '') + (bMutT ? ', p.[MUTATION_TIME] AS B_MUTT' : '');
 
-  // Ngay GIO xuat kho: uu tien PICKSLIP_DATE (ngay nghiep vu) ghep voi gio cua
-  // ban ghi header; khong co gio thi chi con ngay.
+  // NGAY cua phieu (khong gio) - van la moc ky bao cao
   const dateVN = kindH === 'number'
-    ? amosDayTimeToVN('r.[PICKSLIP_DATE]', hMutT ? 'r.[H_MUTT]' : null)
+    ? amosDayTimeToVN('r.[PICKSLIP_DATE]', null)
     : 'TRY_CONVERT(datetime, r.[PICKSLIP_DATE])';
-  // Ngay GIO ban ghi header / dong booked thay doi lan cuoi. Voi dong da
-  // CANCEL/RETURN thi day chinh la luc huy/tra (AMOS ghi de khi doi trang thai).
+
+  // GIO XUAT KHO - CAN THAN:
+  //   [MUTATION] la lan SUA CUOI cua ban ghi, KHONG phai luc lap phieu. Da do
+  //   that (/api/admin/diag/mutation-time): tren PICKSLIP_BOOKED co dong
+  //   MUTATION = 19943 (07/08/2026) trong khi CREATED_DATE = 19701 (08/12/2025)
+  //   - lech 8 THANG. Lay [MUTATION] lam gio xuat kho la SAI HAN.
+  //   Chi khi MUTATION cua HEADER ROI DUNG VAO ngay phieu (PICKSLIP_DATE) thi
+  //   MUTATION_TIME moi la gio lap phieu dang tin. Khong trung -> de TRONG,
+  //   chi biet NGAY (thieu du lieu con hon so sai).
+  const issueVN = (hMut && hMutT && kindH === 'number')
+    ? `CASE WHEN TRY_CONVERT(float, r.[H_MUT]) = TRY_CONVERT(float, r.[PICKSLIP_DATE])
+             THEN ${amosDayTimeToVN('r.[PICKSLIP_DATE]', 'r.[H_MUTT]')} END`
+    : 'NULL';
+  // Lan SUA CUOI cua ban ghi - chi de doi chieu, KHONG phai gio nghiep vu.
   const headerVN = hMut ? amosDayTimeToVN('r.[H_MUT]', hMutT ? 'r.[H_MUTT]' : null) : 'NULL';
   const bookedVN = bMut ? amosDayTimeToVN('r.[B_MUT]', bMutT ? 'r.[B_MUTT]' : null) : 'NULL';
 
@@ -2437,11 +2546,13 @@ async function pickslipTemp(range, f) {
       RTRIM(r.[OWNER])         AS owner,
       RTRIM(r.[CREATED_BY])    AS created_by,
       ${dateVN}                AS pickslip_date,
+      ${issueVN}               AS issue_time_vn,
       ${headerVN}              AS header_time_vn,
       ${bookedVN}              AS booked_time_vn,
-      -- Luc HUY / TRA: chi co y nghia voi dong Cancel/Return
+      -- Lan sua cuoi cua DONG: voi dong da huy thi day la moc gan nhat co the
+      -- coi la luc huy, nhung KHONG chac (ban ghi con co the bi sua vi ly do
+      -- khac) -> giao dien goi dung ten "Sua cuoi (dong)".
       CASE WHEN ${loai} = 'CANCEL' THEN ${bookedVN} END AS cancel_time_vn,
-      CASE WHEN ${loai} = 'RETURN' THEN ${bookedVN} END AS return_req_time_vn,
       RTRIM(r.[MECH_SIGN])     AS mech_sign,
       RTRIM(r.[BOOKING_SIGN])  AS booking_sign,
       RTRIM(r.[RECEIVER])      AS receiver,
@@ -2580,7 +2691,9 @@ const TAT_RETURN_BUCKETS = [
  */
 async function enrichPickslipRows(rows, allPicking = [], allReturns = []) {
   const dirs = loadScanDirs();
-  const folder = await readScanFolder(dirs.picking, 'prefix');
+  // MOI STATION MOT THU MUC (xem loadScanDirs): tra cuu theo station cua TUNG
+  // dong, nho vay xem "Tat ca station" van doi chieu dung tung phieu.
+  const index = await loadScanIndex(dirs.picking, 'prefix');
 
   // Hoi HISTORY cho TOAN BO dong Return cua ky (khong chi phan hien tren bang)
   const hist = allReturns.length
@@ -2598,7 +2711,7 @@ async function enrichPickslipRows(rows, allPicking = [], allReturns = []) {
 
   // --- (1) Scan phieu xuat: dem theo PHIEU, ca ky ---
   for (const p of allPicking) {
-    const s = scanState(folder, idStr(p.pl_all));
+    const s = scanStateTheoStation(index, p.station, idStr(p.pl_all));
     if (s === 'SCANNED') st.daScan += 1;
     else if (s === 'CHUA_SCAN') st.chuaScan += 1;
   }
@@ -2617,7 +2730,7 @@ async function enrichPickslipRows(rows, allPicking = [], allReturns = []) {
     const base = idStr(h.historyno);
     if (!retScanDone.has(base)) {
       retScanDone.add(base);
-      const s = scanState(folder, base);
+      const s = scanStateTheoStation(index, r.station, base);
       if (s === 'SCANNED') st.returnDaScan += 1;
       else if (s === 'CHUA_SCAN') st.returnChuaScan += 1;
     }
@@ -2649,7 +2762,7 @@ async function enrichPickslipRows(rows, allPicking = [], allReturns = []) {
 
   // --- (3) Gan cot hien thi cho tung dong cua bang chi tiet ---
   for (const r of rows) {
-    r.scan = scanState(folder, idStr(r.picking_listno));
+    r.scan = scanStateTheoStation(index, r.station, idStr(r.picking_listno));
     if (r.scan === 'SCANNED') st.daScanDong += 1;
     else if (r.scan === 'CHUA_SCAN') st.chuaScanDong += 1;
 
@@ -2667,15 +2780,15 @@ async function enrichPickslipRows(rows, allPicking = [], allReturns = []) {
     r.return_no = base + '-R';
     r.return_date = h.return_date;
     r.return_time_vn = h.return_time_vn || null;
-    r.return_scan = scanState(folder, base);
+    r.return_scan = scanStateTheoStation(index, r.station, base);
     r.tat_return = dayDiff(r.pickslip_date, h.return_date);
-    // TAT tinh den GIO (chinh xac hon tat_return theo ngay tron)
-    r.tat_gio = hourDiff(r.booked_time_vn, h.return_time_vn);
+    // TAT tinh den GIO - chi khi biet gio xuat kho THAT (xem issueVN)
+    r.tat_gio = hourDiff(r.issue_time_vn, h.return_time_vn);
   }
 
   return {
     stats: st,
-    folder: scanFolderStatus(folder),
+    folder: scanIndexStatus(index, dirs.picking),
     charts: {
       tatReturn: { labels: TAT_RETURN_BUCKETS.map((b) => b.label), values: buckets },
       // TAT hoan kho TRUNG BINH (gio) theo tung Trung tam
@@ -2735,7 +2848,7 @@ async function qPickslip(range, f) {
       x.station, x.store, x.location_from, x.picking_listno, x.pickslipno, x.seqno,
       x.partno, x.serialno, x.qty_booked, x.qty_canceled, x.loai, x.is_cancel,
       x.owner, x.created_by, x.pickslip_date,
-      x.booked_time_vn, x.header_time_vn, x.cancel_time_vn,
+      x.issue_time_vn, x.booked_time_vn, x.header_time_vn, x.cancel_time_vn,
       x.mech_sign, x.booking_sign,
       ${dept} AS department,
       x.receiver, x.remarks, x.pickslip_text
@@ -2746,14 +2859,16 @@ async function qPickslip(range, f) {
     --     Dung de dem "da/chua scan" theo PHIEU va KHONG bi cat boi TOP(@top)
     --     nhu bang chi tiet - nghiep vu yeu cau scan dat 100% nen so nay phai
     --     phu het ky, khong duoc thieu.
-    SELECT DISTINCT x.picking_listno AS pl_all
-    ${join} WHERE 1 = 1 ${w};
+    SELECT x.picking_listno AS pl_all, MIN(x.station) AS station
+    ${join} WHERE 1 = 1 ${w}
+    GROUP BY x.picking_listno;
 
     -- [6] CAC DONG RETURN cua TOAN KY: ngay GIO xuat kho + Trung tam, de tinh
     --     TAT hoan kho chinh xac den GIO va tach duoc theo tung Trung tam.
     SELECT x.seqno AS seq_ret,
            MIN(x.pickslip_date)   AS ngay_xuat,
-           MIN(x.booked_time_vn)  AS gio_xuat,
+           MIN(x.issue_time_vn)   AS gio_xuat,
+           MIN(x.station)         AS station,
            MIN(${dept})           AS department
     ${join} WHERE x.loai = 'RETURN' ${w}
     GROUP BY x.seqno;
@@ -2969,7 +3084,7 @@ async function qReceiving(range, f) {
     -- [3] DANH SACH VOUCHER (distinct) cua TOAN KY - de dem "da/chua scan"
     --     theo PHIEU (mot voucher co nhieu dong) va KHONG bi cat boi TOP(@top).
     --     Nghiep vu yeu cau scan dat 100% nen so nay phai phu het ky.
-    SELECT x.voucherno AS vc_all, MIN(${dept}) AS department
+    SELECT x.voucherno AS vc_all, MIN(${dept}) AS department, MIN(x.station) AS station
     ${join} WHERE ${conLai} ${w}
     GROUP BY x.voucherno;
 
@@ -2986,14 +3101,15 @@ async function qReceiving(range, f) {
   //     theo dong. Xem giai thich o enrichPickslipRows().
   const vouchers = pick('vc_all');
   const dirs = loadScanDirs();
-  const folder = await readScanFolder(dirs.receiving, 'full');
+  // MOI STATION MOT THU MUC - tra cuu theo station cua tung voucher
+  const index = await loadScanIndex(dirs.receiving, 'full');
   const scanKey = (v) => String(v || '').replace(/^R-/i, '').trim();
 
   let daScan = 0;
   let chuaScan = 0;
   const byDept = new Map();
   for (const v of vouchers) {
-    const s = scanState(folder, scanKey(v.vc_all));
+    const s = scanStateTheoStation(index, v.station, scanKey(v.vc_all));
     if (s === 'SCANNED') daScan += 1;
     else if (s === 'CHUA_SCAN') chuaScan += 1;
 
@@ -3009,7 +3125,7 @@ async function qReceiving(range, f) {
   let chuaScanDong = 0;
   for (const r of rows) {
     r.voucher_scan = scanKey(r.voucherno);
-    r.scan = scanState(folder, r.voucher_scan);
+    r.scan = scanStateTheoStation(index, r.station, r.voucher_scan);
     if (r.scan === 'SCANNED') daScanDong += 1;
     else if (r.scan === 'CHUA_SCAN') chuaScanDong += 1;
     const day = r.del_date instanceof Date ? r.del_date.toISOString().slice(0, 10) : String(r.del_date || '').slice(0, 10);
@@ -3034,7 +3150,7 @@ async function qReceiving(range, f) {
       tyLeScan: pct(daScan, daScan + chuaScan),
       daScanDong, chuaScanDong,
     },
-    scanFolder: scanFolderStatus(folder),
+    scanFolder: scanIndexStatus(index, dirs.receiving),
     charts: {
       byDept: {
         labels: deptSorted.map(([k]) => k),
@@ -4978,17 +5094,34 @@ app.get(
 
 // --- THU MUC FILE SCAN: AI CUNG XEM DUOC, chi may quan tri moi SUA duoc ---
 //     (POST nam duoi /api/admin/... nen tu dong di qua adminGuard theo IP.)
-app.get('/api/scan-config', h(async (req, res) => {
+//     MOI STATION MOT THU MUC - giong cong cu AMOS_GUI cua nghiep vu.
+
+/** Gom trang thai ca hai loai thu muc de tra ve cho giao dien. */
+async function trangThaiScan() {
   const dirs = loadScanDirs();
   const [pk, rc] = await Promise.all([
-    readScanFolder(dirs.picking, 'prefix'),
-    readScanFolder(dirs.receiving, 'full'),
+    loadScanIndex(dirs.picking, 'prefix'),
+    loadScanIndex(dirs.receiving, 'full'),
   ]);
-  res.json({
-    picking: { ...scanFolderStatus(pk), custom: dirs.custom.picking, default: dirs.defaults.picking },
-    receiving: { ...scanFolderStatus(rc), custom: dirs.custom.receiving, default: dirs.defaults.receiving },
+  const bang = (index, duong, custom) => Object.fromEntries(
+    [...SCAN_STATIONS, '*'].map((st) => [st, {
+      dir: duong[st] || '',
+      custom: !!custom[st],
+      ...(index[st] ? scanFolderStatus(index[st]) : { ok: false, count: 0, error: 'Chua cau hinh', ms: 0 }),
+    }])
+  );
+  return {
+    stations: SCAN_STATIONS,
+    picking: bang(pk, dirs.picking, dirs.custom.picking),
+    receiving: bang(rc, dirs.receiving, dirs.custom.receiving),
     updatedAt: dirs.updatedAt,
     updatedBy: dirs.updatedBy,
+  };
+}
+
+app.get('/api/scan-config', h(async (req, res) => {
+  res.json({
+    ...(await trangThaiScan()),
     // Bao cho giao dien biet co hien nut Luu hay khong. Dung IP SOCKET that
     // (giong adminGuard, khong tin header) - server VAN chan lai o POST.
     canEdit: isAdminAllowed(String(req.socket.remoteAddress || '').replace(/^::ffff:/, '')),
@@ -4997,24 +5130,24 @@ app.get('/api/scan-config', h(async (req, res) => {
 
 app.post('/api/admin/scan-config', h(async (req, res) => {
   const b = req.body || {};
-  const bad = ['picking', 'receiving'].find(
-    (k) => b[k] !== undefined && typeof b[k] !== 'string'
-  );
-  if (bad) return res.status(400).json({ error: true, message: `Truong "${bad}" phai la chuoi duong dan.` });
+  for (const k of ['picking', 'receiving']) {
+    if (b[k] === undefined) continue;
+    if (typeof b[k] !== 'object' || Array.isArray(b[k])) {
+      return res.status(400).json({
+        error: true,
+        message: `Truong "${k}" phai la doi tuong { HAN, SGN, DAD, "*" }.`,
+      });
+    }
+    const sai = Object.entries(b[k]).find(([, v]) => v !== undefined && v !== null && typeof v !== 'string');
+    if (sai) {
+      return res.status(400).json({ error: true, message: `Duong dan "${k}.${sai[0]}" phai la chuoi.` });
+    }
+  }
   const ip = String(req.socket.remoteAddress || '').replace(/^::ffff:/, '');
-  const dirs = saveScanDirs({ picking: b.picking, receiving: b.receiving }, ip);
-  console.log(`[SCAN] IP ${ip} cap nhat thu muc scan: picking="${dirs.picking}" receiving="${dirs.receiving}"`);
-  const [pk, rc] = await Promise.all([
-    readScanFolder(dirs.picking, 'prefix'),
-    readScanFolder(dirs.receiving, 'full'),
-  ]);
-  res.json({
-    ok: true,
-    picking: { ...scanFolderStatus(pk), custom: dirs.custom.picking, default: dirs.defaults.picking },
-    receiving: { ...scanFolderStatus(rc), custom: dirs.custom.receiving, default: dirs.defaults.receiving },
-    updatedAt: dirs.updatedAt,
-    updatedBy: dirs.updatedBy,
-  });
+  const dirs = saveScanDirs(b, ip);
+  console.log(`[SCAN] IP ${ip} cap nhat thu muc scan:`
+    + ` picking=${JSON.stringify(dirs.picking)} receiving=${JSON.stringify(dirs.receiving)}`);
+  res.json({ ok: true, ...(await trangThaiScan()) });
 }));
 
 // --- Bang du lieu chi tiet TAT theo don vi (van giu endpoint rieng) ---
