@@ -398,6 +398,29 @@ const CAB_STORES_SQL = CAB_STORES.map((v) => `'${v}'`).join(', ');
  *   - Ve NULL: "NULL NOT IN (...)" cho ra UNKNOWN nen dong do se BI LOAI oan.
  *     Vi vay phai co ve "IS NULL OR ..." - dong khong ghi kho van duoc giu.
  */
+/**
+ * Chuan hoa o loc Store: NAY LA DANH SACH (chon nhieu kho). Nhan ca chuoi
+ * 'MAIN,VNA' lan mang - de link cu dang '?store=MAIN' van chay dung.
+ * Mang RONG = TAT CA (khong loc).
+ */
+function normStores(v) {
+  const arr = Array.isArray(v) ? v : String(v || '').split(',');
+  return [...new Set(arr.map((x) => String(x).trim()).filter(Boolean))];
+}
+
+/**
+ * Dieu kien "kho nam trong danh sach da chon", dung THAM SO.
+ * @param prefix ten tham so (phai KHAC nhau neu mot cau co nhieu bang kho)
+ */
+function storeInClause(f, storeCol, params, prefix = 'fStore') {
+  if (!f.store || !f.store.length || !storeCol) return '';
+  const names = f.store.map((v, i) => {
+    params[`${prefix}${i}`] = v;
+    return `@${prefix}${i}`;
+  });
+  return ` AND ${storeCol} IN (${names.join(', ')})`;
+}
+
 function excludeCabClause(f, storeCol) {
   if (!f.excludeCab || !storeCol) return '';
   return ` AND (${storeCol} IS NULL OR ${storeCol} NOT IN (${CAB_STORES_SQL}))`;
@@ -419,10 +442,7 @@ function buildFilterClause(f, cols, params) {
       params.fStation = f.station;
     }
   }
-  if (f.store && cols.store) {
-    clause += ` AND ${cols.store} = @fStore`;
-    params.fStore = f.store;
-  }
+  clause += storeInClause(f, cols.store, params);
   if (f.department && cols.department) {
     clause += ` AND ${cols.department} = @fDepartment`;
     params.fDepartment = f.department;
@@ -910,7 +930,8 @@ function manualPairsInRange(range, f) {
     const t = new Date(String(p.issueTimeVn || '').replace(/Z?$/, 'Z')).getTime();
     if (!isFinite(t) || t < from || t >= to) return false;
     if (f && f.station && !eq(p.station, f.station)) return false;
-    if (f && f.store && !eq(p.store, f.store)) return false;
+    // f.store la DANH SACH (chon nhieu kho); rong = tat ca
+    if (f && f.store && f.store.length && !f.store.some((v) => eq(p.store, v))) return false;
     if (f && f.department && !eq(p.department, f.department)) return false;
     return true;
   });
@@ -2089,7 +2110,10 @@ async function qOneSidedWoParts(range, f) {
   const stationExpr = `COALESCE(NULLIF(LTRIM(RTRIM(iss.station)), ''), NULLIF(LTRIM(RTRIM(ret.station)), ''))`;
   let where = '';
   if (f.station) { params.fStation = f.station; where += `\n      AND (${stationExpr} IS NULL OR ${stationExpr} = @fStation)`; }
-  if (f.store) { params.fStore = f.store; where += `\n      AND (iss.store IS NULL OR iss.store = @fStore)`; }
+  if (f.store && f.store.length) {
+    const names = f.store.map((v, i) => { params[`fStore${i}`] = v; return `@fStore${i}`; });
+    where += `\n      AND (iss.store IS NULL OR iss.store IN (${names.join(', ')}))`;
+  }
   // Bao cao nay khong dung buildFilterClause (WO_PART_ON_OFF khong co cot kho,
   // kho lay tu phieu xuat khop duoc) nen phai goi rieng.
   where += excludeCabClause(f, 'iss.store');
@@ -2321,7 +2345,7 @@ function amosValueToDate(v) {
 const _repairMemo = new Map();
 /** Chay 1 lan cho ca 2 bao cao (tong hop + chi tiet) trong vong 60s. */
 async function getRepairAdmin(f) {
-  const key = JSON.stringify([f.station || '', f.store || '']);
+  const key = JSON.stringify([f.station || '', [...(f.store || [])].sort()]);
   const hit = _repairMemo.get(key);
   if (hit && Date.now() - hit.t < 60 * 1000) return hit.p;
   const p = loadRepairAdmin(f);
@@ -2354,7 +2378,7 @@ async function loadRepairAdmin(f) {
   const q = (v) => `'${String(v).replace(/'/g, "''")}'`;
   let where = `WHERE l.[location_type] = ${Number(REPAIR_LOCATION_TYPE)} AND d.[status] = 0`;
   if (f.station) where += ` AND l.[station] = ${q(f.station)}`;
-  if (f.store) where += ` AND l.[store] = ${q(f.store)}`;
+  if (f.store && f.store.length) where += ` AND l.[store] IN (${f.store.map(q).join(', ')})`;
 
   const rot = await query(
     `SELECT l.[locationno_i], l.[station], l.[store], l.[location],
@@ -2627,7 +2651,7 @@ function pickslipWhere(f, dept, params) {
   let w = '';
   // AMOS_GUI loc station bang endswith (cot STATION co the la 'VNA-HAN'...)
   if (f.station) { params.fStation = f.station; w += " AND LOWER(x.station) LIKE '%' + LOWER(@fStation)"; }
-  if (f.store) { params.fStore = f.store; w += ' AND x.store = @fStore'; }
+  w += storeInClause(f, 'x.store', params);
   if (f.department) { params.fDepartment = f.department; w += ` AND ${dept} = @fDepartment`; }
   return w;
 }
@@ -3074,7 +3098,7 @@ async function qReceiving(range, f) {
       AND (LOWER(x.store) LIKE '%main' OR LOWER(x.store) LIKE '%vna')
       AND NOT (LOWER(x.store) = 'main' AND LOWER(x.location) IN ('shoploc', 'lg5'))`;
   if (f.station) { params.fStation = f.station; w += " AND LOWER(x.station) LIKE '%' + LOWER(@fStation) + '%'"; }
-  if (f.store) { params.fStore = f.store; w += ' AND x.store = @fStore'; }
+  w += storeInClause(f, 'x.store', params);
 
   // Dong B1 con hieu luc = khong co dong CR nao cung RECDETAILNO_I
   const conLai = `x.vm = 'B1' AND NOT EXISTS (
@@ -4862,7 +4886,8 @@ function cached(ttlMs, fn) {
 function readFilters(q) {
   return {
     station: (q.station || '').trim(),
-    store: (q.store || '').trim(),
+    // O loc Store cho chon NHIEU kho -> luon la MANG (rong = tat ca)
+    store: normStores(q.store),
     department: (q.department || '').trim(),
     // Checkbox "Bo qua xuat costcenter": loai receiver la so (khong phai so tau)
     excludeCC: ['1', 'true'].includes((q.excludeCC || '').trim().toLowerCase()),
@@ -6256,7 +6281,7 @@ app.get('/api/admin/diag/dept', h(async (req, res) => {
   const range = resolveRange(req.query);
   const f = readFilters(req.query);
   const target = String(req.query.department || '').trim().toUpperCase();
-  const out = { range, locDangLoc: { station: f.station || '(tat ca)', store: f.store || '(tat ca)' }, trungTamCanSoi: target || '(chua chon)' };
+  const out = { range, locDangLoc: { station: f.station || '(tat ca)', store: (f.store && f.store.length) ? f.store.join(', ') : '(tat ca)' }, trungTamCanSoi: target || '(chua chon)' };
 
   const deptR = deptFromReal('r', 'sm');                  // cach DANG DUNG
   const deptK = deptFromStaff('k.[created_b2]', 'smK');   // cach thay the (de doi chieu)

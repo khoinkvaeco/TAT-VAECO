@@ -66,7 +66,8 @@ function applyFilter(rows, f) {
         if (MAIN.includes((r.station || '').toUpperCase())) return false;
       } else if (r.station !== f.station) return false;
     }
-    if (f.store && r.store !== f.store) return false;
+    // f.store la DANH SACH (chon nhieu kho); rong = tat ca
+    if (f.store && f.store.length && !f.store.includes(r.store)) return false;
     if (f.department && r.department !== f.department) return false;
     // Checkbox "Bo qua xuat costcenter" (chi tac dong dong co truong receiver)
     if (f.excludeCC && 'receiver' in r && isCostcenterReceiver(r.receiver)) return false;
@@ -583,7 +584,7 @@ const _repairDemoCache = new Map();
 
 /** Danh sach item dang nam o vi tri U/S (dung chung cho 2 bao cao). */
 function repairAdminItems(f) {
-  const ck = JSON.stringify([f && f.station, f && f.store]);
+  const ck = JSON.stringify([f && f.station, [...((f && f.store) || [])].sort()]);
   if (_repairDemoCache.has(ck)) return _repairDemoCache.get(ck);
   const items = [];
   const stations = f && f.station ? [f.station] : Object.keys(REPAIR_LOCS);

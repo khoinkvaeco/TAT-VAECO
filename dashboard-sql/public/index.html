@@ -79,11 +79,26 @@
         </select>
       </div>
 
-      <div id="storeWrap">
+      <!-- Store: CHON NHIEU KHO. Dung nut + menu tich chon thay cho
+           <select multiple> vi select multiple bat nguoi dung giu Ctrl,
+           chiem nhieu cho va rat de bo chon nham. -->
+      <div id="storeWrap" class="relative">
         <label class="flabel">Store</label>
-        <select id="storeSelect" class="finput min-w-[120px]">
-          <option value="">Tất cả</option>
-        </select>
+        <button type="button" id="storeBtn" class="finput multi-btn min-w-[150px]"
+                aria-haspopup="listbox" aria-expanded="false">
+          <span id="storeBtnText">Tất cả</span><span class="multi-caret">▾</span>
+        </button>
+        <div id="storeMenu" class="multi-menu hidden" role="listbox">
+          <div class="multi-head">
+            <input id="storeSearch" type="text" placeholder="Tìm kho…" class="multi-search" />
+            <div class="multi-acts">
+              <button type="button" id="storeAll" class="multi-act">Chọn tất cả</button>
+              <button type="button" id="storeNone" class="multi-act">Bỏ chọn</button>
+            </div>
+          </div>
+          <div id="storeOptions" class="multi-list"></div>
+          <div id="storeHint" class="multi-hint hidden"></div>
+        </div>
       </div>
 
       <div id="deptWrap">
