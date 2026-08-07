@@ -69,6 +69,7 @@ const state = {
   store: '',
   department: '',
   excludeCC: false, // checkbox "Bo qua xuat costcenter" (receiver la so, khong phai so tau)
+  excludeCab: false, // checkbox "Bo qua cac kho CAB" (CAB, CAB-TD, P-THA, P-SAF, P-PAN)
   isAdmin: false,   // may nay co quyen SUA (xac nhan doi ung) khong - hoi server
   clientIp: '',
   currentReport: 'returned-unservice',
@@ -93,8 +94,8 @@ const reportCache = new Map();
 // --- Luu / khoi phuc cau hinh filter (localStorage) de lan sau mo lai dung ngay ---
 const FILTER_STORE_KEY = 'tat-filters-v1';
 function saveFilters() {
-  const { periodType, month, week, quarter, year, station, store, department, excludeCC, lgcTab } = state;
-  localStorage.setItem(FILTER_STORE_KEY, JSON.stringify({ periodType, month, week, quarter, year, station, store, department, excludeCC, lgcTab }));
+  const { periodType, month, week, quarter, year, station, store, department, excludeCC, excludeCab, lgcTab } = state;
+  localStorage.setItem(FILTER_STORE_KEY, JSON.stringify({ periodType, month, week, quarter, year, station, store, department, excludeCC, excludeCab, lgcTab }));
 }
 function loadSavedFilters() {
   try {
@@ -119,6 +120,7 @@ function buildQuery() {
   if (state.store) p.set('store', state.store);
   if (state.department) p.set('department', state.department);
   if (state.excludeCC) p.set('excludeCC', '1');
+  if (state.excludeCab) p.set('excludeCab', '1');
   return p.toString();
 }
 
@@ -1320,8 +1322,8 @@ const MAIN_TABS = ['dashboard', 'reports', 'lgc', 'partlookup'];
  * la loi. Nay chi hien o nao that su tac dong len so lieu dang xem.
  */
 const FILTER_VIEWS = {
-  dashboard: { period: 1, station: 1, store: 1, dept: 1, cc: 1 },
-  reports: { period: 1, station: 1, store: 1, dept: 1, cc: 1 },
+  dashboard: { period: 1, station: 1, store: 1, dept: 1, cc: 1, cab: 1 },
+  reports: { period: 1, station: 1, store: 1, dept: 1, cc: 1, cab: 1 },
   'lgc:pickslip': { period: 1, station: 1, store: 1, dept: 1, cc: 0 },
   // Phieu NHAP kho thong ke theo Station/Store, KHONG theo Trung tam
   'lgc:receiving': { period: 1, station: 1, store: 1, dept: 0, cc: 0 },
@@ -1351,6 +1353,7 @@ function applyFilterVisibility(view) {
   set('#storeWrap', v.store);
   set('#deptWrap', v.dept);
   set('#ccWrap', v.cc);
+  set('#cabWrap', v.cab);
   set('#rangeLabel', v.period); // khong theo ky thi nhan "Thang: ... -> ..." gay hieu nham
 }
 
@@ -2264,6 +2267,7 @@ async function init() {
     state.store = saved.store || '';
     state.department = saved.department || '';
     state.excludeCC = !!saved.excludeCC;
+    state.excludeCab = !!saved.excludeCab;
     if (LGC_TABS.includes(saved.lgcTab)) state.lgcTab = saved.lgcTab;
   }
   // URL co tham so (link duoc chia se) -> UU TIEN hon cau hinh da luu
@@ -2278,8 +2282,10 @@ async function init() {
     if (urlQ.has('store')) state.store = urlQ.get('store');
     if (urlQ.has('department')) state.department = urlQ.get('department');
     state.excludeCC = urlQ.get('excludeCC') === '1';
+    state.excludeCab = urlQ.get('excludeCab') === '1';
   }
   $('#ccToggle').checked = state.excludeCC;
+  $('#cabToggle').checked = state.excludeCab;
   $('#monthInput').value = state.month;
   $('#weekInput').value = state.week || now.toISOString().slice(0, 10);
   if ([...qSel.options].some((o) => o.value === state.quarter)) qSel.value = state.quarter;
@@ -2327,6 +2333,8 @@ async function init() {
   $('#deptSelect').addEventListener('change', (e) => { state.department = e.target.value; applyFilters(); });
   // Checkbox "Bo qua xuat costcenter": loai receiver la so roi tinh lai KPI/bieu do tu server
   $('#ccToggle').addEventListener('change', (e) => { state.excludeCC = e.target.checked; applyFilters(); });
+  // Checkbox "Bo qua cac kho CAB": loai han cac kho CAB/CAB-TD/P-THA/P-SAF/P-PAN
+  $('#cabToggle').addEventListener('change', (e) => { state.excludeCab = e.target.checked; applyFilters(); });
 
   // Tim kiem bang chinh
   $('#mainSearch').addEventListener('input', (e) => {

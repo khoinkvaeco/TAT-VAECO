@@ -8,7 +8,7 @@
 'use strict';
 
 const STATIONS = ['SGN', 'HAN', 'DAD', 'CXR', 'VII']; // CXR/VII = station phu -> gom vao "Khac"
-const STORES = ['S01', 'S02', 'S03'];
+const STORES = ['S01', 'S02', 'S03', 'CAB', 'CAB-TD', 'P-THA', 'P-SAF', 'P-PAN'];
 const DEPARTMENTS = ['PA', 'CUVT', 'DIEN', 'AVIONICS', 'CANOPY', 'HYDRAULIC'];
 const AC = ['VN-A321', 'VN-A350', 'VN-B787', 'VN-A320'];
 
@@ -52,10 +52,15 @@ function isCostcenterReceiver(rcv) {
   return /[0-9]/.test(s) && /^[0-9.,]+$/.test(s);
 }
 
+/** Cac kho bi loai khi tich "Bo qua cac kho CAB" (giong CAB_STORES o server). */
+const CAB_STORES = ['CAB', 'CAB-TD', 'P-THA', 'P-SAF', 'P-PAN'];
+
 /** Loc theo filter chung. station='OTHER' = ngoai HAN/SGN/DAD. */
 function applyFilter(rows, f) {
   const MAIN = ['HAN', 'SGN', 'DAD'];
   return rows.filter((r) => {
+    // "Bo qua cac kho CAB": dong khong ghi kho van duoc giu (giong server)
+    if (f.excludeCab && r.store && CAB_STORES.includes(String(r.store).trim().toUpperCase())) return false;
     if (f.station) {
       if (f.station.toUpperCase() === 'OTHER') {
         if (MAIN.includes((r.station || '').toUpperCase())) return false;
@@ -257,6 +262,8 @@ function removedBeforeInstalled(range, f) {
       return_unservice_time: daTraUS ? new Date(t.getTime() + rndInt(1, 5) * 86400000).toISOString() : null,
       department: rnd(DEPARTMENTS),
       station: d.station,
+      // Kho lay tu phieu xuat khop duoc; khong co phieu thi khong biet kho
+      store: coPhieuXuat ? d.store : null,
     });
   }
   return applyFilter(rows, f);
@@ -273,6 +280,8 @@ function other(range, f) {
       qty_off: rndInt(1, 5),
       staff: d.staff,
       station: d.station,
+      // Khong hien o bang nhung server VAN loc duoc theo kho (real_us1.store)
+      store: d.store,
       department: rnd(DEPARTMENTS),
       del_staff: 'NV' + rndInt(100, 999),
       del_time: rndDate(range.from, range.to).toISOString(),

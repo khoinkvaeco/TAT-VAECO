@@ -382,6 +382,33 @@ function normalizeStation(s) {
  * @param {Object} f  { station, store, department }
  * @param {Object} cols  ten cot tuong ung { station, store, department }
  */
+/**
+ * CAC KHO BI "BO QUA" khi tich o "Bo qua cac kho CAB".
+ * Day la kho cua khoi noi that / an toan / panel - khong thuoc pham vi theo doi
+ * TAT khi tai, nen nghiep vu muon loai han khoi KPI va cac bao cao.
+ */
+const CAB_STORES = ['CAB', 'CAB-TD', 'P-THA', 'P-SAF', 'P-PAN'];
+const CAB_STORES_SQL = CAB_STORES.map((v) => `'${v}'`).join(', ');
+
+/**
+ * Dieu kien loai cac kho CAB.
+ *   - KHONG boc ham quanh cot (khong LTRIM/UPPER): SQL Server bo qua khoang
+ *     trang CUOI va khong phan biet hoa thuong khi so bang IN, ma dieu kien
+ *     thuan moi duoc day xuong linked server (xem §7b trong README).
+ *   - Ve NULL: "NULL NOT IN (...)" cho ra UNKNOWN nen dong do se BI LOAI oan.
+ *     Vi vay phai co ve "IS NULL OR ..." - dong khong ghi kho van duoc giu.
+ */
+function excludeCabClause(f, storeCol) {
+  if (!f.excludeCab || !storeCol) return '';
+  return ` AND (${storeCol} IS NULL OR ${storeCol} NOT IN (${CAB_STORES_SQL}))`;
+}
+
+/**
+ * @param cols.store     cot kho cho BO LOC "Store" tren thanh loc
+ * @param cols.cabStore  cot kho dung RIENG cho "Bo qua kho CAB" - chi can khi
+ *                       bao cao khong co o loc Store nhung van co cot kho
+ *                       (vd bao cao Other). Bo trong thi dung cols.store.
+ */
 function buildFilterClause(f, cols, params) {
   let clause = '';
   if (f.station && cols.station) {
@@ -400,6 +427,7 @@ function buildFilterClause(f, cols, params) {
     clause += ` AND ${cols.department} = @fDepartment`;
     params.fDepartment = f.department;
   }
+  clause += excludeCabClause(f, cols.cabStore || cols.store);
   return clause;
 }
 
@@ -2062,6 +2090,9 @@ async function qOneSidedWoParts(range, f) {
   let where = '';
   if (f.station) { params.fStation = f.station; where += `\n      AND (${stationExpr} IS NULL OR ${stationExpr} = @fStation)`; }
   if (f.store) { params.fStore = f.store; where += `\n      AND (iss.store IS NULL OR iss.store = @fStore)`; }
+  // Bao cao nay khong dung buildFilterClause (WO_PART_ON_OFF khong co cot kho,
+  // kho lay tu phieu xuat khop duoc) nen phai goi rieng.
+  where += excludeCabClause(f, 'iss.store');
   if (f.department) { params.fDepartment = f.department; where += `\n      AND (${deptExpr} IS NULL OR ${deptExpr} = @fDepartment)`; }
 
   // TOI UU: cac bang NQT duoc keo ve #temp CO INDEX theo (partno, serialno) roi
@@ -3242,7 +3273,7 @@ async function qOther(range, f) {
   const dept = deptFromReal('r', 'sm');
   let where = buildFilterClause(
     f,
-    { station: 'r.[station]', store: null, department: dept },
+    { station: 'r.[station]', store: null, cabStore: 'r.[store]', department: dept },
     params
   );
   const text = `
@@ -4835,6 +4866,8 @@ function readFilters(q) {
     department: (q.department || '').trim(),
     // Checkbox "Bo qua xuat costcenter": loai receiver la so (khong phai so tau)
     excludeCC: ['1', 'true'].includes((q.excludeCC || '').trim().toLowerCase()),
+    // Checkbox "Bo qua cac kho CAB" - loai han cac kho o CAB_STORES
+    excludeCab: ['1', 'true'].includes((q.excludeCab || '').trim().toLowerCase()),
   };
 }
 
