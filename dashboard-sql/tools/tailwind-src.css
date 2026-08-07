@@ -1,0 +1,6 @@
+/* Dau vao cho Tailwind CLI. Giu DU ca ba lop de ket qua giong het ban CDN:
+   `base` chinh la phan preflight (reset margin/font mac dinh cua trinh duyet) -
+   bo di la toan bo khoang cach tren trang lech ngay. */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;

@@ -15,12 +15,20 @@ dashboard-sql/
 ├── server.js          # Backend Node.js + Express + mssql (API + tính toán TAT)
 ├── demo-data.js       # Dữ liệu mẫu cho DEMO_MODE (chạy thử không cần SQL Server)
 ├── package.json
+├── tailwind.config.js # Cấu hình Tailwind cho bản dựng thật (xem §7c)
 ├── .env.example       # Mẫu cấu hình — copy thành .env
 ├── .gitignore
+├── tools/
+│   ├── smoke.js           # Gọi thử mọi endpoint, bắt lỗi dựng câu SQL
+│   ├── sqlcheck.js        # Soi câu SQL thật (aggregate lồng subquery, APPLY…)
+│   ├── build-assets.js    # Dựng public/vendor/ từ node_modules (§7c)
+│   └── tailwind-src.css   # Đầu vào cho Tailwind CLI
 └── public/
     ├── index.html     # Giao diện (KPI, charts, tables, tabs báo cáo)
     ├── style.css      # Bảng màu + theme sáng/tối
-    └── script.js      # Gọi API, vẽ chart/table, filter, export Excel
+    ├── script.js      # Gọi API, vẽ chart/table, filter, export Excel
+    └── vendor/        # Thư viện giao diện (Tailwind/Chart.js/Tabulator/SheetJS)
+                       #   — KHÔNG lấy từ CDN, có commit vào repo, xem §7c
 ```
 
 ## 2. Cài đặt
@@ -30,7 +38,13 @@ Yêu cầu: **Node.js >= 18**.
 ```bash
 cd dashboard-sql
 npm install
+npm run build:assets   # dựng public/vendor/ (chỉ cần khi mới clone hoặc sửa giao diện)
 ```
+
+> **Không cần Internet lúc chạy.** Toàn bộ thư viện giao diện nằm sẵn trong
+> `public/vendor/` và **đã được commit vào repo**, nên máy chủ nội bộ bị chặn ra
+> ngoài vẫn mở trang bình thường. `npm run build:assets` chỉ dựng lại từ
+> `node_modules` — cũng **không tải mạng**.
 
 ## 3. Cấu hình kết nối SQL Server
 
@@ -97,6 +111,8 @@ Bật server ở chế độ **live** nhưng trỏ vào một địa chỉ DB kh
 
 - báo **lỗi kết nối** → ĐẠT (code chạy tốt)
 - báo **bất kỳ lỗi nào khác** → TRƯỢT, in rõ endpoint và thông báo lỗi
+
+Sau đó chạy tiếp **`tools/sqlcheck.js`** (soi câu SQL thật) và **`tools/build-assets.js --check`** (kiểm tra `public/vendor/` có còn khớp mã nguồn không — xem §7c).
 
 Cần thiết vì `DEMO_MODE=true` **không hề gọi** các hàm dựng câu SQL (chúng bị thay bằng dữ liệu mẫu), còn `node --check` chỉ kiểm cú pháp — nên lỗi kiểu *"Cannot access 'dept' before initialization"* lọt qua cả hai, đến lúc chạy thật mới vỡ.
 
@@ -184,7 +200,13 @@ kèm **5 dòng thật đã giải mã** để đối chiếu mắt thường. **
   - Cả ba ô dùng **chung một hàm dựng** `taoMultiSelect()` trong `script.js` — hành vi giống hệt nhau (học một lần dùng được cả ba, sửa lỗi một chỗ là hết), chỉ khác cấu hình: danh từ đếm trên nút (*“3 station”* / *“3 kho”* / *“3 trung tâm”*), nhóm ghim, và phần đánh dấu riêng của Store.
   - **Station hiện ĐỦ danh sách** lấy thẳng từ `SELECT DISTINCT station FROM [NQT].[dbo].[kho_ser1]` — trước đây bị **viết cứng** `HAN/SGN/DAD/Khác`, station khác không lọc riêng được. **`HAN`, `SGN`, `DAD` được ghim lên đầu**, in đậm và có **đường kẻ tách** khỏi phần còn lại (phần còn lại giữ thứ tự A–Z) để mắt nhận ra ngay ba station chính mà không phải đọc hết danh sách. Hàm `xepStationChinhLenDau()` ở `server.js` lo phần sắp xếp. Mục gộp **`OTHER`** không còn được đưa ra giao diện nữa, nhưng `stationClause()` **vẫn hiểu** giá trị này để link cũ / cấu hình đã lưu không âm thầm đổi ý nghĩa.
   - **Click vào một cột/miếng biểu đồ** (drill-down) đặt ô lọc tương ứng thành **đúng một giá trị**; click lại đúng cột đó thì bỏ lọc. Nút lọc được vẽ lại theo đó.
-  - CSS của menu **không phụ thuộc Tailwind**: `#stationWrap/#storeWrap/#deptWrap { position: relative }` và `.multi-menu.hidden { display: none }` được khai báo thẳng trong `style.css`. Nếu để Tailwind CDN lo (`.relative`, `.hidden`) mà máy nội bộ bị chặn ra ngoài thì **cả ba menu sẽ luôn mở và đè lên nhau** — đã gặp thật khi chạy kiểm thử giao diện trong môi trường chặn CDN.
+  - **Dùng được hoàn toàn bằng bàn phím** (người nhập liệu nhiều sẽ nhanh hơn hẳn chuột): khi đang focus vào nút, **↓ / Enter / Space** mở menu; trong menu **↑ ↓** di chuyển dòng sáng (chạy vòng qua đầu/cuối), **Home / End** về đầu / về cuối, **Space** tích–bỏ tích dòng đang sáng, **Enter** tích dòng đang sáng — hoặc nếu chưa chọn dòng nào mà sau khi gõ tìm chỉ còn **đúng một** mục thì tích luôn mục đó (gõ `dad` + Enter là xong), **Esc** hoặc **Tab** đóng menu. Dòng đang sáng được tô nền + viền và **tự cuộn vào tầm nhìn**.
+  - CSS của menu **không phụ thuộc Tailwind**: `#stationWrap/#storeWrap/#deptWrap/#presetWrap { position: relative }` và `.multi-menu.hidden { display: none }` được khai báo thẳng trong `style.css`. Nếu để Tailwind lo hai class đó mà file Tailwind không nạp được thì **cả ba menu sẽ luôn mở và đè lên nhau** — đã gặp thật khi chạy kiểm thử giao diện trong môi trường chặn CDN.
+  - Ô nằm gần rìa phải màn hình thì menu **tự neo sang phải** (`chinhViTriMenu()` đo xem có tràn khỏi khung nhìn không) để không bị cắt mất.
+- **Bộ lọc đã lưu (⭐).** Tổ hợp Station/Store/Trung tâm + 2 ô tích hay dùng thì đặt tên rồi gọi lại bằng **một cú bấm**, thay vì mở ba menu tích lại từ đầu mỗi sáng. Nút hiện **tên bộ lọc đang dùng** nếu bộ lọc trên màn hình trùng khớp một cái đã lưu, nên nhìn một cái là biết mình đang ở đâu; trong menu, dòng đó cũng được đánh dấu ✓.
+  - **KỲ BÁO CÁO KHÔNG nằm trong bộ lọc đã lưu — có chủ ý.** Nếu lưu cả “tháng 2026-08” thì sang tháng bộ lọc đó thành **sai mà người dùng không biết**; còn lưu kiểu “tháng này” thì lại thêm một khái niệm nữa phải giải thích. Kỳ báo cáo có sẵn 4 nút ngay cạnh đó, chọn lại mất một giây. Bấm một bộ lọc đã lưu **giữ nguyên** kỳ đang xem.
+  - Lưu ở **localStorage của từng máy** (`tat-presets-v1`, tối đa 20 bộ): đây là thói quen cá nhân của từng người, không phải cấu hình chung của công ty, nên **không** đưa lên server và **không** dính tới quy tắc phân quyền theo IP ở §6b.
+  - Trùng tên thì hỏi ghi đè; xoá thì hỏi xác nhận. Toàn bộ nằm trong `initPresets()` ở `script.js`.
 - **Ô tích “Bỏ qua các kho CAB”:** loại hẳn **`CAB`, `CAB-TD`, `P-THA`, `P-SAF`, `P-PAN`** khỏi **KPI Tổng quan và toàn bộ 9 báo cáo**. Điều kiện SQL nằm gọn trong `excludeCabClause()` (danh sách kho ở hằng `CAB_STORES`), được `buildFilterClause()` gắn tự động cho mọi báo cáo — trừ *Chỉ lắp / Chỉ tháo* tự dựng bộ lọc riêng nên gọi thêm một dòng. Viết dạng **`(store IS NULL OR store NOT IN (…))`**: **không bọc hàm** quanh cột (giữ được pushdown — xem §7b) và **vế `IS NULL` là bắt buộc** vì `NULL NOT IN (…)` cho ra `UNKNOWN` sẽ **loại oan** dòng không ghi kho. Ô này **ẩn ở tab LGC và Tra cứu Part On/Off** (không tác động số liệu ở đó). Khi bật, các kho CAB trong menu Store bị **làm mờ kèm nhãn “đang bỏ qua”**; nếu mọi kho đang chọn đều nằm trong nhóm bị bỏ qua thì menu hiện **cảnh báo kết quả sẽ rỗng** — thay vì để người dùng ngồi đoán vì sao báo cáo trống. Báo cáo *Other* không có ô lọc Store nhưng vẫn bỏ qua được kho CAB nhờ tham số `cabStore`.
 - **Chỉ hiện ô lọc CÓ TÁC DỤNG:** thanh lọc trước đây hiện **đủ mọi ô ở mọi tab**, kể cả ô mà truy vấn của tab đó không dùng đến (ví dụ *“Bỏ qua xuất costcenter”* — chỉ có trong nhánh `kho_ser1`, hoàn toàn không xuất hiện ở pickslip / receiving / repair-admin), nên người dùng chỉnh mà số liệu không đổi và tưởng là lỗi. Nay mỗi màn hình chỉ hiện đúng ô tác động lên số liệu đang xem: *Repair Admin* bỏ **Kỳ báo cáo** (ảnh chụp hiện trạng) và **Trung tâm** (chỉ lọc station/store); *Tra cứu Part On/Off* ẩn cả thanh lọc vì có 6 ô tìm riêng. Bảng quy định nằm ở hằng `FILTER_VIEWS` trong `script.js`.
 - **Tab LGC đang THỬ NGHIỆM — ẩn khỏi thanh tab.** Ở trang `/` không thấy mục *🏬 LGC*; muốn vào phải **gõ thêm `/lgc`** trên thanh địa chỉ. Gỡ ẩn khi hết thử nghiệm = bỏ `hidden` ở nút `data-tab="lgc"` trong `index.html`.
@@ -437,6 +459,45 @@ A phải nhanh hơn hẳn B và C. **Chỉ đọc. Chỉ IP quản trị.**
 `[DWH_DB]..`. Đây chỉ là cảnh báo vì luật này chưa đủ chính xác — một câu có thể vừa đọc bảng
 tạm vừa `LEFT JOIN` sang `SIGN`, khi đó hàm ở bảng **tạm** vẫn bị bắt nhầm. Muốn chắc thì đo
 bằng `diag/linkserver`.
+
+## 7c. Thư viện giao diện để TRÊN MÁY BACKEND, không lấy từ CDN
+
+Trước đây `index.html` nạp **5 file từ Internet**: `cdn.tailwindcss.com`,
+`cdn.jsdelivr.net` (Chart.js), `unpkg.com` (Tabulator), `cdnjs.cloudflare.com`
+(SheetJS) — `admin.html` thêm 3 file nữa. Ba vấn đề:
+
+1. **Máy nội bộ bị chặn ra ngoài là trang hỏng.** Không phải hỏng nhẹ: Tailwind
+   không tải được thì class `.hidden` và `.relative` **không tồn tại**, nên cả ba
+   menu chọn nhiều luôn mở và đè lên nhau, bấm không được. Đã gặp thật khi chạy
+   kiểm thử giao diện trong môi trường chặn CDN.
+2. **Mỗi lượt mở trang đều gửi IP + đường dẫn trang cho bên thứ ba.** Sát với quy
+   tắc “không gửi dữ liệu ra ngoài phạm vi công ty”.
+3. **Bản Tailwind CDN là bản “play”**, chính Tailwind khuyến cáo **không dùng cho
+   production** — nó biên dịch lại CSS ngay trên trình duyệt **mỗi lần mở trang**.
+
+Nay cả 5 file nằm trong `public/vendor/`, dựng bằng `npm run build:assets`
+(`tools/build-assets.js`) từ `node_modules` — phiên bản **ghim trong
+`package.json`**, không tải mạng. Riêng Tailwind được **biên dịch thật** từ chính
+HTML/JS của dự án: **8 KB** thay cho ~400 KB script biên dịch tại chỗ.
+
+### Cái bẫy: file CSS cũ so với mã nguồn
+
+Tailwind chỉ giữ những class **thực sự xuất hiện** trong `public/*.html` và
+`public/*.js`. Thêm một class Tailwind mới mà quên dựng lại → class đó **không có
+trong file CSS** → giao diện lệch mà không ai biết, vì không có lỗi nào cả.
+
+Vì thế `npm run smoke` chạy thêm `node tools/build-assets.js --check`: dựng lại
+vào file tạm rồi **so sánh** với `public/vendor/`, khác là **TRƯỢT** kèm hướng dẫn
+chạy `npm run build:assets`. (Đã kiểm chứng bằng cách cố tình thêm một class mới —
+`--check` trượt đúng như mong đợi.)
+
+> ⚠️ **`tailwind.css` phải nạp SAU `style.css`** trong `<head>`. Bản CDN cũ chèn
+> thẻ `<style>` vào cuối `<head>` lúc chạy, tức là **nằm sau** `style.css`, nên khi
+> trùng độ ưu tiên thì lớp tiện ích của Tailwind **thắng**. Ví dụ
+> `.chat-panel { display:flex }` trong `style.css` và `.hidden { display:none }`
+> của Tailwind **đều là một lớp** — ai đứng sau thì thắng. Lần đầu chuyển sang bản
+> dựng sẵn tôi đặt `tailwind.css` lên trước và **khung chat mở sẵn ngay khi vào
+> trang**; đảo lại thứ tự là đúng như cũ.
 
 ## 7. Bảo mật & performance
 

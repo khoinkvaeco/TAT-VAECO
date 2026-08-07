@@ -1283,6 +1283,16 @@ function normList(v) {
 const multiSelects = {};   // id -> dieu khien cua tung o (setList/render)
 
 /**
+ * Menu mac dinh neo vao MEP TRAI cua nut. O nao nam gan ria phai man hinh thi
+ * menu se tran ra ngoai va bi cat mat. Goi ham nay ngay sau khi mo: do xem co
+ * tran khong, tran thi neo sang phai.
+ */
+function chinhViTriMenu(menu) {
+  menu.classList.remove('neo-phai');
+  if (menu.getBoundingClientRect().right > window.innerWidth - 8) menu.classList.add('neo-phai');
+}
+
+/**
  * Tao mot o chon nhieu gia tri.
  * @param {object} cfg
  *   id       - tien to id trong HTML: 'station' | 'store' | 'dept'
@@ -1301,6 +1311,7 @@ function taoMultiSelect(cfg, apply) {
 
   let danhMuc = [];
   let daDoi = false;
+  let viTri = -1;      // dong dang "sang" khi di chuyen bang ban phim (-1 = chua chon)
 
   const chon = () => state[stateKey];
   const locTheoTim = () => {
@@ -1327,7 +1338,8 @@ function taoMultiSelect(cfg, apply) {
         const ghim = cfg.ghim ? cfg.ghim.includes(v.trim().toUpperCase()) : false;
         const ghimSau = ghim && ds[i + 1]
           && !cfg.ghim.includes(String(ds[i + 1]).trim().toUpperCase());
-        return `<label class="multi-opt${bo ? ' bi-loai' : ''}${ghim ? ' ghim' : ''}${ghimSau ? ' het-ghim' : ''}">
+        const sang = i === viTri;
+        return `<label class="multi-opt${bo ? ' bi-loai' : ''}${ghim ? ' ghim' : ''}${ghimSau ? ' het-ghim' : ''}${sang ? ' sang' : ''}">
             <input type="checkbox" value="${escapeHtml(v)}"${chon().includes(v) ? ' checked' : ''} />
             <span>${escapeHtml(v)}</span>
             ${bo ? '<span class="ghi-chu">đang bỏ qua</span>' : ''}
@@ -1341,6 +1353,9 @@ function taoMultiSelect(cfg, apply) {
     const nhac = cfg.nhacRong ? cfg.nhacRong() : '';
     hint.classList.toggle('hidden', !nhac);
     if (nhac) hint.textContent = nhac;
+
+    // Cuon dong dang sang vao tam nhin khi di bang ban phim
+    if (viTri >= 0) box.children[viTri]?.scrollIntoView({ block: 'nearest' });
   };
 
   const dangMo = () => !q('Menu').classList.contains('hidden');
@@ -1351,8 +1366,10 @@ function taoMultiSelect(cfg, apply) {
     q('Btn').setAttribute('aria-expanded', String(batMo));
     if (batMo) {
       daDoi = false;
+      viTri = -1;
       q('Search').value = '';
       render();
+      chinhViTriMenu(q('Menu'));
       q('Search').focus();
     } else if (daDoi) {
       daDoi = false;
@@ -1360,17 +1377,66 @@ function taoMultiSelect(cfg, apply) {
     }
   };
 
+  /** Bat/tat mot gia tri (dung chung cho chuot va ban phim). */
+  const doiTich = (v) => {
+    state[stateKey] = chon().includes(v)
+      ? chon().filter((x) => x !== v)
+      : [...new Set([...chon(), v])];
+    daDoi = true;
+    render();
+  };
+
   q('Btn').addEventListener('click', (e) => { e.stopPropagation(); dongTatCaMulti(id); mo(!dangMo()); });
+  // Nut cung mo duoc bang ban phim: ↓ / Enter / Space khi dang focus vao nut
+  q('Btn').addEventListener('keydown', (e) => {
+    if (['ArrowDown', 'Enter', ' '].includes(e.key) && !dangMo()) {
+      e.preventDefault();
+      dongTatCaMulti(id);
+      mo(true);
+    }
+  });
   q('Menu').addEventListener('click', (e) => e.stopPropagation());
-  q('Search').addEventListener('input', render);
+  q('Search').addEventListener('input', () => { viTri = -1; render(); });
+
+  /**
+   * BAN PHIM TRONG MENU (nguoi nhap lieu nhieu se nhanh hon han chuot):
+   *   ↑ ↓        di chuyen dong sang     Home/End  ve dau / ve cuoi
+   *   Space      tich / bo tich dong sang
+   *   Enter      tich dong sang; neu chua chon dong nao ma danh sach chi con
+   *              DUNG MOT muc (sau khi go tim) thi tich luon muc do
+   *   Esc / Tab  dong menu (Esc do trinh xu ly chung o duoi lo)
+   * Con trong o TIM thi ↑↓ khong duoc de trinh duyet nhay con tro, nen chan
+   * preventDefault o cac phim nay.
+   */
+  q('Menu').addEventListener('keydown', (e) => {
+    const ds = locTheoTim();
+    if (!ds.length && e.key !== 'Escape' && e.key !== 'Tab') return;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const buoc = e.key === 'ArrowDown' ? 1 : -1;
+      viTri = viTri < 0
+        ? (buoc > 0 ? 0 : ds.length - 1)
+        : (viTri + buoc + ds.length) % ds.length;   // chay vong
+      render();
+    } else if (e.key === 'Home' || e.key === 'End') {
+      e.preventDefault();
+      viTri = e.key === 'Home' ? 0 : ds.length - 1;
+      render();
+    } else if (e.key === ' ' || e.key === 'Enter') {
+      // Space trong o tim la khoang trang binh thuong khi CHUA chon dong nao
+      if (e.key === ' ' && viTri < 0) return;
+      const v = viTri >= 0 ? ds[viTri] : (ds.length === 1 ? ds[0] : null);
+      if (!v) return;
+      e.preventDefault();
+      doiTich(v);
+    } else if (e.key === 'Tab') {
+      mo(false);   // roi khoi o -> coi nhu chon xong, tai lai du lieu
+    }
+  });
   q('Options').addEventListener('change', (e) => {
     const el = e.target;
     if (!el.matches('input[type=checkbox]')) return;
-    state[stateKey] = el.checked
-      ? [...new Set([...chon(), el.value])]
-      : chon().filter((x) => x !== el.value);
-    daDoi = true;
-    render();
+    doiTich(el.value);
   });
   // "Chon tat ca" chi ap cho cac muc DANG HIEN (sau khi tim) - dung y nguoi dung
   q('All').addEventListener('click', () => {
@@ -1402,6 +1468,167 @@ function dongTatCaMulti(tru) {
 /** Ve lai ca ba o (vd sau khi doi o tich "Bo qua cac kho CAB"). */
 function renderMultiSelects() {
   Object.values(multiSelects).forEach((m) => m.render());
+}
+
+// --------------------------------------------------------------------------
+// 8c. BO LOC DA LUU (preset)
+//     To hop Station/Store/Trung tam + 2 o tich hay dung -> dat ten, goi lai
+//     bang mot cu bam thay vi mo ba menu tich lai tu dau moi sang.
+//
+//     KY BAO CAO KHONG duoc luu vao preset - co chu y. Neu luu ca 'thang
+//     2026-08' thi sang thang bo loc do thanh SAI ma nguoi dung khong biet;
+//     ma luu kieu "thang nay" thi lai them mot khai niem nua phai giai thich.
+//     Ky bao cao co san 4 nut ngay canh do, chon lai mat mot giay.
+//
+//     Luu o localStorage (RIENG tung may, tung nguoi) - day la thoi quen ca
+//     nhan, khong phai cau hinh chung cua cong ty nen khong dua len server.
+// --------------------------------------------------------------------------
+const PRESET_KEY = 'tat-presets-v1';
+const PRESET_MAX = 20;          // chan danh sach phinh vo han
+
+function loadPresets() {
+  try {
+    const ds = JSON.parse(localStorage.getItem(PRESET_KEY) || '[]');
+    return Array.isArray(ds) ? ds : [];
+  } catch { return []; }
+}
+function savePresets(ds) {
+  try { localStorage.setItem(PRESET_KEY, JSON.stringify(ds.slice(0, PRESET_MAX))); }
+  catch (e) { console.warn('Khong luu duoc bo loc:', e.message); }
+}
+
+/** Phan cua `state` duoc luu vao mot preset. */
+function presetHienTai() {
+  return {
+    station: [...state.station],
+    store: [...state.store],
+    department: [...state.department],
+    excludeCC: state.excludeCC,
+    excludeCab: state.excludeCab,
+  };
+}
+
+/** Mo ta ngan gon de nguoi dung nhan ra preset ma khong phai bam thu. */
+function moTaPreset(p) {
+  const phan = [];
+  const them = (nhan, ds) => { if (ds && ds.length) phan.push(`${nhan}: ${ds.join(', ')}`); };
+  them('Station', p.station);
+  them('Kho', p.store);
+  them('TT', p.department);
+  if (p.excludeCC) phan.push('bỏ costcenter');
+  if (p.excludeCab) phan.push('bỏ kho CAB');
+  return phan.length ? phan.join(' · ') : 'Không lọc gì (xem tất cả)';
+}
+
+const bang = (a, b) => JSON.stringify(a || []) === JSON.stringify(b || []);
+function trungVoiHienTai(p) {
+  const h = presetHienTai();
+  return bang([...p.station].sort(), [...h.station].sort())
+    && bang([...p.store].sort(), [...h.store].sort())
+    && bang([...p.department].sort(), [...h.department].sort())
+    && !!p.excludeCC === h.excludeCC && !!p.excludeCab === h.excludeCab;
+}
+
+function initPresets(apply) {
+  const btn = $('#presetBtn');
+  if (!btn) return;                        // trang khac khong co o nay
+  const menu = $('#presetMenu');
+  const dangMo = () => !menu.classList.contains('hidden');
+
+  const baoNhac = (chu) => {
+    const h = $('#presetHint');
+    h.classList.toggle('hidden', !chu);
+    if (chu) h.textContent = chu;
+  };
+
+  const render = () => {
+    const ds = loadPresets();
+    $('#presetList').innerHTML = ds.length
+      ? ds.map((p, i) => `
+        <div class="preset-row${trungVoiHienTai(p) ? ' dang-dung' : ''}">
+          <button type="button" class="preset-ap" data-i="${i}" title="${escapeHtml(moTaPreset(p))}">
+            <span class="preset-ten">${escapeHtml(p.ten)}</span>
+            <span class="preset-mo-ta">${escapeHtml(moTaPreset(p))}</span>
+          </button>
+          <button type="button" class="preset-xoa" data-xoa="${i}" title="Xoá bộ lọc này">×</button>
+        </div>`).join('')
+      : '<div class="multi-opt" style="opacity:.6">Chưa lưu bộ lọc nào</div>';
+    // Nut chinh HIEN TEN preset dang dung - nhin mot cai la biet minh dang o
+    // bo loc nao, khong phai mo menu ra doi chieu.
+    const dang = ds.find(trungVoiHienTai);
+    btn.classList.toggle('co-preset', !!dang);
+    $('#presetBtnText').textContent = dang ? `⭐ ${dang.ten}` : 'Chọn / Lưu…';
+    btn.title = dang ? `Đang dùng bộ lọc "${dang.ten}" — ${moTaPreset(dang)}` : 'Bộ lọc đã lưu';
+  };
+
+  const mo = (batMo) => {
+    if (batMo === dangMo()) return;
+    menu.classList.toggle('hidden', !batMo);
+    btn.setAttribute('aria-expanded', String(batMo));
+    if (batMo) {
+      baoNhac('');
+      $('#presetName').value = '';
+      render();
+      chinhViTriMenu(menu);
+      $('#presetName').focus();
+    }
+  };
+
+  btn.addEventListener('click', (e) => { e.stopPropagation(); dongTatCaMulti(null); mo(!dangMo()); });
+  menu.addEventListener('click', (e) => e.stopPropagation());
+
+  $('#presetList').addEventListener('click', (e) => {
+    const xoa = e.target.closest('[data-xoa]');
+    if (xoa) {
+      const ds = loadPresets();
+      const ten = ds[+xoa.dataset.xoa]?.ten || '';
+      if (!confirm(`Xoá bộ lọc "${ten}"?`)) return;
+      ds.splice(+xoa.dataset.xoa, 1);
+      savePresets(ds);
+      render();
+      return;
+    }
+    const ap = e.target.closest('[data-i]');
+    if (!ap) return;
+    const p = loadPresets()[+ap.dataset.i];
+    if (!p) return;
+    // Ap preset: chi dat lai 5 truong cua no, KY BAO CAO giu nguyen
+    state.station = [...(p.station || [])];
+    state.store = [...(p.store || [])];
+    state.department = [...(p.department || [])];
+    state.excludeCC = !!p.excludeCC;
+    state.excludeCab = !!p.excludeCab;
+    $('#ccToggle').checked = state.excludeCC;
+    $('#cabToggle').checked = state.excludeCab;
+    renderMultiSelects();
+    mo(false);
+    apply();
+  });
+
+  const luu = () => {
+    const ten = ($('#presetName').value || '').trim();
+    if (!ten) { baoNhac('Đặt tên cho bộ lọc rồi bấm Lưu.'); $('#presetName').focus(); return; }
+    const ds = loadPresets();
+    const cu = ds.findIndex((p) => p.ten.toLowerCase() === ten.toLowerCase());
+    if (cu >= 0 && !confirm(`Đã có bộ lọc tên "${ds[cu].ten}". Ghi đè?`)) return;
+    if (cu < 0 && ds.length >= PRESET_MAX) {
+      baoNhac(`Chỉ lưu được tối đa ${PRESET_MAX} bộ lọc — xoá bớt một cái rồi lưu lại.`);
+      return;
+    }
+    const moi = { ten, ...presetHienTai() };
+    if (cu >= 0) ds[cu] = moi; else ds.push(moi);
+    savePresets(ds);
+    $('#presetName').value = '';
+    baoNhac('');
+    render();
+  };
+  $('#presetSave').addEventListener('click', luu);
+  $('#presetName').addEventListener('keydown', (e) => { if (e.key === 'Enter') luu(); });
+
+  document.addEventListener('click', () => mo(false));
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') mo(false); });
+  window.__renderPresets = render;   // ve lai khi bo loc doi (danh dau "đang dùng")
+  render();
 }
 
 function initMultiSelects(apply) {
@@ -2484,6 +2711,7 @@ async function init() {
   // khi mo lai tab, switchTab() se tu load voi filter moi.
   const applyFilters = () => {
     saveFilters();
+    if (typeof window.__renderPresets === 'function') window.__renderPresets();
     // Dua filter len URL -> copy link gui dong nghiep la ho thay dung man hinh nay
     history.replaceState(null, '', `${location.pathname}?${buildQuery()}`);
     reportCache.clear();
@@ -2499,6 +2727,7 @@ async function init() {
   $('#quarterInput').addEventListener('change', (e) => { state.quarter = e.target.value; applyFilters(); });
   $('#yearInput').addEventListener('change', (e) => { state.year = e.target.value; applyFilters(); });
   initMultiSelects(applyFilters);   // Station + Store + Trung tam (chon nhieu)
+  initPresets(applyFilters);        // Bo loc da luu
   // Checkbox "Bo qua xuat costcenter": loai receiver la so roi tinh lai KPI/bieu do tu server
   $('#ccToggle').addEventListener('change', (e) => { state.excludeCC = e.target.checked; applyFilters(); });
   // Checkbox "Bo qua cac kho CAB": loai han cac kho CAB/CAB-TD/P-THA/P-SAF/P-PAN

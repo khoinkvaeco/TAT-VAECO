@@ -5,17 +5,23 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>VAECO · Dashboard Báo cáo TAT</title>
 
-  <!-- Tailwind CSS (CDN) -->
-  <script src="https://cdn.tailwindcss.com"></script>
-  <!-- Chart.js (CDN) -->
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-  <!-- Tabulator (CDN) -->
-  <link href="https://unpkg.com/tabulator-tables@6.2.1/dist/css/tabulator.min.css" rel="stylesheet" />
-  <script src="https://unpkg.com/tabulator-tables@6.2.1/dist/js/tabulator.min.js"></script>
+  <!-- Thư viện để NGAY TRÊN MÁY BACKEND, không tải từ CDN.
+       Dựng lại bằng `npm run build:assets` (nguồn: node_modules, phiên bản ghim
+       trong package.json). Xem tools/build-assets.js để biết vì sao. -->
+  <link rel="stylesheet" href="vendor/tabulator.min.css" />
+  <script src="vendor/chart.umd.js"></script>
+  <script src="vendor/tabulator.min.js"></script>
   <!-- SheetJS (xlsx) - phục vụ export Excel của Tabulator -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <script src="vendor/xlsx.full.min.js"></script>
 
   <link rel="stylesheet" href="style.css" />
+  <!-- ⚠️ tailwind.css phải nạp SAU style.css. Bản CDN cũ chèn thẻ <style> vào
+       cuối <head> lúc chạy, tức là NẰM SAU style.css, nên các lớp tiện ích của
+       Tailwind THẮNG khi trùng độ ưu tiên. Ví dụ `.chat-panel { display:flex }`
+       trong style.css và `.hidden { display:none }` của Tailwind đều là 1 lớp:
+       ai đứng sau thì thắng. Đặt tailwind.css lên trước là khung chat mở sẵn
+       ngay khi vào trang (đã gặp thật). -->
+  <link rel="stylesheet" href="vendor/tailwind.css" />
 </head>
 
 <body class="bg-plane text-primary min-h-screen">
@@ -129,6 +135,27 @@
           </div>
           <div id="deptOptions" class="multi-list"></div>
           <div id="deptHint" class="multi-hint hidden"></div>
+        </div>
+      </div>
+
+      <!-- BO LOC DA LUU: to hop Station/Store/Trung tam + 2 o tich hay dung, dat ten
+           roi goi lai bang mot cu bam. KY BAO CAO KHONG nam trong day (xem README). -->
+      <div id="presetWrap" class="relative">
+        <label class="flabel">Bộ lọc đã lưu</label>
+        <button type="button" id="presetBtn" class="finput multi-btn min-w-[150px]"
+                aria-haspopup="menu" aria-expanded="false">
+          <span id="presetBtnText">Chọn / Lưu…</span><span class="multi-caret">▾</span>
+        </button>
+        <div id="presetMenu" class="multi-menu hidden" role="menu">
+          <div id="presetList" class="multi-list"></div>
+          <div class="multi-head" style="border-top:1px solid var(--hair); border-bottom:0">
+            <input id="presetName" type="text" maxlength="40" class="multi-search"
+                   placeholder="Tên bộ lọc, ví dụ: HAN – kho MAIN" />
+            <div class="multi-acts">
+              <button type="button" id="presetSave" class="multi-act">＋ Lưu bộ lọc hiện tại</button>
+            </div>
+          </div>
+          <div id="presetHint" class="multi-hint hidden"></div>
         </div>
       </div>
 

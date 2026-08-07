@@ -4,11 +4,13 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Dashboard TAT · BETA (đề xuất cải tiến)</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-  <link href="https://unpkg.com/tabulator-tables@6.2.1/dist/css/tabulator.min.css" rel="stylesheet" />
-  <script src="https://unpkg.com/tabulator-tables@6.2.1/dist/js/tabulator.min.js"></script>
+  <!-- Thư viện để ngay trên máy backend (xem tools/build-assets.js) -->
+  <link href="vendor/tabulator.min.css" rel="stylesheet" />
+  <script src="vendor/chart.umd.js"></script>
+  <script src="vendor/tabulator.min.js"></script>
   <link rel="stylesheet" href="style.css" />
+  <!-- tailwind.css nạp SAU style.css - xem giải thích ở index.html -->
+  <link rel="stylesheet" href="vendor/tailwind.css" />
   <style>
     body { background: var(--bg-plane, #f4f7f8); }
     .wrap { max-width: 1400px; margin: 0 auto; padding: 0 20px; }

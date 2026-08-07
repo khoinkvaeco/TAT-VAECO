@@ -402,8 +402,10 @@ body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
    bi chan ra ngoai) thi `.hidden` va `.relative` khong ton tai -> ca ba menu se
    luon mo va de len nhau. Hai dong duoi bao dam menu van an dung va van neo
    duoi dung nut cua no. */
-#stationWrap, #storeWrap, #deptWrap { position: relative; }
+#stationWrap, #storeWrap, #deptWrap, #presetWrap { position: relative; }
 .multi-menu.hidden { display: none; }
+/* O nam gan ria phai man hinh: neo menu sang phai keo bi cat mat (xem chinhViTriMenu) */
+.multi-menu.neo-phai { left: auto; right: 0; }
 
 .multi-menu {
   position: absolute; z-index: 50; top: 100%; left: 0; margin-top: 4px;
@@ -437,8 +439,34 @@ body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
 .multi-opt.bi-loai .ghi-chu { font-size: 11px; color: var(--warning); margin-left: auto; }
 /* Nhom ghim (HAN/SGN/DAD): in dam + duong ke tach khoi cac station con lai,
    de mat nhin ra ngay ba station chinh ma khong phai doc het danh sach. */
+/* Dong dang "sang" khi di chuyen bang ban phim (↑↓) - phai thay ro o ca hai theme */
+.multi-opt.sang { background: color-mix(in srgb, var(--brand-2) 16%, transparent); outline: 1px solid var(--brand-2); }
 .multi-opt.ghim { font-weight: 600; }
 .multi-opt.het-ghim { margin-bottom: 5px; padding-bottom: 8px; border-bottom: 1px solid var(--hair); }
+/* --- Bo loc da luu (preset) --- */
+#presetMenu { min-width: 260px; max-width: 360px; }
+.preset-row { display: flex; align-items: stretch; gap: 2px; border-radius: 6px; }
+.preset-row:hover { background: var(--hover); }
+.preset-ap {
+  flex: 1; min-width: 0; text-align: left; padding: 6px 8px;
+  background: none; border: 0; cursor: pointer; color: inherit; font: inherit;
+}
+.preset-ten { display: block; font-size: 13px; font-weight: 600; }
+.preset-mo-ta {
+  display: block; font-size: 11px; color: var(--text-muted); margin-top: 1px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* Preset trung khop bo loc dang xem -> danh dau, khoi phai bam thu tung cai */
+.preset-row.dang-dung { background: color-mix(in srgb, var(--brand-2) 12%, transparent); }
+.preset-row.dang-dung .preset-ten::after { content: ' ✓'; color: var(--good); }
+.preset-xoa {
+  padding: 0 9px; background: none; border: 0; cursor: pointer;
+  color: var(--text-muted); font-size: 16px; line-height: 1; border-radius: 6px;
+}
+.preset-xoa:hover { background: color-mix(in srgb, var(--critical) 18%, transparent); color: var(--critical); }
+/* Nut "⭐ Bộ lọc" sang len khi bo loc dang xem la mot preset da luu */
+.multi-btn.co-preset { border-color: var(--brand-2); color: var(--brand-2); font-weight: 600; }
+
 .multi-hint {
   padding: 7px 10px; font-size: 11.5px; line-height: 1.45;
   border-top: 1px solid var(--hair); color: var(--text-secondary);
