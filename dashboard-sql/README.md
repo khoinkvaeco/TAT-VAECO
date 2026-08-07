@@ -58,7 +58,6 @@ Mở `.env` và sửa:
 | `SCAN_PICKING_DIR` | Thư mục chứa **file scan PDF phiếu xuất kho** (mặc định `\\10.99.7.7\picking list\2026`). Chỉ là **giá trị mặc định** — sửa được ngay trên trang `/admin` (xem §6c) |
 | `SCAN_RECEIVING_DIR` | Thư mục chứa **file scan PDF phiếu nhập kho** (mặc định `\\10.99.7.7\certificates\2026`). Cũng sửa được trên `/admin` |
 | `DB_REQUEST_TIMEOUT_MS` | Thời gian tối đa cho **một** câu truy vấn (mặc định `180000` = 3 phút). Cũ là 60 s nên hay báo *Timeout: Request failed to complete in 60000ms* |
-| `PICKSLIP_CREATED_PAD_DAYS` | Biên độ (ngày) nới rộng khi lọc thô `PICKSLIP_BOOKED.CREATED_DATE` — xem §7b (mặc định `60`) |
 
 > ⚠️ **Không commit file `.env` thật** — nó đã được thêm vào `.gitignore`.
 
@@ -306,53 +305,55 @@ Thẻ *Đã scan* **tự đổi màu**: xanh khi `chưa scan = 0` (đạt 100%),
 thiếu; thẻ *Chưa scan* đỏ khi còn phiếu chưa scan. Nếu **không đọc được thư mục**
 thì cột *Scan* để `—` và không dòng nào được tính là đã/chưa scan — xem §6c.
 
-## 7b. Tăng tốc truy vấn qua linked server — hỏi TỪNG BẢNG một
+## 7b. Tăng tốc truy vấn qua linked server — **hàm trong `WHERE` mới là thủ phạm**
 
 **Triệu chứng:** tab *Quản lý xuất kho* báo `Timeout: Request failed to complete in 60000ms`
 ngay cả với kỳ **1 tuần**.
 
-**Nguyên nhân:** câu lệnh cũ nối 2 bảng AMOS trong **một** câu —
+**Đã ĐO THẬT**, không đoán (`/api/admin/diag/linkserver`, kỳ 1 tuần 07/2026):
 
-```sql
-FROM [DWH_DB]..PICKSLIP_BOOKED p JOIN [DWH_DB]..PICKSLIP_HEADER h ON …
-WHERE h.[PICKSLIP_DATE] BETWEEN @fromDay AND @toDay
-```
+| Câu | ms | dòng |
+|---|---:|---:|
+| `PICKSLIP_BOOKED` — **chỉ lọc ngày** (điều kiện thuần) | **1.096** | 81.452 |
+| `PICKSLIP_BOOKED` — **+ bộ lọc nghiệp vụ** (`LOWER/RTRIM/ISNULL/TRY_CONVERT`) | **22.806** | 44.779 |
+| **NỐI cả 2 bảng**, điều kiện ngày thuần | **1.080** | 5.755 |
+| `LOCATION` (Repair Admin) | 988 | 226 |
+| `HISTORY` (Receiving) | 6.517 | 1.361 |
 
-SQL Server **không đẩy được phép nối này xuống máy chủ AMOS**: nó kéo (gần như) cả hai
-bảng về rồi mới nối và lọc tại chỗ. Repair Admin còn nặng hơn — nối **3** bảng
-(`LOCATION × ROTABLES × OD_DETAIL`).
+**Kết luận trái với dự đoán ban đầu: phép NỐI BẢNG không hề chậm — nó nhanh nhất trong nhóm.**
+Thứ làm chậm **gấp 21 lần** là các hàm `LOWER / RTRIM / ISNULL / TRY_CONVERT` trong `WHERE`:
+chúng **chặn SQL Server đẩy điều kiện xuống máy chủ AMOS**, nên AMOS phải trả về rất nhiều
+dòng rồi mới lọc tại chỗ.
 
-**Cách làm hiện nay — mỗi lượt hỏi CHỈ chạm MỘT bảng**, mỗi bảng mang điều kiện lọc của
-chính nó, rồi mới ghép:
+*(Đã từng thử tách ra hỏi từng bảng một rồi truyền khóa sang bảng kế tiếp — **chậm hơn**,
+đã bỏ. Số đo ở trên là lý do.)*
 
-| Báo cáo | Các bước |
-|---|---|
-| **Quản lý xuất kho** | `#ph` ← `PICKSLIP_HEADER` lọc `PICKSLIP_DATE` (đúng kỳ) → `#pb` ← `PICKSLIP_BOOKED` lọc `CREATED_DATE` (lọc thô) + bộ lọc nghiệp vụ → `#ps` ← ghép `#pb` với `#ph` **tại chỗ**, cả hai đều có index trên `pickslipno` |
-| **Repair Admin** | `LOCATION` (`location_type = -4`) → lấy `locationno_i` → `ROTABLES` (`locationno_i IN (…)`) → lấy `psn` → `OD_DETAIL` (`psn IN (…)`, `status = 0`) → ghép ở Node |
-| **Receiving** | vốn đã chỉ hỏi **một** bảng (`HISTORY`) nên giữ nguyên |
+**Quy tắc rút ra — áp cho cả 3 báo cáo của LGC:**
 
-**Điều kiện lọc dùng SỐ TRỰC TIẾP, không dùng tham số `@p`.** Với linked server, điều kiện
-có tham số thường **không** được đẩy xuống máy chủ từ xa. Các số này do server tự tính
-(số ngày AMOS, `locationno_i`, `psn`) nên **không có rủi ro chèn lệnh**.
+1. Câu gửi xuống AMOS chỉ lấy **CỘT THÔ**, `WHERE` chỉ có **điều kiện thuần** trên cột;
+2. **Không** `RTRIM/ISNULL/LOWER/TRY_CONVERT` trong câu gửi xuống AMOS;
+3. **Không dùng tham số `@p`** cho điều kiện gửi xuống AMOS — tham số cũng hay chặn việc đẩy
+   điều kiện. Đặt **số trực tiếp** (số ngày AMOS, `location_type`…) do server tự tính nên
+   không có rủi ro chèn lệnh; chuỗi thì nhân đôi dấu nháy;
+4. Cắt gọt chuỗi, phân loại và **bộ lọc nghiệp vụ làm TẠI CHỖ** trên bảng tạm — vài nghìn dòng
+   nên không tốn gì.
 
-**Về biên độ `CREATED_DATE`:** kỳ báo cáo **vẫn tính theo `PICKSLIP_DATE`** (điều kiện thật
-nằm ở `#ph`). `CREATED_DATE` chỉ là bộ lọc **thô** để AMOS không phải quét cả bảng, nới rộng
-`PICKSLIP_CREATED_PAD_DAYS` ngày về hai phía. Công cụ `AMOS_GUI` của nghiệp vụ dùng chính
-`CREATED_DATE` làm kỳ báo cáo nên hai cột này rất sát nhau. **Không tin suông:** truy vấn trả
-kèm độ lệch ngày **lớn nhất thực tế gặp**; nếu nó chạm biên độ, server ghi cảnh báo ra log
-**và** dashboard hiện dải cảnh báo đỏ nhắc tăng `PICKSLIP_CREATED_PAD_DAYS`.
+| Báo cáo | Câu gửi xuống AMOS | Làm tại chỗ |
+|---|---|---|
+| **Quản lý xuất kho** | `#raw` ← nối `PICKSLIP_BOOKED × PICKSLIP_HEADER`, `WHERE PICKSLIP_DATE >= 19911 AND < 19918` | `#ps` ← cắt gọt + phân loại Cancel/Return + bộ lọc nghiệp vụ |
+| **Receiving** | `#hraw` ← `HISTORY`, `WHERE VM IN ('B1','CR') AND DEL_DATE >= … AND < …` | `#hi` ← cắt gọt + đổi ngày AMOS; lọc station/store/condition |
+| **Repair Admin** | nối 3 bảng, `WHERE location_type = -4 AND status = 0` | cắt gọt chuỗi ở Node |
 
-### Đo xem chỗ nào chậm — `GET /api/admin/diag/linkserver`
+### Đo lại bất cứ lúc nào — `GET /api/admin/diag/linkserver`
 
-Chạy **từng bước riêng rẽ** và bấm giờ, thay vì đoán. So sánh:
+Chạy từng bước riêng rẽ và bấm giờ. **A** = cách đang dùng (điều kiện thuần);
+**B** = thêm bộ lọc nghiệp vụ gửi xuống AMOS (cách cũ); **C** = điều kiện ngày dùng tham số `@p`.
+A phải nhanh hơn hẳn B và C. **Chỉ đọc. Chỉ IP quản trị.**
 
-- **bước 3** (nối 2 bảng trong 1 câu — cách cũ) với **bước 1 + 2a** (hỏi riêng từng bảng)
-  → bước 3 chậm hơn nhiều = đúng là lỗi nối bảng trên linked server;
-- **bước 2a** (chỉ lọc ngày) với **bước 2b** (thêm đủ bộ lọc nghiệp vụ)
-  → 2b chậm hơn hẳn = các hàm `LOWER/RTRIM/ISNULL/TRY_CONVERT` đang chặn việc đẩy điều kiện
-  xuống AMOS, nên bỏ bớt và lọc lại tại chỗ.
-
-**Chỉ đọc. Chỉ IP quản trị.**
+`npm run sqlcheck` cũng **nhắc** (không chặn) những chỗ còn hàm trong `WHERE` của câu chạm
+`[DWH_DB]..`. Đây chỉ là cảnh báo vì luật này chưa đủ chính xác — một câu có thể vừa đọc bảng
+tạm vừa `LEFT JOIN` sang `SIGN`, khi đó hàm ở bảng **tạm** vẫn bị bắt nhầm. Muốn chắc thì đo
+bằng `diag/linkserver`.
 
 ## 7. Bảo mật & performance
 

@@ -57,10 +57,6 @@ const CONFIG = {
   // (AMOS) co the lau; mac dinh cu 60s hay bao "Timeout: Request failed to
   // complete in 60000ms" tren cac ky dai.
   dbRequestTimeout: parseInt(process.env.DB_REQUEST_TIMEOUT_MS || '180000', 10),
-  // Bien do (so ngay) noi rong khi loc PICKSLIP_BOOKED theo [CREATED_DATE].
-  // Xem giai thich o pickslipTemp(): ky bao cao van tinh theo PICKSLIP_DATE,
-  // cot CREATED_DATE chi dung de CAT BOT du lieu ngay tren may chu AMOS.
-  pickslipPadDays: parseInt(process.env.PICKSLIP_CREATED_PAD_DAYS || '60', 10),
   signCache: String(process.env.SIGN_CACHE || 'true').toLowerCase() !== 'false',
   signCacheMinutes: parseInt(process.env.SIGN_CACHE_MINUTES || '360', 10), // mac dinh 6h
   // --- Bao cao dinh ky day len Teams / SharePoint (phuong an 3) - MAC DINH TAT ---
@@ -2159,129 +2155,40 @@ async function getRepairAdmin(f) {
 }
 
 /**
- * Hoi mot bang AMOS theo LO khoa: "WHERE <cot> IN (…)" voi khoa dat TRUC TIEP
- * vao cau lenh (khong dung tham so) de linked server day duoc dieu kien xuong
- * may chu tu xa. Chi nhan khoa SO hoac chuoi da duoc lam sach -> khong co rui
- * ro chen lenh.
- * @param {string} sqlTruoc phan SELECT ... FROM ... (khong co WHERE)
- * @param {string} cot      ten cot khoa (vd 'r.[locationno_i]')
- * @param {Array}  khoa     danh sach gia tri
- * @param {string} themWhere dieu kien phu, noi bang AND
- */
-async function queryTheoLo(sqlTruoc, cot, khoa, themWhere = '', chunk = 300) {
-  const out = [];
-  const sach = [...new Set(khoa)]
-    .filter((v) => v !== null && v !== undefined && v !== '')
-    .map((v) => (typeof v === 'number' ? String(v) : String(v).replace(/'/g, "''")));
-  if (!sach.length) return out;
-  const soHet = sach.every((v) => /^-?\d+(\.\d+)?$/.test(v));
-  for (let i = 0; i < sach.length; i += chunk) {
-    const lo = sach.slice(i, i + chunk)
-      .map((v) => (soHet ? v : `'${v}'`))
-      .join(', ');
-    const rows = await query(`${sqlTruoc} WHERE ${cot} IN (${lo}) ${themWhere}`);
-    for (const r of rows) out.push(r);
-  }
-  return out;
-}
-
-/**
- * REPAIR ADMIN - hoi TUNG BANG MOT roi truyen khoa sang bang ke tiep.
+ * REPAIR ADMIN - LOCATION x ROTABLES x OD_DETAIL.
  *
- * TRUOC DAY noi ca 3 bang AMOS trong MOT cau (LOCATION x ROTABLES x OD_DETAIL).
- * SQL Server khong day duoc phep noi do xuong may chu AMOS nen keo gan nhu ca
- * ba bang ve roi moi loc -> rat cham / het gio.
+ * Da DO THAT (/api/admin/diag/linkserver): phep NOI BANG tren linked server
+ * KHONG phai cho cham - cai lam cham la cac HAM trong WHERE chan viec day dieu
+ * kien xuong AMOS. (Da thu tach ra hoi tung bang roi truyen khoa sang bang ke
+ * tiep - phuc tap hon ma khong nhanh hon, da bo.)
  *
- * NAY chia lam 3 buoc, moi buoc CHI hoi MOT bang va deu co dieu kien loc cua
- * chinh no; ket qua buoc truoc thanh danh sach khoa cho buoc sau (IN (...) dat
- * truc tiep vao cau lenh nen AMOS loc duoc ngay):
- *   1. LOCATION  : location_type = -4 (+ station/store)   -> danh sach locationno_i
- *   2. ROTABLES  : locationno_i IN (buoc 1)               -> danh sach psn
- *   3. OD_DETAIL : psn IN (buoc 2) AND status = 0
- * Ghep lai o Node (du lieu da nam trong bo nho, khong ton them luot hoi).
+ * Nen giu MOT cau noi 3 bang, nhung:
+ *   - WHERE chi co dieu kien THUAN (so / chuoi dat TRUC TIEP, khong tham so @p
+ *     vi tham so thuong khong duoc day xuong may chu tu xa);
+ *   - SELECT chi lay COT THO (khong RTRIM) - cat got de lam o Node ben duoi.
  */
 async function loadRepairAdmin(f) {
   const t0 = Date.now();
-  // So sanh TRUC TIEP (khong boc RTRIM quanh cot) de dieu kien con DAY XUONG
-  // duoc linked server; SQL Server bo qua khoang trang cuoi khi dung '='.
+  // Dat gia tri TRUC TIEP vao cau lenh (khong dung @p) de dieu kien duoc day
+  // xuong AMOS. Chuoi duoc nhan doi dau nhay -> khong the chen lenh.
   const q = (v) => `'${String(v).replace(/'/g, "''")}'`;
-  let locWhere = `WHERE l.[location_type] = ${Number(REPAIR_LOCATION_TYPE)}`;
-  if (f.station) locWhere += ` AND l.[station] = ${q(f.station)}`;
-  if (f.store) locWhere += ` AND l.[store] = ${q(f.store)}`;
+  let where = `WHERE l.[location_type] = ${Number(REPAIR_LOCATION_TYPE)} AND d.[status] = 0`;
+  if (f.station) where += ` AND l.[station] = ${q(f.station)}`;
+  if (f.store) where += ` AND l.[store] = ${q(f.store)}`;
 
-  // --- BUOC 1: LOCATION (vi tri Unserviceable) ---
-  const locs = await query(
-    `SELECT l.[locationno_i]    AS locationno_i,
-            RTRIM(l.[station])  AS station,
-            RTRIM(l.[store])    AS store,
-            RTRIM(l.[location]) AS location
+  const rot = await query(
+    `SELECT l.[locationno_i], l.[station], l.[store], l.[location],
+            r.[partno], r.[serialno], r.[psn], r.[orderno], r.[orderdate], r.[labelno],
+            d.[status] AS od_status, d.[state] AS od_state,
+            d.[backorder] AS od_backorder, d.[ext_state] AS od_ext_state
      FROM [DWH_DB]..[STG_AMOS].[LOCATION] l
-     ${locWhere}`
+     JOIN [DWH_DB]..[STG_AMOS].[ROTABLES] r ON l.[locationno_i] = r.[locationno_i]
+     JOIN [DWH_DB]..[STG_AMOS].[OD_DETAIL] d
+       ON r.[psn] = d.[psn] AND r.[labelno] = d.[labelno]
+     ${where}`
   );
-  const t1 = Date.now();
-  if (!locs.length) {
-    console.log(`[PERF] repair-admin: LOCATION 0 dong (${t1 - t0}ms) -> dung som`);
-    return [];
-  }
-  const locById = new Map(locs.map((l) => [String(l.locationno_i), l]));
-
-  // --- BUOC 2: ROTABLES o cac vi tri do ---
-  const rots = await queryTheoLo(
-    `SELECT r.[locationno_i]  AS locationno_i,
-            RTRIM(r.[partno])   AS partno,
-            RTRIM(r.[serialno]) AS serialno,
-            r.[psn]             AS psn,
-            RTRIM(r.[orderno])  AS orderno,
-            r.[orderdate]       AS orderdate,
-            r.[labelno]         AS labelno
-     FROM [DWH_DB]..[STG_AMOS].[ROTABLES] r`,
-    'r.[locationno_i]',
-    locs.map((l) => l.locationno_i)
-  );
-  const t2 = Date.now();
-  if (!rots.length) {
-    console.log(`[PERF] repair-admin: LOCATION ${locs.length} (${t1 - t0}ms) · ROTABLES 0 (${t2 - t1}ms)`);
-    return [];
-  }
-
-  // --- BUOC 3: OD_DETAIL cua cac psn do (status = 0) ---
-  const ods = await queryTheoLo(
-    `SELECT d.[psn]            AS psn,
-            d.[labelno]        AS labelno,
-            d.[status]         AS od_status,
-            RTRIM(d.[state])   AS od_state,
-            d.[backorder]      AS od_backorder,
-            RTRIM(d.[ext_state]) AS od_ext_state
-     FROM [DWH_DB]..[STG_AMOS].[OD_DETAIL] d`,
-    'd.[psn]',
-    rots.map((r) => r.psn),
-    'AND d.[status] = 0'
-  );
-  const t3 = Date.now();
-  console.log(`[PERF] repair-admin: LOCATION ${locs.length} (${t1 - t0}ms)`
-    + ` · ROTABLES ${rots.length} (${t2 - t1}ms) · OD_DETAIL ${ods.length} (${t3 - t2}ms)`);
-
-  // --- GHEP TAI CHO: ROTABLES x OD_DETAIL theo (psn, labelno) ---
-  const odKey = (psn, lab) => `${psn}|${lab}`;
-  const odByKey = new Map();
-  for (const o of ods) {
-    const k = odKey(o.psn, o.labelno);
-    if (!odByKey.has(k)) odByKey.set(k, o); // moi cap chi lay 1 don (nhu INNER JOIN cu, du lai bi loc tiep)
-  }
-  const rot = [];
-  for (const r of rots) {
-    const o = odByKey.get(odKey(r.psn, r.labelno));
-    if (!o) continue; // INNER JOIN: khong co don sua chua status=0 thi bo
-    const l = locById.get(String(r.locationno_i)) || {};
-    rot.push({
-      locationno_i: r.locationno_i,
-      station: l.station, store: l.store, location: l.location,
-      partno: r.partno, serialno: r.serialno, psn: r.psn,
-      orderno: r.orderno, orderdate: r.orderdate, labelno: r.labelno,
-      od_status: o.od_status, od_state: o.od_state,
-      od_backorder: o.od_backorder, od_ext_state: o.od_ext_state,
-    });
-  }
+  console.log(`[PERF] repair-admin: ${rot.length} dong (${Date.now() - t0}ms)`);
+  const tr = (v) => (typeof v === 'string' ? v.trim() : v);
 
   // KHONG hoi [DWH_DB]..[STG_AMOS].[CONSUMABLES] nua: vat tu tieu hao khong co
   // cot [psn] nen khong noi duoc sang OD_DETAIL -> khong bao gio dat dieu kien
@@ -2294,14 +2201,14 @@ async function loadRepairAdmin(f) {
     const d = amosValueToDate(r.orderdate);
     const age = d ? Math.floor((now - d.getTime()) / 86400000) : null;
     items.push({
-      station: r.station || '', store: r.store || '', location: r.location || '',
-      partno: r.partno || '', serialno: r.serialno || '',
+      station: tr(r.station) || '', store: tr(r.store) || '', location: tr(r.location) || '',
+      partno: tr(r.partno) || '', serialno: tr(r.serialno) || '',
       labelno: r.labelno ?? null, psn: r.psn ?? null,
-      orderno: r.orderno || '', order_date_vn: d ? d.toISOString() : null,
+      orderno: tr(r.orderno) || '', order_date_vn: d ? d.toISOString() : null,
       od_status: r.od_status ?? null,
-      od_state: r.od_state || '',
+      od_state: tr(r.od_state) || '',
       od_backorder: r.od_backorder ?? null,
-      od_ext_state: r.od_ext_state || '',
+      od_ext_state: tr(r.od_ext_state) || '',
       age_days: age,
       nhom: age === null ? 'unknown' : (age < REPAIR_AGE_DAYS ? 'less30' : 'over30'),
       tinh_tong_hop: isRepairCounted(r.od_backorder, r.od_state),
@@ -2376,61 +2283,49 @@ async function detectDateKind(fullTable, col, expected) {
 /**
  * Keo du lieu pickslip cua ky ve bang tam #ps roi tra ve cac manh SQL dung lai.
  *
- * TAI SAO KHONG JOIN 2 BANG AMOS TRONG MOT CAU:
- *   Truoc day cau lenh la
- *       FROM [DWH_DB]..PICKSLIP_BOOKED p JOIN [DWH_DB]..PICKSLIP_HEADER h ...
- *       WHERE h.[PICKSLIP_DATE] BETWEEN ...
- *   SQL Server KHONG day duoc phep noi nay xuong may chu AMOS: no keo (gan nhu)
- *   ca hai bang ve roi moi noi va loc tai cho -> chay that bi
- *   "Timeout: Request failed to complete in 60000ms" ngay ca voi ky 1 TUAN.
+ * TOC DO: THU PHAM LA CAC HAM TRONG WHERE, KHONG PHAI PHEP NOI BANG.
+ *   Da DO THAT bang /api/admin/diag/linkserver (ky 1 tuan, thang 7/2026):
  *
- * CACH LAM MOI (dung ky luat da ap dung cho cac bao cao khac): hoi TUNG BANG
- * MOT, moi bang mot dieu kien loc CUA CHINH NO, roi moi ghep TAI CHO giua hai
- * bang tam:
- *   #ph <- PICKSLIP_HEADER, loc theo [PICKSLIP_DATE]  (dung ky bao cao)
- *   #pb <- PICKSLIP_BOOKED, loc theo [CREATED_DATE]   (chi de CAT BOT du lieu)
- *   #ps <- #pb JOIN #ph                               (ghep o local, co index)
+ *     PICKSLIP_BOOKED chi loc ngay (dieu kien thuan)      1.096 ms  81.452 dong
+ *     PICKSLIP_BOOKED + bo loc nghiep vu (co ham)        22.806 ms  44.779 dong
+ *     NOI CA 2 BANG, dieu kien ngay thuan                 1.080 ms   5.755 dong
+ *
+ *   => Phep noi 2 bang la NHANH NHAT trong nhom. Cai lam cham gap 21 lan la
+ *      cac ham LOWER / RTRIM / ISNULL / TRY_CONVERT trong WHERE: chung chan
+ *      SQL Server day dieu kien xuong may chu AMOS, nen AMOS phai tra ve rat
+ *      nhieu dong roi moi loc tai cho.
+ *   (Truoc do da thu tach ra hoi tung bang mot - CHAM HON, da bo.)
+ *
+ * VI VAY chia lam 2 buoc:
+ *   #raw <- NOI 2 bang tren AMOS, chi lay COT THO, WHERE chi co dieu kien
+ *           NGAY dang SO TRUC TIEP. Khong ham, khong tham so @p.
+ *   #ps  <- tu #raw: cat got chuoi, phan loai Cancel/Return va ap bo loc
+ *           nghiep vu - lam TAI CHO tren vai nghin dong nen khong ton gi.
  *
  * DIEU KIEN LOC DUNG SO TRUC TIEP, KHONG DUNG THAM SO (@p): voi linked server,
  * dieu kien co tham so thuong KHONG duoc day xuong may chu tu xa. Cac so nay do
  * server tu tinh (so ngay AMOS) nen khong co rui ro chen lenh.
- *
- * VE BIEN DO CREATED_DATE: ky bao cao VAN tinh theo PICKSLIP_DATE (dieu kien
- * loc that nam o #ph). [CREATED_DATE] chi la bo loc THO de may chu AMOS khong
- * phai quet ca bang; noi rong PICKSLIP_CREATED_PAD_DAYS ngay ve hai phia
- * (mac dinh 60). Cong cu AMOS_GUI cua nghiep vu dung chinh CREATED_DATE lam
- * ky bao cao nen hai cot nay rat sat nhau. De KHONG phai tin suong, truy van
- * tra kem `chenh_lech_max` = do lech ngay lon nhat thuc te gap; neu no cham
- * nguong, server GHI CANH BAO ra log de con noi rong bien do.
  */
 async function pickslipTemp(range, f) {
   // Nghiep vu da xac nhan: PICKSLIP_DATE la SO NGAY AMOS (khong phai datetime).
   const kindH = await detectDateKind(
     '[DWH_DB]..[STG_AMOS].[PICKSLIP_HEADER]', 'PICKSLIP_DATE', 'number');
-  const kindB = await detectDateKind(
-    '[DWH_DB]..[STG_AMOS].[PICKSLIP_BOOKED]', 'CREATED_DATE', 'number');
 
   const d = amosDayExact(range);
-  const PAD = CONFIG.pickslipPadDays;
-  // Dieu kien cho tung bang - dung SO TRUC TIEP de day duoc xuong AMOS
+  // SO TRUC TIEP, khong dung tham so @p
   const whereH = kindH === 'number'
     ? `h.[PICKSLIP_DATE] >= ${d.fromDayX} AND h.[PICKSLIP_DATE] < ${d.toDayX}`
     : 'h.[PICKSLIP_DATE] >= @from AND h.[PICKSLIP_DATE] < @to';
-  // Neu CREATED_DATE khong phai so ngay AMOS thi BO bo loc tho nay di (tha
-  // cham con hon mat dong) - dieu kien ky that su van nam o #ph.
-  const whereB = kindB === 'number'
-    ? `WHERE p.[CREATED_DATE] >= ${d.fromDayX - PAD} AND p.[CREATED_DATE] < ${d.toDayX + PAD}`
-    : '';
 
   const dateVN = kindH === 'number'
-    ? 'DATEADD(DAY, TRY_CONVERT(int, ph.ngay_amos), TRY_CONVERT(datetime, @amosEpoch))'
-    : 'TRY_CONVERT(datetime, ph.ngay_raw)';
+    ? 'DATEADD(DAY, TRY_CONVERT(int, TRY_CONVERT(float, r.[PICKSLIP_DATE])), TRY_CONVERT(datetime, @amosEpoch))'
+    : 'TRY_CONVERT(datetime, r.[PICKSLIP_DATE])';
 
   // PHAN LOAI theo DUOI cua PICKSLIP_TEXT (lay tu cong cu AMOS_GUI cua nguoi
   // dung): ket thuc bang 'cancel' / 'cancel booking' -> HUY; 'return' -> TRA.
-  // Chi tinh khi QTY_CANCELED <> 0.
-  const txt = "LOWER(RTRIM(ISNULL(ph.pickslip_text, '')))";
-  const daHuy = 'TRY_CONVERT(float, pb.qty_canceled) <> 0';
+  // Chi tinh khi QTY_CANCELED <> 0. Tinh TAI CHO tren #raw.
+  const txt = "LOWER(RTRIM(ISNULL(r.[PICKSLIP_TEXT], '')))";
+  const daHuy = 'TRY_CONVERT(float, r.[QTY_CANCELED]) <> 0';
   const loai = `CASE
         WHEN ${daHuy} AND (${txt} LIKE '%cancel' OR ${txt} LIKE '%cancel booking') THEN 'CANCEL'
         WHEN ${daHuy} AND ${txt} LIKE '%return' THEN 'RETURN'
@@ -2440,70 +2335,61 @@ async function pickslipTemp(range, f) {
   //   QTY_BOOKED <> 0; STATUS khong phai 1 va 11; LOCATION_FROM khong chua 'u/s';
   //   STORE ket thuc bang 'main' hoac 'vna'.
   // (STATUS NULL cung bi loai - giong pandas: NA <> 1 ra NA nen dong do rot.)
-  // Ap ngay o buoc keo #pb de bot du lieu cang som cang tot.
+  // CHAY TAI CHO tren #raw, KHONG gui xuong AMOS - xem giai thich o tren.
   const bizFilter = `
-      AND TRY_CONVERT(float, p.[QTY_BOOKED]) <> 0
-      AND p.[STATUS] <> 1 AND p.[STATUS] <> 11
-      AND LOWER(RTRIM(ISNULL(p.[LOCATION_FROM], ''))) NOT LIKE '%u/s%'
-      AND (LOWER(RTRIM(ISNULL(p.[STORE], ''))) LIKE '%main'
-        OR LOWER(RTRIM(ISNULL(p.[STORE], ''))) LIKE '%vna')`;
+      AND TRY_CONVERT(float, r.[QTY_BOOKED]) <> 0
+      AND r.[STATUS] <> 1 AND r.[STATUS] <> 11
+      AND LOWER(RTRIM(ISNULL(r.[LOCATION_FROM], ''))) NOT LIKE '%u/s%'
+      AND (LOWER(RTRIM(ISNULL(r.[STORE], ''))) LIKE '%main'
+        OR LOWER(RTRIM(ISNULL(r.[STORE], ''))) LIKE '%vna')`;
 
   const pull = `
-    IF OBJECT_ID('tempdb..#ph') IS NOT NULL DROP TABLE #ph;
-    IF OBJECT_ID('tempdb..#pb') IS NOT NULL DROP TABLE #pb;
+    IF OBJECT_ID('tempdb..#raw') IS NOT NULL DROP TABLE #raw;
     IF OBJECT_ID('tempdb..#ps') IS NOT NULL DROP TABLE #ps;
 
-    -- BUOC 1: CHI bang PICKSLIP_HEADER, loc dung ky bao cao. Mot bang -> AMOS
-    --         tu loc duoc, chi tra ve so phieu trong ky.
-    SELECT RTRIM(h.[PICKSLIPNO])    AS pickslipno,
-           TRY_CONVERT(float, h.[PICKSLIP_DATE]) AS ngay_amos,
-           h.[PICKSLIP_DATE]        AS ngay_raw,
-           RTRIM(h.[MECH_SIGN])     AS mech_sign,
-           RTRIM(h.[BOOKING_SIGN])  AS booking_sign,
-           RTRIM(h.[RECEIVER])      AS receiver,
-           RTRIM(h.[REMARKS])       AS remarks,
-           RTRIM(h.[PICKSLIP_TEXT]) AS pickslip_text
-    INTO #ph
-    FROM [DWH_DB]..[STG_AMOS].[PICKSLIP_HEADER] h
-    WHERE ${whereH};
-    CREATE INDEX IX_ph_no ON #ph (pickslipno);
-
-    -- BUOC 2: CHI bang PICKSLIP_BOOKED, loc tho theo [CREATED_DATE] + bo loc
-    --         nghiep vu. KHONG noi sang PICKSLIP_HEADER o day.
-    SELECT RTRIM(p.[PICKSLIPNO])    AS pickslipno,
-           RTRIM(p.[STATION])       AS station,
-           RTRIM(p.[STORE])         AS store,
-           RTRIM(p.[LOCATION_FROM]) AS location_from,
-           p.[PICKING_LISTNO_I]     AS picking_listno,
-           p.[PICKSLIPSEQNO_I]      AS seqno,
-           RTRIM(p.[PARTNO])        AS partno,
-           ISNULL(LTRIM(RTRIM(p.[SERIALNO])), '') + ISNULL(LTRIM(RTRIM(p.[BATCHNO])), '') AS serialno,
-           p.[QTY_BOOKED]           AS qty_booked,
-           p.[QTY_CANCELED]         AS qty_canceled,
-           RTRIM(p.[OWNER])         AS owner,
-           RTRIM(p.[CREATED_BY])    AS created_by,
-           TRY_CONVERT(float, p.[CREATED_DATE]) AS tao_amos
-    INTO #pb
-    FROM [DWH_DB]..[STG_AMOS].[PICKSLIP_BOOKED] p
-    ${whereB || 'WHERE 1 = 1'} ${bizFilter};
-    CREATE INDEX IX_pb_no ON #pb (pickslipno);
-
-    -- BUOC 3: ghep TAI CHO (ca hai da o local, deu co index tren pickslipno)
+    -- BUOC 1 (hoi AMOS): CHI lay COT THO + dieu kien NGAY dang SO TRUC TIEP.
+    --   Khong RTRIM, khong ISNULL, khong TRY_CONVERT, khong tham so @p, khong
+    --   bo loc nghiep vu -> AMOS nhan duoc mot cau don gian va loc duoc ngay.
     SELECT
-      pb.station, pb.store, pb.location_from, pb.picking_listno,
-      pb.pickslipno, pb.seqno, pb.partno, pb.serialno,
-      pb.qty_booked, pb.qty_canceled,
-      ${loai}                 AS loai,
+      p.[PICKSLIPNO], p.[STATION], p.[STORE], p.[LOCATION_FROM],
+      p.[PICKING_LISTNO_I], p.[PICKSLIPSEQNO_I], p.[PARTNO], p.[SERIALNO],
+      p.[BATCHNO], p.[QTY_BOOKED], p.[QTY_CANCELED], p.[OWNER],
+      p.[CREATED_BY], p.[STATUS],
+      h.[PICKSLIP_DATE], h.[MECH_SIGN], h.[BOOKING_SIGN], h.[RECEIVER],
+      h.[REMARKS], h.[PICKSLIP_TEXT]
+    INTO #raw
+    FROM [DWH_DB]..[STG_AMOS].[PICKSLIP_BOOKED] p
+    JOIN [DWH_DB]..[STG_AMOS].[PICKSLIP_HEADER] h ON h.[PICKSLIPNO] = p.[PICKSLIPNO]
+    WHERE ${whereH};
+
+    -- BUOC 2 (TAI CHO): cat got chuoi, phan loai va ap bo loc nghiep vu tren
+    --   #raw - da nam trong SQL Server nen cac ham nay khong ton gi.
+    SELECT
+      RTRIM(r.[STATION])       AS station,
+      RTRIM(r.[STORE])         AS store,
+      RTRIM(r.[LOCATION_FROM]) AS location_from,
+      r.[PICKING_LISTNO_I]     AS picking_listno,
+      RTRIM(r.[PICKSLIPNO])    AS pickslipno,
+      r.[PICKSLIPSEQNO_I]      AS seqno,
+      RTRIM(r.[PARTNO])        AS partno,
+      ISNULL(LTRIM(RTRIM(r.[SERIALNO])), '') + ISNULL(LTRIM(RTRIM(r.[BATCHNO])), '') AS serialno,
+      r.[QTY_BOOKED]           AS qty_booked,
+      r.[QTY_CANCELED]         AS qty_canceled,
+      ${loai}                  AS loai,
       CASE WHEN ${loai} = 'NORMAL' THEN 0 ELSE 1 END AS is_cancel,
-      pb.owner, pb.created_by,
-      ${dateVN}               AS pickslip_date,
-      ph.mech_sign, ph.booking_sign, ph.receiver, ph.remarks, ph.pickslip_text,
-      TRY_CONVERT(int, ABS(ph.ngay_amos - pb.tao_amos)) AS chenh_lech
+      RTRIM(r.[OWNER])         AS owner,
+      RTRIM(r.[CREATED_BY])    AS created_by,
+      ${dateVN}                AS pickslip_date,
+      RTRIM(r.[MECH_SIGN])     AS mech_sign,
+      RTRIM(r.[BOOKING_SIGN])  AS booking_sign,
+      RTRIM(r.[RECEIVER])      AS receiver,
+      RTRIM(r.[REMARKS])       AS remarks,
+      RTRIM(r.[PICKSLIP_TEXT]) AS pickslip_text
     INTO #ps
-    FROM #pb pb
-    JOIN #ph ph ON ph.pickslipno = pb.pickslipno;
+    FROM #raw r
+    WHERE 1 = 1 ${bizFilter};
     CREATE INDEX IX_ps_mech ON #ps (mech_sign);
-    DROP TABLE #ph; DROP TABLE #pb;`;
+    DROP TABLE #raw;`;
 
   // Trung tam: SIGN theo MECH_SIGN (nguoi nhan hang), lui ve 'PA' - giong moi
   // bao cao khac. LEFT JOIN nen khong the lam mat dong.
@@ -2720,10 +2606,7 @@ async function qPickslip(range, f) {
            SUM(CASE WHEN x.loai = 'RETURN' THEN 1 ELSE 0 END) AS so_return,
            SUM(x.is_cancel) AS so_dong_huy,
            COUNT(DISTINCT x.pickslipno) AS so_phieu,
-           COUNT(DISTINCT CASE WHEN x.is_cancel = 1 THEN x.pickslipno END) AS so_phieu_co_huy,
-           -- Do lech ngay lon nhat giua PICKSLIP_DATE va CREATED_DATE. Dung de
-           -- KIEM CHUNG bien do loc tho o buoc keo #pb co du rong khong.
-           MAX(x.chenh_lech) AS chenh_lech_max
+           COUNT(DISTINCT CASE WHEN x.is_cancel = 1 THEN x.pickslipno END) AS so_phieu_co_huy
     ${join} WHERE 1 = 1 ${w};
 
     -- [1] Theo Trung tam
@@ -2786,18 +2669,6 @@ async function qPickslip(range, f) {
   const pct = (a, b) => (b ? Math.round((a / b) * 1000) / 10 : 0);
   const deptSorted = [...byDept].sort((a, b) => b.so_dong - a.so_dong);
   const sc = scan.stats;
-
-  // KIEM CHUNG bien do loc tho theo CREATED_DATE (xem pickslipTemp): neu do
-  // lech thuc te da cham nguong thi RAT co the co dong bi cat oan -> canh bao
-  // ro rang thay vi de sai so am tham.
-  const lech = Number(kpi.chenh_lech_max);
-  const bienDo = CONFIG.pickslipPadDays;
-  const canhBaoBienDo = Number.isFinite(lech) && lech >= bienDo - 1
-    ? `Do lech PICKSLIP_DATE va CREATED_DATE lon nhat gap la ${lech} ngay,`
-      + ` cham bien do loc tho ${bienDo} ngay -> CO THE dang thieu dong.`
-      + ' Tang PICKSLIP_CREATED_PAD_DAYS trong .env roi khoi dong lai.'
-    : '';
-  if (canhBaoBienDo) console.warn('[PICKSLIP] ⚠ ' + canhBaoBienDo);
   return {
     range: { from: range.from, to: range.to, label: range.label },
     kpis: {
@@ -2827,9 +2698,6 @@ async function qPickslip(range, f) {
       returnChuaScan: sc.returnChuaScan,
     },
     scanFolder: scan.folder,
-    // Rong khi bien do loc tho con du; co chu = phai noi rong (xem .env)
-    canhBao: canhBaoBienDo,
-    chenhLechMax: Number.isFinite(lech) ? lech : null,
     charts: {
       tatReturn: scan.charts.tatReturn,
       byDept: {
@@ -2881,9 +2749,14 @@ function amosDayExact(range) {
 }
 
 async function qReceiving(range, f) {
+  const dx = amosDayExact(range);
+  // SO TRUC TIEP, khong dung tham so @p (tham so hay chan viec day dieu kien
+  // xuong may chu AMOS - xem giai thich o pickslipTemp).
+  const dFrom = dx.fromDayX;
+  const dTo = dx.toDayX;
   const params = {
     from: range.from, to: range.to, top: CONFIG.maxRows,
-    amosEpoch: CONFIG.amosEpoch, ...amosDayExact(range),
+    amosEpoch: CONFIG.amosEpoch, ...dx,
   };
   const d2v = (col) =>
     `DATEADD(DAY, TRY_CONVERT(int, TRY_CONVERT(float, ${col})), TRY_CONVERT(datetime, @amosEpoch))`;
@@ -2907,7 +2780,23 @@ async function qReceiving(range, f) {
         SELECT 1 FROM #hi c WHERE c.vm = 'CR' AND c.recdetailno = x.recdetailno)`;
 
   const text = `
+    IF OBJECT_ID('tempdb..#hraw') IS NOT NULL DROP TABLE #hraw;
     IF OBJECT_ID('tempdb..#hi') IS NOT NULL DROP TABLE #hi;
+
+    -- BUOC 1 (hoi AMOS): CHI cot THO, WHERE chi co dieu kien thuan (VM va
+    --   khoang ngay dang SO TRUC TIEP). Khong RTRIM/TRY_CONVERT/DATEADD o day:
+    --   da do duoc rang cac ham trong cau gui xuong AMOS lam cham gap nhieu lan.
+    SELECT
+      h.[VOUCHERNO], h.[PARTNO], h.[SERIALNO], h.[BATCHNO], h.[PSN], h.[LABELNO],
+      h.[HISTORYNO_I], h.[RECDETAILNO_I], h.[STATION], h.[STORE], h.[LOCATION],
+      h.[VM], h.[CONDITION], h.[MAT_CLASS], h.[ORDERNO], h.[OWNER], h.[CREATED_BY],
+      h.[QTY], h.[DEL_DATE], h.[ORDERDATE], h.[MUTATION]
+    INTO #hraw
+    FROM [DWH_DB]..[STG_AMOS].[HISTORY] h
+    WHERE h.[VM] IN ('B1', 'CR')
+      AND h.[DEL_DATE] >= ${dFrom} AND h.[DEL_DATE] < ${dTo};
+
+    -- BUOC 2 (TAI CHO): cat got chuoi + doi ngay AMOS sang datetime.
     SELECT
       RTRIM(h.[VOUCHERNO])                  AS voucherno,
       RTRIM(h.[PARTNO])                     AS partno,
@@ -2931,9 +2820,8 @@ async function qReceiving(range, f) {
       ${d2v('h.[ORDERDATE]')}               AS orderdate,
       ${d2v('h.[MUTATION]')}                AS mutation_date
     INTO #hi
-    FROM [DWH_DB]..[STG_AMOS].[HISTORY] h
-    WHERE h.[VM] IN ('B1', 'CR')
-      AND h.[DEL_DATE] >= @fromDayX AND h.[DEL_DATE] < @toDayX;
+    FROM #hraw h;
+    DROP TABLE #hraw;
     CREATE INDEX IX_hi_rec ON #hi (recdetailno);
     CREATE INDEX IX_hi_by  ON #hi (created_by);
 
@@ -5727,7 +5615,6 @@ app.get('/api/admin/diag/higher', h(async (req, res) => {
 app.get('/api/admin/diag/linkserver', h(async (req, res) => {
   const range = resolveRange(req.query);
   const d = amosDayExact(range);
-  const PAD = CONFIG.pickslipPadDays;
   const buoc = [];
 
   /** Chay 1 buoc, bam gio, KHONG lam vo ca bao cao neu buoc do loi. */
@@ -5735,46 +5622,51 @@ app.get('/api/admin/diag/linkserver', h(async (req, res) => {
     const t = Date.now();
     try {
       const r = await query(sql);
-      buoc.push({ ten, ghiChu, ms: Date.now() - t, soDong: r.length, giaTri: r[0] ?? null });
+      buoc.push({ ten, ghiChu, ms: Date.now() - t, soDong: r[0] ? r[0].so_dong : null });
     } catch (e) {
       buoc.push({ ten, ghiChu, ms: Date.now() - t, loi: e.message });
     }
   };
 
-  await do1('1. PICKSLIP_HEADER (1 bang, loc theo ky)',
-    `PICKSLIP_DATE trong [${d.fromDayX}, ${d.toDayX})`,
-    `SELECT COUNT(*) AS so_dong FROM [DWH_DB]..[STG_AMOS].[PICKSLIP_HEADER] h
-     WHERE h.[PICKSLIP_DATE] >= ${d.fromDayX} AND h.[PICKSLIP_DATE] < ${d.toDayX}`);
-
-  await do1('2a. PICKSLIP_BOOKED (1 bang, CHI loc ngay - dieu kien thuan)',
-    `CREATED_DATE trong [${d.fromDayX - PAD}, ${d.toDayX + PAD})`,
-    `SELECT COUNT(*) AS so_dong FROM [DWH_DB]..[STG_AMOS].[PICKSLIP_BOOKED] p
-     WHERE p.[CREATED_DATE] >= ${d.fromDayX - PAD} AND p.[CREATED_DATE] < ${d.toDayX + PAD}`);
-
-  await do1('2b. PICKSLIP_BOOKED (loc ngay + DU bo loc nghiep vu)',
-    'Cac ham LOWER/RTRIM/ISNULL/TRY_CONVERT co the CHAN viec day dieu kien xuong AMOS. '
-    + 'Neu 2b cham hon han 2a thi nen bo bot cac ham nay va loc lai tai cho.',
-    `SELECT COUNT(*) AS so_dong FROM [DWH_DB]..[STG_AMOS].[PICKSLIP_BOOKED] p
-     WHERE p.[CREATED_DATE] >= ${d.fromDayX - PAD} AND p.[CREATED_DATE] < ${d.toDayX + PAD}
+  const ngay = `h.[PICKSLIP_DATE] >= ${d.fromDayX} AND h.[PICKSLIP_DATE] < ${d.toDayX}`;
+  // Bo loc nghiep vu - CHINH LA thu lam cham (do duoc gap ~21 lan)
+  const bizAmos = `
        AND TRY_CONVERT(float, p.[QTY_BOOKED]) <> 0
        AND p.[STATUS] <> 1 AND p.[STATUS] <> 11
        AND LOWER(RTRIM(ISNULL(p.[LOCATION_FROM], ''))) NOT LIKE '%u/s%'
        AND (LOWER(RTRIM(ISNULL(p.[STORE], ''))) LIKE '%main'
-         OR LOWER(RTRIM(ISNULL(p.[STORE], ''))) LIKE '%vna')`);
+         OR LOWER(RTRIM(ISNULL(p.[STORE], ''))) LIKE '%vna')`;
 
-  await do1('3. GHEP 2 BANG TRONG 1 CAU (cach CU - de so sanh)',
-    'Neu buoc nay cham hon han 1 + 2 thi dung la loi noi bang tren linked server',
+  await do1('A. NOI 2 BANG, dieu kien THUAN (cach DANG DUNG)',
+    'Chi co dieu kien ngay dang so truc tiep, khong ham nao',
     `SELECT COUNT(*) AS so_dong
      FROM [DWH_DB]..[STG_AMOS].[PICKSLIP_BOOKED] p
      JOIN [DWH_DB]..[STG_AMOS].[PICKSLIP_HEADER] h ON h.[PICKSLIPNO] = p.[PICKSLIPNO]
-     WHERE h.[PICKSLIP_DATE] >= ${d.fromDayX} AND h.[PICKSLIP_DATE] < ${d.toDayX}`);
+     WHERE ${ngay}`);
 
-  await do1('4. LOCATION (Repair Admin, buoc 1)',
-    `location_type = ${REPAIR_LOCATION_TYPE}`,
-    `SELECT COUNT(*) AS so_dong FROM [DWH_DB]..[STG_AMOS].[LOCATION] l
-     WHERE l.[location_type] = ${Number(REPAIR_LOCATION_TYPE)}`);
+  await do1('B. NOI 2 BANG + BO LOC NGHIEP VU gui xuong AMOS (cach CU)',
+    'Neu B cham hon han A thi dung la cac ham LOWER/RTRIM/ISNULL/TRY_CONVERT chan viec day dieu kien',
+    `SELECT COUNT(*) AS so_dong
+     FROM [DWH_DB]..[STG_AMOS].[PICKSLIP_BOOKED] p
+     JOIN [DWH_DB]..[STG_AMOS].[PICKSLIP_HEADER] h ON h.[PICKSLIPNO] = p.[PICKSLIPNO]
+     WHERE ${ngay} ${bizAmos}`);
 
-  await do1('5. HISTORY (Receiving, 1 bang)',
+  await do1('C. NOI 2 BANG, dieu kien ngay dung THAM SO @p',
+    'Neu C cham hon A thi tham so cung chan viec day dieu kien -> phai dat so truc tiep',
+    `SELECT COUNT(*) AS so_dong
+     FROM [DWH_DB]..[STG_AMOS].[PICKSLIP_BOOKED] p
+     JOIN [DWH_DB]..[STG_AMOS].[PICKSLIP_HEADER] h ON h.[PICKSLIPNO] = p.[PICKSLIPNO]
+     WHERE h.[PICKSLIP_DATE] >= @fromDayX AND h.[PICKSLIP_DATE] < @toDayX`);
+
+  await do1('D. REPAIR ADMIN - noi 3 bang, dieu kien thuan (cach DANG DUNG)',
+    `location_type = ${REPAIR_LOCATION_TYPE}, OD_DETAIL.status = 0`,
+    `SELECT COUNT(*) AS so_dong
+     FROM [DWH_DB]..[STG_AMOS].[LOCATION] l
+     JOIN [DWH_DB]..[STG_AMOS].[ROTABLES] r ON l.[locationno_i] = r.[locationno_i]
+     JOIN [DWH_DB]..[STG_AMOS].[OD_DETAIL] dd ON r.[psn] = dd.[psn] AND r.[labelno] = dd.[labelno]
+     WHERE l.[location_type] = ${Number(REPAIR_LOCATION_TYPE)} AND dd.[status] = 0`);
+
+  await do1('E. RECEIVING - HISTORY, dieu kien thuan (cach DANG DUNG)',
     `DEL_DATE trong [${d.fromDayX}, ${d.toDayX}), VM IN (B1, CR)`,
     `SELECT COUNT(*) AS so_dong FROM [DWH_DB]..[STG_AMOS].[HISTORY] h
      WHERE h.[VM] IN ('B1', 'CR')
@@ -5782,10 +5674,11 @@ app.get('/api/admin/diag/linkserver', h(async (req, res) => {
 
   res.json({
     ky: { tu: range.from, den: range.to, ngayAmos: d },
-    bienDoCreatedDate: PAD,
     thoiGianChoMotTruyVan: CONFIG.dbRequestTimeout,
-    giaiThich: 'So sanh buoc 3 (ghep 2 bang) voi buoc 1 + 2 (hoi rieng tung bang). '
-      + 'Buoc 3 cham hon nhieu = SQL Server khong day duoc phep noi xuong AMOS.',
+    daBiet: 'Do ngay 2026-08 (ky 1 tuan): noi 2 bang voi dieu kien thuan chi 1.080ms, '
+      + 'nhung cung bang do them bo loc nghiep vu co ham thi 22.806ms (gap 21 lan). '
+      + 'Ket luan: PHEP NOI khong cham - CAC HAM trong WHERE moi lam cham.',
+    giaiThich: 'A = cach dang dung. B/C la cac cach CU de doi chieu; A phai nhanh hon B va C.',
     buoc,
   });
 }));

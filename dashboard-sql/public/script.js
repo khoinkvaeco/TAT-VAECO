@@ -1786,8 +1786,6 @@ async function loadPickslip() {
     renderPickKpis(data.kpis);
     renderPickCharts(data.charts);
     renderScanBar('#pickScanBar', data.scanFolder);
-    // Canh bao bien do loc tho theo CREATED_DATE (xem pickslipTemp o server)
-    if (data.canhBao) showError('⚠ ' + data.canhBao);
     $('#pickDesc').textContent =
       'PICKSLIP_BOOKED × PICKSLIP_HEADER. Kỳ theo PICKSLIP_DATE (ngày AMOS); đơn vị đếm là SỐ DÒNG. '
       + 'Cancel / Return phân biệt bằng ĐUÔI của PICKSLIP_TEXT (…cancel · …cancel booking · …return) kèm QTY_CANCELED ≠ 0. '

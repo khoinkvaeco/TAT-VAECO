@@ -90,9 +90,44 @@ function findApplyOnLinkedServer(sql) {
   return hits;
 }
 
+/**
+ * LUAT 3: KHONG boc HAM quanh cot trong WHERE cua cau gui xuong LINKED SERVER.
+ * Da DO THAT bang /api/admin/diag/linkserver: cung mot bang, cung khoang ngay,
+ * chi them bo loc co LOWER/RTRIM/ISNULL/TRY_CONVERT vao WHERE la
+ *     1.096 ms  ->  22.806 ms   (gap 21 lan)
+ * vi cac ham do CHAN SQL Server day dieu kien xuong may chu AMOS.
+ * Cach dung: keo COT THO ve #temp truoc, roi loc/cat got TAI CHO.
+ *
+ * CHI LA CANH BAO, KHONG lam TRUOT: luat nay khong du chinh xac de chan.
+ * No soi theo tung lenh tach boi ';', ma mot lenh co the vua doc bang tam vua
+ * noi sang [DWH_DB] (vd LEFT JOIN bang SIGN) - khi do ham nam o WHERE cua bang
+ * TAM van bi bat nham. Muon chac chan thi do bang /api/admin/diag/linkserver.
+ */
+const HAM_CHAM = /\b(LOWER|UPPER|RTRIM|LTRIM|ISNULL|TRY_CONVERT|CONVERT|CAST|SUBSTRING|LEFT|RIGHT|REPLACE)\s*\(/i;
+function findFuncInRemoteWhere(sql) {
+  const hits = [];
+  for (const lenh of stripComments(sql).split(';')) {
+    if (!/\[DWH_DB\]\.\./i.test(lenh)) continue;      // khong cham linked server
+    const iw = lenh.toUpperCase().lastIndexOf('WHERE');
+    if (iw < 0) continue;
+    let dk = lenh.slice(iw + 5);
+    // Cat phan sau WHERE (GROUP BY / ORDER BY / OPTION) cho khoi bat nham
+    dk = dk.split(/\bGROUP\s+BY\b|\bORDER\s+BY\b|\bOPTION\s*\(/i)[0];
+    const m = dk.match(HAM_CHAM);
+    if (m) {
+      hits.push(`WHERE cua cau gui xuong [DWH_DB].. co ${m[1].toUpperCase()}(): `
+        + dk.trim().replace(/\s+/g, ' ').slice(0, 110) + '…');
+    }
+  }
+  return hits;
+}
+
 const RULES = [
   { ten: 'Ham gom chua subquery (Msg 130)', tim: findAggWithSubquery },
   { ten: 'APPLY vao linked server', tim: findApplyOnLinkedServer },
+  // canhBao = chi nhac, khong lam TRUOT (xem giai thich o findFuncInRemoteWhere)
+  { ten: 'Ham trong WHERE gui xuong linked server (cham gap ~21 lan)',
+    tim: findFuncInRemoteWhere, canhBao: true },
 ];
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -147,18 +182,26 @@ async function main() {
   }
 
   console.log(`Da soi ${daSoi.size} cau SQL khac nhau (${lines.length} luot goi).`);
+  const chan = [];
   for (const r of RULES) {
-    const n = loi.filter((x) => x.rule === r.ten).length;
-    console.log(`  ${n ? '✖' : '✔'} ${r.ten}: ${n ? n + ' loi' : 'khong co'}`);
+    const cua = loi.filter((x) => x.rule === r.ten);
+    const dau = cua.length ? (r.canhBao ? '⚠' : '✖') : '✔';
+    console.log(`  ${dau} ${r.ten}: ${cua.length ? cua.length + (r.canhBao ? ' cho can xem lai' : ' loi') : 'khong co'}`);
+    if (r.canhBao) {
+      for (const x of cua.slice(0, 3)) console.log(`      · ${x.chiTiet}`);
+      if (cua.length > 3) console.log(`      · … va ${cua.length - 3} cho nua`);
+    } else {
+      chan.push(...cua);
+    }
   }
   try { fs.unlinkSync(OUT); } catch (_) { /* khong sao */ }
 
-  if (loi.length) {
+  if (chan.length) {
     console.error('\n✖ TRUOT - SQL Server se bao loi khi chay that:');
-    for (const x of loi) console.error(`   [${x.rule}] ${x.chiTiet}`);
+    for (const x of chan) console.error(`   [${x.rule}] ${x.chiTiet}`);
     process.exit(1);
   }
-  console.log('\n✔ DAT: khong cau SQL nao dinh cac loi da tung gap.');
+  console.log('\n✔ DAT: khong cau SQL nao dinh cac loi CHAC CHAN vo khi chay that.');
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });
