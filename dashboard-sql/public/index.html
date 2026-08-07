@@ -118,7 +118,9 @@
     <div class="flex gap-1 border-b border-hair">
       <button data-tab="dashboard" class="mainTab">📊 Tổng quan</button>
       <button data-tab="reports" class="mainTab">📋 Các Báo cáo khác </button>
-      <button data-tab="lgc" class="mainTab">🏬 LGC</button>
+      <!-- LGC đang THỬ NGHIỆM: ẩn khỏi thanh tab, chỉ vào được bằng cách gõ
+           thêm /lgc trên thanh địa chỉ (script.js sẽ bỏ 'hidden' khi ở /lgc). -->
+      <button data-tab="lgc" class="mainTab hidden">🏬 LGC</button>
       <button data-tab="partlookup" class="mainTab">🔎 Tra cứu Part On/Off</button>
     </div>
   </nav>
@@ -212,10 +214,30 @@
          quan tâm nhóm này → có thể vào thẳng bằng trang /lgc.
          ========================================================================= -->
     <section id="tab-lgc" class="hidden">
-      <div class="flex gap-1 flex-wrap mb-4">
+      <div class="flex gap-1 flex-wrap items-center mb-4">
         <button data-lgc="pickslip" class="lgcTab active">📦 Quản lý xuất kho</button>
         <button data-lgc="receiving" class="lgcTab">📥 Receiving</button>
         <button data-lgc="repair" class="lgcTab">🛠 Repair Admin</button>
+        <!-- KHÔNG tự chạy truy vấn khi mở tab: các truy vấn này nặng (linked
+             server), người dùng chọn kỳ/Station xong mới bấm nút này. -->
+        <button id="lgcRun" class="btn-accent ml-auto">▶ Chạy kiểm tra</button>
+      </div>
+
+      <!-- Trạng thái CHƯA CHẠY: hiện thay cho toàn bộ nội dung của tab con -->
+      <div id="lgcIdle" class="card">
+        <h3 class="card-title mb-1">⏸ Chưa chạy truy vấn</h3>
+        <p class="text-sm text-secondary mb-1">
+          Đang xem: <b id="lgcIdleName">—</b>
+        </p>
+        <p class="text-sm text-muted">
+          Chọn <b>Kỳ báo cáo</b> (tháng / tuần / quý / năm) và <b>Station · Store · Trung tâm</b>
+          ở thanh lọc phía trên, rồi bấm <b>▶ Chạy kiểm tra</b>.
+        </p>
+        <p class="text-xs text-muted mt-2">
+          ⏳ Các truy vấn của LGC đọc dữ liệu AMOS qua linked server nên <b>có thể mất khá lâu</b> —
+          vì vậy tab này <b>không tự chạy</b> khi mở, và cũng không tự chạy lại khi bạn đổi bộ lọc.
+          Kỳ càng dài thì càng lâu; nên bắt đầu bằng <b>1 tháng</b>.
+        </p>
       </div>
 
     <!-- ---------- LGC ▸ Quản lý xuất kho ---------- -->

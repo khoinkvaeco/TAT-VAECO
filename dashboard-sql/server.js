@@ -2759,13 +2759,21 @@ async function qReceiving(range, f) {
     CREATE INDEX IX_hi_by  ON #hi (created_by);
 
     -- [0] Dem tong quan (truoc/sau khi loai phieu huy nhap)
+    --     LUU Y: KHONG duoc dat EXISTS(...) BEN TRONG SUM(). SQL Server bao
+    --     "Cannot perform an aggregate function on an expression containing an
+    --     aggregate or a subquery". Vi vay danh dau co_cr o mot lop SELECT ben
+    --     trong, lop ngoai chi cong tren cot thuong.
     SELECT
-      SUM(CASE WHEN x.vm = 'B1' THEN 1 ELSE 0 END) AS b1_tho,
-      SUM(CASE WHEN x.vm = 'CR' THEN 1 ELSE 0 END) AS cr_huy,
-      SUM(CASE WHEN x.vm = 'B1' AND EXISTS (
-            SELECT 1 FROM #hi c WHERE c.vm = 'CR' AND c.recdetailno = x.recdetailno)
-          THEN 1 ELSE 0 END) AS b1_bi_huy
-    FROM #hi x;
+      SUM(CASE WHEN t.vm = 'B1' THEN 1 ELSE 0 END) AS b1_tho,
+      SUM(CASE WHEN t.vm = 'CR' THEN 1 ELSE 0 END) AS cr_huy,
+      SUM(CASE WHEN t.vm = 'B1' AND t.co_cr = 1 THEN 1 ELSE 0 END) AS b1_bi_huy
+    FROM (
+      SELECT x.vm,
+             CASE WHEN EXISTS (SELECT 1 FROM #hi c
+                               WHERE c.vm = 'CR' AND c.recdetailno = x.recdetailno)
+                  THEN 1 ELSE 0 END AS co_cr
+      FROM #hi x
+    ) t;
 
     -- [1] Tong so dong sau khi loc (de biet bang chi tiet co bi cat khong)
     SELECT COUNT(*) AS tong_dong, COUNT(DISTINCT x.voucherno) AS tong_phieu

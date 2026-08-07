@@ -1,0 +1,164 @@
+/**
+ * SQLCHECK - soi CAU SQL THAT ma server dung cau, tim loi ma SQL Server chi bao
+ * khi chay that.
+ * ---------------------------------------------------------------------------
+ * VI SAO CAN: `npm run smoke` chay cac ham dung cau SQL nhung chet o buoc KET
+ * NOI, nen no chi bat duoc loi LAP TRINH JavaScript. Loi CU PHAP/NGU NGHIA SQL
+ * van lot. Da dinh that mot lan:
+ *
+ *     SUM(CASE WHEN ... EXISTS (SELECT ...) ... END)
+ *     -> Msg 130: "Cannot perform an aggregate function on an expression
+ *        containing an aggregate or a subquery"
+ *
+ * Tab Receiving vo hoan toan khi chay that, trong khi smoke van bao DAT.
+ *
+ * CACH LAM: bat server o che do LIVE nhung thay module 'mssql' bang ban gia
+ * (tools/sqlspy.js) - moi cau lenh duoc GHI LAI va tra ve ket qua rong, nen
+ * endpoint chay het cac buoc. Sau do soi tung cau lenh bang cac luat duoi day.
+ *
+ * CHAY:  npm run sqlcheck   (da nam trong `npm run smoke`)
+ */
+const { spawn } = require('child_process');
+const path = require('path');
+const fs = require('fs');
+const os = require('os');
+
+const PORT = Number(process.env.SQLCHECK_PORT || 3398);
+const BASE = `http://127.0.0.1:${PORT}`;
+const OUT = path.join(os.tmpdir(), `sqlspy-${process.pid}.jsonl`);
+
+const ENDPOINTS = [
+  '/api/tat/departments', '/api/tat/cuvt', '/api/dashboard',
+  '/api/reports/returned-unservice', '/api/reports/issued-not-installed',
+  '/api/reports/removed-not-returned', '/api/reports/not-reconciled',
+  '/api/reports/manual-pair', '/api/reports/removed-before-installed',
+  '/api/reports/other', '/api/reports/return-store-tat', '/api/reports/repair-admin',
+  '/api/pickslip', '/api/receiving',
+];
+
+/** Tim vi tri dau ')' dong lai cho '(' o vi tri `open`. */
+function matchParen(s, open) {
+  let depth = 0;
+  for (let i = open; i < s.length; i++) {
+    if (s[i] === '(') depth++;
+    else if (s[i] === ')') { depth--; if (!depth) return i; }
+  }
+  return -1;
+}
+
+/** Bo chu thich `-- ...` de khong bat nham tu khoa nam trong loi giai thich. */
+function stripComments(sql) {
+  return sql.replace(/--[^\n]*/g, '');
+}
+
+const AGG = /\b(SUM|MIN|MAX|AVG|COUNT|STRING_AGG)\s*\(/gi;
+
+/**
+ * LUAT 1: KHONG duoc co subquery (SELECT / EXISTS) BEN TRONG mot ham gom.
+ * Day dung la loi da lam vo tab Receiving.
+ */
+function findAggWithSubquery(sql) {
+  const s = stripComments(sql);
+  const hits = [];
+  let m;
+  AGG.lastIndex = 0;
+  while ((m = AGG.exec(s))) {
+    const open = m.index + m[0].length - 1;
+    const close = matchParen(s, open);
+    if (close < 0) continue;
+    const inner = s.slice(open + 1, close);
+    if (/\bSELECT\b/i.test(inner)) {
+      hits.push(`${m[1].toUpperCase()}(...) chua subquery: ${m[1]}(${inner.trim().slice(0, 90)}…`);
+    }
+    AGG.lastIndex = close; // khong soi lai phan da nam trong
+  }
+  return hits;
+}
+
+/**
+ * LUAT 2: KHONG dat OUTER APPLY / APPLY vao bang tren LINKED SERVER - moi dong
+ * se thanh mot lan goi qua mang. Day la ky luat da thong nhat cho du an.
+ */
+function findApplyOnLinkedServer(sql) {
+  const s = stripComments(sql);
+  const hits = [];
+  const re = /\b(OUTER|CROSS)\s+APPLY\b([\s\S]{0,400})/gi;
+  let m;
+  while ((m = re.exec(s))) {
+    if (/\[DWH_DB\]\.\./i.test(m[2])) hits.push(`${m[1].toUpperCase()} APPLY vao [DWH_DB].. (linked server)`);
+  }
+  return hits;
+}
+
+const RULES = [
+  { ten: 'Ham gom chua subquery (Msg 130)', tim: findAggWithSubquery },
+  { ten: 'APPLY vao linked server', tim: findApplyOnLinkedServer },
+];
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function main() {
+  const srv = spawn(process.execPath, ['-r', path.join(__dirname, 'sqlspy.js'),
+    path.join(__dirname, '..', 'server.js')], {
+    env: {
+      ...process.env,
+      SQLSPY_OUT: OUT,
+      DEMO_MODE: 'false',
+      PORT: String(PORT),
+      DB_SERVER: '127.0.0.1',
+      DB_USER: 'sqlcheck',
+      DB_PASSWORD: 'sqlcheck',
+      SIGN_CACHE: 'false',
+    },
+    stdio: 'ignore',
+  });
+
+  let up = false;
+  for (let i = 0; i < 30 && !up; i++) {
+    await sleep(500);
+    try { await fetch(`${BASE}/api/whoami`); up = true; } catch (_) { /* chua len */ }
+  }
+  if (!up) { srv.kill(); console.error('✖ Khong khoi dong duoc server de soi SQL.'); process.exit(1); }
+
+  for (const ep of ENDPOINTS) {
+    try { await fetch(BASE + ep); } catch (_) { /* khong quan trong: chi can no DUNG CAU */ }
+  }
+  // SIGN_CACHE=false o tren cho ra nhanh "LEFT JOIN (SELECT ... GROUP BY)";
+  // chay them mot luot voi cache BAT de soi ca nhanh con lai.
+  srv.kill();
+  await sleep(300);
+
+  const lines = fs.existsSync(OUT) ? fs.readFileSync(OUT, 'utf8').trim().split('\n').filter(Boolean) : [];
+  if (!lines.length) {
+    console.error('✖ Khong bat duoc cau SQL nao - kiem tra lai sqlspy.');
+    process.exit(1);
+  }
+
+  const loi = [];
+  const daSoi = new Set();
+  for (const line of lines) {
+    let sql;
+    try { sql = JSON.parse(line).sql; } catch (_) { continue; }
+    if (daSoi.has(sql)) continue;
+    daSoi.add(sql);
+    for (const r of RULES) {
+      for (const h of r.tim(sql)) loi.push({ rule: r.ten, chiTiet: h, sql });
+    }
+  }
+
+  console.log(`Da soi ${daSoi.size} cau SQL khac nhau (${lines.length} luot goi).`);
+  for (const r of RULES) {
+    const n = loi.filter((x) => x.rule === r.ten).length;
+    console.log(`  ${n ? '✖' : '✔'} ${r.ten}: ${n ? n + ' loi' : 'khong co'}`);
+  }
+  try { fs.unlinkSync(OUT); } catch (_) { /* khong sao */ }
+
+  if (loi.length) {
+    console.error('\n✖ TRUOT - SQL Server se bao loi khi chay that:');
+    for (const x of loi) console.error(`   [${x.rule}] ${x.chiTiet}`);
+    process.exit(1);
+  }
+  console.log('\n✔ DAT: khong cau SQL nao dinh cac loi da tung gap.');
+}
+
+main().catch((e) => { console.error(e); process.exit(1); });

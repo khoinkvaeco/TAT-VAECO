@@ -1385,7 +1385,7 @@ function applyLgcOnlyMode() {
   const sub = document.querySelector('header .brand-sub');
   if (h1) h1.textContent = 'LGC';
   if (sub) sub.textContent = 'VAECO · Logistics Center · Xuất kho · Receiving · Repair Admin';
-  $$('.mainTab').forEach((b) => { if (b.dataset.tab !== 'lgc') b.classList.add('hidden'); });
+  $$('.mainTab').forEach((b) => b.classList.toggle('hidden', b.dataset.tab !== 'lgc'));
   const nav = document.querySelector('nav .flex');
   if (nav) {
     const a = document.createElement('a');
@@ -1396,18 +1396,58 @@ function applyLgcOnlyMode() {
   }
 }
 
-/** Chuyen tab con trong nhom LGC (xuat kho · receiving · repair). */
+// --- Nhom LGC: KHONG tu chay truy van ------------------------------------
+// Cac truy van cua LGC doc AMOS qua linked server nen nang. Mo tab (hoac doi
+// bo loc) chi hien man hinh "chua chay"; nguoi dung chon ky/station xong bam
+// "Chay kiem tra" thi moi goi API. `lgcRan` nho tab con nao DA chay voi bo loc
+// hien tai - doi bo loc thi xoa het de khoi doc nham so lieu cu.
 const LGC_TABS = ['pickslip', 'receiving', 'repair'];
+const LGC_TAB_NAME = {
+  pickslip: 'Quản lý xuất kho', receiving: 'Receiving', repair: 'Repair Admin',
+};
+const lgcRan = {};
+
+/** Hien noi dung tab con neu DA chay, nguoc lai hien the "chua chay". */
+function renderLgcPanes() {
+  const sub = state.lgcTab;
+  const ran = !!lgcRan[sub];
+  $('#lgcIdle').classList.toggle('hidden', ran);
+  $('#lgcIdleName').textContent = LGC_TAB_NAME[sub] || sub;
+  LGC_TABS.forEach((t) => $(`#lgc-${t}`).classList.toggle('hidden', !(ran && t === sub)));
+}
+
+/** Danh dau moi tab con LGC la CHUA CHAY (dung khi doi bo loc). */
+function resetLgc() {
+  LGC_TABS.forEach((t) => { lgcRan[t] = false; });
+  if (!$('#tab-lgc').classList.contains('hidden')) renderLgcPanes();
+}
+
+/** Chuyen tab con trong nhom LGC (xuat kho · receiving · repair) - KHONG chay. */
 function switchLgcTab(sub) {
   if (!LGC_TABS.includes(sub)) sub = 'pickslip';
   state.lgcTab = sub;
   saveFilters();
   $$('.lgcTab').forEach((b) => b.classList.toggle('active', b.dataset.lgc === sub));
-  LGC_TABS.forEach((t) => $(`#lgc-${t}`).classList.toggle('hidden', t !== sub));
   applyFilterVisibility('lgc:' + sub);
-  if (sub === 'pickslip') loadPickslip();
-  else if (sub === 'receiving') loadReceiving();
-  else loadReport('repair-admin', 'lgcRepair');
+  renderLgcPanes();
+}
+
+/** Bam "Chay kiem tra": chay truy van cho tab con dang mo. */
+async function runLgc() {
+  const sub = state.lgcTab;
+  const btn = $('#lgcRun');
+  btn.disabled = true;
+  btn.textContent = '⏳ Đang chạy…';
+  lgcRan[sub] = true;
+  renderLgcPanes(); // hien khung TRUOC roi moi tai (Tabulator ve rong neu bi an)
+  try {
+    if (sub === 'pickslip') await loadPickslip();
+    else if (sub === 'receiving') await loadReceiving();
+    else await loadReport('repair-admin', 'lgcRepair');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '▶ Chạy kiểm tra';
+  }
 }
 
 // --------------------------------------------------------------------------
@@ -2152,7 +2192,7 @@ async function init() {
     reportCache.clear();
     if (!LGC_ONLY) loadDashboard();
     if (!$('#tab-reports').classList.contains('hidden')) loadReport(state.currentReport);
-    if (!$('#tab-lgc').classList.contains('hidden')) switchLgcTab(state.lgcTab);
+    resetLgc(); // LGC khong tu chay lai - nguoi dung bam "Chay kiem tra"
   };
   window.__applyFilters = applyFilters; // cho drill-down tu bieu do (chartDrill)
 
@@ -2198,6 +2238,7 @@ async function init() {
   // Tab chinh
   $$('.mainTab').forEach((b) => b.addEventListener('click', () => switchTab(b.dataset.tab)));
   $$('.lgcTab').forEach((b) => b.addEventListener('click', () => switchLgcTab(b.dataset.lgc)));
+  $('#lgcRun').addEventListener('click', runLgc);
   if (LGC_ONLY) applyLgcOnlyMode();
   switchTab(LGC_ONLY ? 'lgc' : 'dashboard');
 

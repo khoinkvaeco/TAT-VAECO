@@ -98,6 +98,24 @@ Bật server ở chế độ **live** nhưng trỏ vào một địa chỉ DB kh
 
 Cần thiết vì `DEMO_MODE=true` **không hề gọi** các hàm dựng câu SQL (chúng bị thay bằng dữ liệu mẫu), còn `node --check` chỉ kiểm cú pháp — nên lỗi kiểu *"Cannot access 'dept' before initialization"* lọt qua cả hai, đến lúc chạy thật mới vỡ.
 
+**Giai đoạn 2 — `npm run sqlcheck`** (đã nằm trong `npm run smoke`): soi **chính câu SQL** mà server dựng ra. Giai đoạn 1 chết ở bước *kết nối* nên chỉ bắt được lỗi **JavaScript**; lỗi **ngữ nghĩa SQL** vẫn lọt. Đã dính thật một lần:
+
+```sql
+SUM(CASE WHEN ... EXISTS (SELECT ...) ... END)   -- Msg 130
+-- "Cannot perform an aggregate function on an expression containing
+--  an aggregate or a subquery"  -> tab Receiving vỡ hoàn toàn khi chạy thật,
+--  trong khi smoke vẫn báo ĐẠT.
+```
+
+Cách làm: thay module `mssql` bằng bản giả (`tools/sqlspy.js`) — mỗi câu lệnh được **ghi lại** và trả về kết quả rỗng nên endpoint chạy hết các bước. Sau đó soi từng câu theo các luật:
+
+| Luật | Bắt gì |
+|---|---|
+| **Hàm gom chứa subquery** | `SUM/MIN/MAX/AVG/COUNT(...)` có `SELECT` bên trong → SQL Server báo **Msg 130** |
+| **APPLY vào linked server** | `OUTER/CROSS APPLY` vào `[DWH_DB]..` → mỗi dòng một lần gọi qua mạng (kỷ luật đã thống nhất của dự án) |
+
+Thêm luật mới = thêm một hàm vào mảng `RULES` trong `tools/sqlcheck.js`.
+
 ### Chạy thử không cần SQL Server (DEMO)
 
 Đặt `DEMO_MODE=true` trong `.env` rồi `npm start` — toàn bộ giao diện chạy với dữ liệu mẫu để bạn xem trước.
@@ -128,6 +146,8 @@ Cần thiết vì `DEMO_MODE=true` **không hề gọi** các hàm dựng câu S
 - **Điều hướng — 4 mục chính:** *📊 Tổng quan* · *📋 Các Báo cáo khác* (9 báo cáo) · *🏬 LGC* · *🔎 Tra cứu Part On/Off*.
   Ba việc **của LGC** (*Quản lý xuất kho*, *Receiving*, *Repair Admin*) gom vào **một nhóm “LGC”** có tab con — trước đây nằm rải rác 2 mục menu chính + 1 mục chôn ở cuối danh sách báo cáo. Nhân viên LGC vào thẳng bằng **`/lgc`** (xem mục dưới); các đơn vị khác không phải nhìn thấy nhóm này khi làm việc với TAT.
 - **Chỉ hiện ô lọc CÓ TÁC DỤNG:** thanh lọc trước đây hiện **đủ mọi ô ở mọi tab**, kể cả ô mà truy vấn của tab đó không dùng đến (ví dụ *“Bỏ qua xuất costcenter”* — chỉ có trong nhánh `kho_ser1`, hoàn toàn không xuất hiện ở pickslip / receiving / repair-admin), nên người dùng chỉnh mà số liệu không đổi và tưởng là lỗi. Nay mỗi màn hình chỉ hiện đúng ô tác động lên số liệu đang xem: *Repair Admin* bỏ **Kỳ báo cáo** (ảnh chụp hiện trạng) và **Trung tâm** (chỉ lọc station/store); *Tra cứu Part On/Off* ẩn cả thanh lọc vì có 6 ô tìm riêng. Bảng quy định nằm ở hằng `FILTER_VIEWS` trong `script.js`.
+- **Tab LGC đang THỬ NGHIỆM — ẩn khỏi thanh tab.** Ở trang `/` không thấy mục *🏬 LGC*; muốn vào phải **gõ thêm `/lgc`** trên thanh địa chỉ. Gỡ ẩn khi hết thử nghiệm = bỏ `hidden` ở nút `data-tab="lgc"` trong `index.html`.
+- **LGC KHÔNG tự chạy truy vấn.** Các truy vấn của LGC đọc AMOS qua linked server nên **chậm**. Mở tab (hoặc đổi tab con) chỉ hiện thẻ *⏸ Chưa chạy truy vấn*; chọn kỳ báo cáo / Station / Store / Trung tâm xong bấm **▶ Chạy kiểm tra** thì mới gọi API. **Đổi bộ lọc cũng KHÔNG tự chạy lại** — mọi tab con quay về trạng thái *chưa chạy* để không ai đọc nhầm số liệu của bộ lọc cũ. Trạng thái *đã chạy* nhớ theo từng tab con, nên chuyển qua lại giữa 3 tab con không phải chạy lại. Nút đổi thành *⏳ Đang chạy…* và khoá lại trong lúc truy vấn.
 - **Trang riêng cho LGC — `/lgc`** (`/lgc.html`; **`/kho`, `/kho.html` là địa chỉ cũ, vẫn chạy** để link đã gửi đi không chết): **cùng một `index.html`, cùng `script.js`, cùng service** — chỉ khác điểm vào. Frontend thấy đường dẫn này thì mở thẳng nhóm *LGC*, ẩn các tab TAT, đổi tiêu đề trang thành *VAECO · LGC*, và **không chạy truy vấn dashboard** (nặng, mà tab đó đang ẩn). Có link *“Xem dashboard TAT đầy đủ →”* để quay lại. ⚠️ Đây là **đơn giản hóa giao diện, KHÔNG phải phân quyền** — ai gõ `/` vẫn xem được đầy đủ, đúng như hiện nay (mọi đơn vị đều được xem). Muốn **chặn** thật thì phải chặn ở server như `adminGuard`.
 - **Dashboard:** 9 KPI cards (kèm chip **▲▼ % so với kỳ liền trước** — TAT giảm hiện xanh, tăng hiện đỏ), 4 biểu đồ, bảng chi tiết + tìm kiếm + filter theo cột.
 - **TAT tổng (3 chặng) = TAT install + TAT US return + TAT CUVT** — ba chặng **liên tiếp** của cùng một vòng đời khí tài: (1) xuất kho → lắp lên tàu; (2) tháo khỏi tàu → trả unservice; (3) trả unservice → CUVT nhận. Biểu đồ theo Trung tâm vẽ **cột xếp chồng** nên chiều cao cả cột chính là TAT tổng của trung tâm đó (rê chuột thấy dòng *TAT tổng*); các trung tâm xếp theo tổng giảm dần.

@@ -379,3 +379,10 @@ body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
   color: var(--text-primary);
 }
 .scanbar-warn a { color: var(--accent, #0e6b74); text-decoration: underline; }
+
+/* Nut dang chay: mo di + khong bam duoc (vd "Chay kiem tra" cua tab LGC) */
+.btn-accent:disabled, .btn-export:disabled, .btn-ghost:disabled {
+  opacity: .55;
+  cursor: progress;
+  filter: none;
+}
