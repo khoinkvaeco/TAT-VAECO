@@ -398,6 +398,13 @@ body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .multi-caret { margin-left: auto; opacity: .6; font-size: 11px; }
+/* KHONG phu thuoc Tailwind: neu cdn.tailwindcss.com khong tai duoc (may noi bo
+   bi chan ra ngoai) thi `.hidden` va `.relative` khong ton tai -> ca ba menu se
+   luon mo va de len nhau. Hai dong duoi bao dam menu van an dung va van neo
+   duoi dung nut cua no. */
+#stationWrap, #storeWrap, #deptWrap { position: relative; }
+.multi-menu.hidden { display: none; }
+
 .multi-menu {
   position: absolute; z-index: 50; top: 100%; left: 0; margin-top: 4px;
   min-width: 210px; max-width: 320px;
@@ -428,6 +435,10 @@ body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
 /* Kho dang bi o tich "Bo qua cac kho CAB" loai bo -> bao cho biet chon cung vo ich */
 .multi-opt.bi-loai { opacity: .55; }
 .multi-opt.bi-loai .ghi-chu { font-size: 11px; color: var(--warning); margin-left: auto; }
+/* Nhom ghim (HAN/SGN/DAD): in dam + duong ke tach khoi cac station con lai,
+   de mat nhin ra ngay ba station chinh ma khong phai doc het danh sach. */
+.multi-opt.ghim { font-weight: 600; }
+.multi-opt.het-ghim { margin-bottom: 5px; padding-bottom: 8px; border-bottom: 1px solid var(--hair); }
 .multi-hint {
   padding: 7px 10px; font-size: 11.5px; line-height: 1.45;
   border-top: 1px solid var(--hair); color: var(--text-secondary);

@@ -61,14 +61,16 @@ function applyFilter(rows, f) {
   return rows.filter((r) => {
     // "Bo qua cac kho CAB": dong khong ghi kho van duoc giu (giong server)
     if (f.excludeCab && r.store && CAB_STORES.includes(String(r.store).trim().toUpperCase())) return false;
-    if (f.station) {
-      if (f.station.toUpperCase() === 'OTHER') {
-        if (MAIN.includes((r.station || '').toUpperCase())) return false;
-      } else if (r.station !== f.station) return false;
+    // CA BA o loc deu la DANH SACH (rong = tat ca)
+    if (f.station && f.station.length) {
+      const coOther = f.station.some((v) => String(v).toUpperCase() === 'OTHER');
+      const khop = f.station.includes(r.station)
+        || (coOther && !MAIN.includes((r.station || '').toUpperCase()));
+      if (!khop) return false;
     }
     // f.store la DANH SACH (chon nhieu kho); rong = tat ca
     if (f.store && f.store.length && !f.store.includes(r.store)) return false;
-    if (f.department && r.department !== f.department) return false;
+    if (f.department && f.department.length && !f.department.includes(r.department)) return false;
     // Checkbox "Bo qua xuat costcenter" (chi tac dong dong co truong receiver)
     if (f.excludeCC && 'receiver' in r && isCostcenterReceiver(r.receiver)) return false;
     return true;
@@ -302,7 +304,10 @@ function other(range, f) {
 }
 
 function filters() {
-  return { stations: ['HAN', 'SGN', 'DAD', 'OTHER'], stores: STORES, departments: DEPARTMENTS };
+  // HAN/SGN/DAD len dau cho de chon, phan con lai giu thu tu A-Z (giong server that).
+  const chinh = ['HAN', 'SGN', 'DAD'];
+  const con = STATIONS.filter((v) => !chinh.includes(v)).sort();
+  return { stations: [...chinh, ...con], stores: STORES, departments: DEPARTMENTS };
 }
 
 /** Tra cuu lich su booking mau cho 1 thiet bi (dung cho chatbot o DEMO_MODE). */
@@ -442,7 +447,7 @@ function dashboard(range, f) {
       },
       // Chua chon station -> chia theo STATION; da chon 1 station -> chia theo
       // TRUNG TAM (chia theo station luc do chi con 1 mieng, khong co y nghia).
-      pieStation: (f && f.station)
+      pieStation: (f && f.station && f.station.length === 1)
         ? { groupBy: 'department', labels: pieDeptLabels, values: pieDeptLabels.map(tongVol) }
         : { groupBy: 'station', labels: pieOrder.map((s) => (s === 'OTHER' ? 'Khác' : s)), values: pieOrder.map((s) => stMap.get(s) || 0) },
       deptVolume: {
@@ -584,10 +589,10 @@ const _repairDemoCache = new Map();
 
 /** Danh sach item dang nam o vi tri U/S (dung chung cho 2 bao cao). */
 function repairAdminItems(f) {
-  const ck = JSON.stringify([f && f.station, [...((f && f.store) || [])].sort()]);
+  const ck = JSON.stringify([[...((f && f.station) || [])].sort(), [...((f && f.store) || [])].sort()]);
   if (_repairDemoCache.has(ck)) return _repairDemoCache.get(ck);
   const items = [];
-  const stations = f && f.station ? [f.station] : Object.keys(REPAIR_LOCS);
+  const stations = (f && f.station && f.station.length) ? f.station : Object.keys(REPAIR_LOCS);
   for (const st of stations) {
     for (const loc of REPAIR_LOCS[st] || []) {
       for (let i = 0; i < rndInt(2, 18); i++) {

@@ -72,16 +72,28 @@
         <select id="yearInput" class="finput min-w-[100px]"></select>
       </div>
 
-      <div id="stationWrap">
+      <!-- Station / Store / Trung tam: CHON NHIEU GIA TRI.
+           Dung nut + menu tich chon thay cho <select multiple> vi select multiple
+           bat nguoi dung giu Ctrl, chiem nhieu cho va rat de bo chon nham. -->
+      <div id="stationWrap" class="relative">
         <label class="flabel">Station</label>
-        <select id="stationSelect" class="finput min-w-[120px]">
-          <option value="">Tất cả</option>
-        </select>
+        <button type="button" id="stationBtn" class="finput multi-btn min-w-[130px]"
+                aria-haspopup="listbox" aria-expanded="false">
+          <span id="stationBtnText">Tất cả</span><span class="multi-caret">▾</span>
+        </button>
+        <div id="stationMenu" class="multi-menu hidden" role="listbox">
+          <div class="multi-head">
+            <input id="stationSearch" type="text" placeholder="Tìm station…" class="multi-search" />
+            <div class="multi-acts">
+              <button type="button" id="stationAll" class="multi-act">Chọn tất cả</button>
+              <button type="button" id="stationNone" class="multi-act">Bỏ chọn</button>
+            </div>
+          </div>
+          <div id="stationOptions" class="multi-list"></div>
+          <div id="stationHint" class="multi-hint hidden"></div>
+        </div>
       </div>
 
-      <!-- Store: CHON NHIEU KHO. Dung nut + menu tich chon thay cho
-           <select multiple> vi select multiple bat nguoi dung giu Ctrl,
-           chiem nhieu cho va rat de bo chon nham. -->
       <div id="storeWrap" class="relative">
         <label class="flabel">Store</label>
         <button type="button" id="storeBtn" class="finput multi-btn min-w-[150px]"
@@ -101,11 +113,23 @@
         </div>
       </div>
 
-      <div id="deptWrap">
+      <div id="deptWrap" class="relative">
         <label class="flabel">Trung tâm</label>
-        <select id="deptSelect" class="finput min-w-[150px]">
-          <option value="">Tất cả</option>
-        </select>
+        <button type="button" id="deptBtn" class="finput multi-btn min-w-[160px]"
+                aria-haspopup="listbox" aria-expanded="false">
+          <span id="deptBtnText">Tất cả</span><span class="multi-caret">▾</span>
+        </button>
+        <div id="deptMenu" class="multi-menu hidden" role="listbox">
+          <div class="multi-head">
+            <input id="deptSearch" type="text" placeholder="Tìm trung tâm…" class="multi-search" />
+            <div class="multi-acts">
+              <button type="button" id="deptAll" class="multi-act">Chọn tất cả</button>
+              <button type="button" id="deptNone" class="multi-act">Bỏ chọn</button>
+            </div>
+          </div>
+          <div id="deptOptions" class="multi-list"></div>
+          <div id="deptHint" class="multi-hint hidden"></div>
+        </div>
       </div>
 
       <!-- Bo qua phieu xuat cho costcenter: receiver la so (2 chu so / so thuan), khong phai so tau -->

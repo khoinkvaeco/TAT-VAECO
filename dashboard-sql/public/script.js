@@ -65,9 +65,10 @@ const state = {
   week: '',        // 'YYYY-MM-DD' (ngay tham chieu)
   quarter: '',     // 'YYYY-Qn' (vd 2026-Q3)
   year: '',        // 'YYYY'
-  station: '',
-  store: [],        // CHON NHIEU KHO - mang rong = tat ca
-  department: '',
+  // Ba o loc duoi day deu CHON NHIEU GIA TRI - mang rong = tat ca
+  station: [],
+  store: [],
+  department: [],
   excludeCC: false, // checkbox "Bo qua xuat costcenter" (receiver la so, khong phai so tau)
   excludeCab: false, // checkbox "Bo qua cac kho CAB" (CAB, CAB-TD, P-THA, P-SAF, P-PAN)
   isAdmin: false,   // may nay co quyen SUA (xac nhan doi ung) khong - hoi server
@@ -116,9 +117,9 @@ function buildQuery() {
   if (state.periodType === 'week' && state.week) p.set('week', state.week);
   if (state.periodType === 'quarter' && state.quarter) p.set('quarter', state.quarter);
   if (state.periodType === 'year' && state.year) p.set('year', state.year);
-  if (state.station) p.set('station', state.station);
+  if (state.station.length) p.set('station', state.station.join(','));
   if (state.store.length) p.set('store', state.store.join(','));
-  if (state.department) p.set('department', state.department);
+  if (state.department.length) p.set('department', state.department.join(','));
   if (state.excludeCC) p.set('excludeCC', '1');
   if (state.excludeCab) p.set('excludeCab', '1');
   return p.toString();
@@ -343,11 +344,10 @@ function chartDrill(labels, filterKey) {
     if (!elements || !elements.length) return;
     const label = labels[elements[0].index];
     if (!label) return;
-    const sel = filterKey === 'station' ? '#stationSelect' : '#deptSelect';
-    const next = state[filterKey] === label ? '' : label; // toggle
-    state[filterKey] = next;
-    const el = $(sel);
-    if ([...el.options].some((o) => o.value === next)) el.value = next;
+    // Click cot dang duoc loc rieng le -> bo loc; nguoc lai -> loc dung cot do.
+    const dangLocRieng = state[filterKey].length === 1 && state[filterKey][0] === label;
+    state[filterKey] = dangLocRieng ? [] : [label];
+    renderMultiSelects();
     if (typeof window.__applyFilters === 'function') window.__applyFilters();
   };
 }
@@ -408,7 +408,7 @@ function renderCharts(c) {
   const pieTitle = $('#pieStationTitle');
   if (pieTitle) {
     pieTitle.innerHTML = pieBy === 'department'
-      ? `Phân bổ thiết bị theo Trung tâm <span class="unit">(station ${state.station})</span>`
+      ? `Phân bổ thiết bị theo Trung tâm <span class="unit">(station ${escapeHtml(state.station.join(', '))})</span>`
       : 'Phân bổ thiết bị theo Station';
   }
   destroyChart('pie');
@@ -1252,20 +1252,10 @@ async function loadReport(name, hostKey = 'report') {
 async function loadFilters() {
   try {
     const f = await fetch('/api/filters').then((r) => r.json());
-    const fill = (sel, arr, labelFn) => {
-      const el = $(sel);
-      arr.forEach((v) => {
-        const o = document.createElement('option');
-        o.value = v;
-        o.textContent = labelFn ? labelFn(v) : v;
-        el.appendChild(o);
-      });
-    };
-    // Station: OTHER hien thi "Khac (station con lai)"
-    fill('#stationSelect', f.stations || [], (v) => (v === 'OTHER' ? 'Khác (station còn lại)' : v));
-    STORE_LIST = (f.stores || []).slice();
-    renderStoreMenu();
-    fill('#deptSelect', f.departments || []);
+    // Station: server tra ve DAY DU danh sach, HAN/SGN/DAD da duoc dua len dau
+    multiSelects.station?.setList(f.stations || []);
+    multiSelects.store?.setList(f.stores || []);
+    multiSelects.dept?.setList(f.departments || []);
   } catch (e) {
     // khong chan - loi filter khong lam hong toan bo trang
     console.warn('Khong tai duoc filters:', e.message);
@@ -1273,110 +1263,179 @@ async function loadFilters() {
 }
 
 // --------------------------------------------------------------------------
-// 8b. O CHON NHIEU KHO (Store)
+// 8b. O CHON NHIEU GIA TRI (Station / Store / Trung tam)
 //     Dung nut + menu tich chon thay cho <select multiple>: select multiple
 //     bat nguoi dung giu Ctrl de chon them, chiem nhieu cho tren thanh loc va
 //     rat de bo chon nham chi bang mot cu click.
 //     CHI tai lai du lieu KHI DONG MENU, khong phai moi lan tich - moi truy van
 //     deu di qua linked server nen tich 5 kho ma ban 5 luot la rat lang phi.
+//
+//     Ba o dung CHUNG mot ham dung (taoMultiSelect) de hanh vi giong het nhau:
+//     nguoi dung hoc mot lan la dung duoc ca ba, va sua loi mot cho la sua het.
 // --------------------------------------------------------------------------
-let STORE_LIST = [];          // danh muc kho lay tu /api/filters
-let storeDaDoi = false;       // co thay doi ke tu luc mo menu khong
-let storeApply = () => {};    // ham tai lai du lieu (truyen tu init)
 
 /** Nhan ca chuoi 'A,B' lan mang -> mang khong trung, khong rong. */
-function normStores(v) {
+function normList(v) {
   const arr = Array.isArray(v) ? v : String(v || '').split(',');
   return [...new Set(arr.map((x) => String(x).trim()).filter(Boolean))];
 }
 
-/** Chu tren nut: "Tat ca" / ten kho / "N kho". */
-function storeBtnLabel() {
-  const n = state.store.length;
-  if (!n) return 'Tất cả';
-  if (n <= 2) return state.store.join(', ');
-  return `${n} kho`;
-}
+const multiSelects = {};   // id -> dieu khien cua tung o (setList/render)
 
-function renderStoreMenu() {
-  const box = $('#storeOptions');
-  if (!box) return;
-  const tim = ($('#storeSearch').value || '').trim().toLowerCase();
-  const ds = STORE_LIST.filter((v) => !tim || v.toLowerCase().includes(tim));
-  box.innerHTML = ds.length
-    ? ds.map((v) => {
-      const biLoai = state.excludeCab && CAB_STORES.includes(v.trim().toUpperCase());
-      return `<label class="multi-opt${biLoai ? ' bi-loai' : ''}">
-          <input type="checkbox" value="${escapeHtml(v)}"${state.store.includes(v) ? ' checked' : ''} />
-          <span>${escapeHtml(v)}</span>
-          ${biLoai ? '<span class="ghi-chu">đang bỏ qua</span>' : ''}
-        </label>`;
-    }).join('')
-    : '<div class="multi-opt" style="opacity:.6">Không có kho nào khớp</div>';
-  $('#storeBtnText').textContent = storeBtnLabel();
-  $('#storeBtn').title = state.store.length ? state.store.join(', ') : 'Tất cả các kho';
+/**
+ * Tao mot o chon nhieu gia tri.
+ * @param {object} cfg
+ *   id       - tien to id trong HTML: 'station' | 'store' | 'dept'
+ *   stateKey - khoa trong `state` (mang)
+ *   donVi    - danh tu dem tren nut, vd 'kho' -> "3 kho"
+ *   moTaAll  - title khi khong chon gi
+ *   ghim     - (tuy chon) cac gia tri duoc ghim len dau, ve duong ke phia duoi
+ *   biLoai   - (tuy chon) v => true neu gia tri dang bi mot o tich khac loai bo
+ *   nhacRong - (tuy chon) () => chuoi canh bao, '' neu khong can nhac
+ * @param {Function} apply - ham tai lai du lieu, goi MOT lan khi dong menu
+ */
+function taoMultiSelect(cfg, apply) {
+  const { id, stateKey } = cfg;
+  const q = (hau) => $(`#${id}${hau}`);
+  if (!q('Btn')) return null;              // trang khac (admin) khong co o nay
 
-  // Nhac khi lua chon hien tai bi o "Bo qua cac kho CAB" triet tieu
-  const conLai = state.store.filter((v) => !CAB_STORES.includes(v.trim().toUpperCase()));
-  const hint = $('#storeHint');
-  const canNhac = state.excludeCab && state.store.length && !conLai.length;
-  hint.classList.toggle('hidden', !canNhac);
-  if (canNhac) {
-    hint.textContent = 'Mọi kho đang chọn đều nằm trong nhóm bị "Bỏ qua các kho CAB" '
-      + '→ kết quả sẽ rỗng. Bỏ tích ô đó hoặc chọn thêm kho khác.';
-  }
-}
+  let danhMuc = [];
+  let daDoi = false;
 
-function storeMenuMo() { return !$('#storeMenu').classList.contains('hidden'); }
+  const chon = () => state[stateKey];
+  const locTheoTim = () => {
+    const tim = (q('Search').value || '').trim().toLowerCase();
+    return danhMuc.filter((v) => !tim || v.toLowerCase().includes(tim));
+  };
 
-function moStoreMenu(mo) {
-  const menu = $('#storeMenu');
-  if (mo === storeMenuMo()) return;
-  menu.classList.toggle('hidden', !mo);
-  $('#storeBtn').setAttribute('aria-expanded', String(mo));
-  if (mo) {
-    storeDaDoi = false;
-    $('#storeSearch').value = '';
-    renderStoreMenu();
-    $('#storeSearch').focus();
-  } else if (storeDaDoi) {
-    storeDaDoi = false;
-    storeApply();   // chi tai lai MOT lan, sau khi da chon xong
-  }
-}
+  /** Chu tren nut: "Tat ca" / liet ke / "N <donVi>". */
+  const nhanNut = () => {
+    const ds = chon();
+    if (!ds.length) return 'Tất cả';
+    if (ds.length <= 2) return ds.join(', ');
+    return `${ds.length} ${cfg.donVi}`;
+  };
 
-function initStoreMulti(apply) {
-  storeApply = apply;
-  $('#storeBtn').addEventListener('click', (e) => { e.stopPropagation(); moStoreMenu(!storeMenuMo()); });
-  $('#storeMenu').addEventListener('click', (e) => e.stopPropagation());
-  $('#storeSearch').addEventListener('input', renderStoreMenu);
+  const render = () => {
+    const box = q('Options');
+    if (!box) return;
+    const ds = locTheoTim();
+    box.innerHTML = ds.length
+      ? ds.map((v, i) => {
+        const bo = cfg.biLoai ? cfg.biLoai(v) : false;
+        // Duong ke sau nhom ghim (HAN/SGN/DAD) - chi khi dang xem danh sach day du
+        const ghim = cfg.ghim ? cfg.ghim.includes(v.trim().toUpperCase()) : false;
+        const ghimSau = ghim && ds[i + 1]
+          && !cfg.ghim.includes(String(ds[i + 1]).trim().toUpperCase());
+        return `<label class="multi-opt${bo ? ' bi-loai' : ''}${ghim ? ' ghim' : ''}${ghimSau ? ' het-ghim' : ''}">
+            <input type="checkbox" value="${escapeHtml(v)}"${chon().includes(v) ? ' checked' : ''} />
+            <span>${escapeHtml(v)}</span>
+            ${bo ? '<span class="ghi-chu">đang bỏ qua</span>' : ''}
+          </label>`;
+      }).join('')
+      : '<div class="multi-opt" style="opacity:.6">Không có mục nào khớp</div>';
+    q('BtnText').textContent = nhanNut();
+    q('Btn').title = chon().length ? chon().join(', ') : cfg.moTaAll;
 
-  $('#storeOptions').addEventListener('change', (e) => {
+    const hint = q('Hint');
+    const nhac = cfg.nhacRong ? cfg.nhacRong() : '';
+    hint.classList.toggle('hidden', !nhac);
+    if (nhac) hint.textContent = nhac;
+  };
+
+  const dangMo = () => !q('Menu').classList.contains('hidden');
+
+  const mo = (batMo) => {
+    if (batMo === dangMo()) return;
+    q('Menu').classList.toggle('hidden', !batMo);
+    q('Btn').setAttribute('aria-expanded', String(batMo));
+    if (batMo) {
+      daDoi = false;
+      q('Search').value = '';
+      render();
+      q('Search').focus();
+    } else if (daDoi) {
+      daDoi = false;
+      apply();   // chi tai lai MOT lan, sau khi da chon xong
+    }
+  };
+
+  q('Btn').addEventListener('click', (e) => { e.stopPropagation(); dongTatCaMulti(id); mo(!dangMo()); });
+  q('Menu').addEventListener('click', (e) => e.stopPropagation());
+  q('Search').addEventListener('input', render);
+  q('Options').addEventListener('change', (e) => {
     const el = e.target;
     if (!el.matches('input[type=checkbox]')) return;
-    const v = el.value;
-    state.store = el.checked
-      ? [...new Set([...state.store, v])]
-      : state.store.filter((x) => x !== v);
-    storeDaDoi = true;
-    renderStoreMenu();
+    state[stateKey] = el.checked
+      ? [...new Set([...chon(), el.value])]
+      : chon().filter((x) => x !== el.value);
+    daDoi = true;
+    render();
   });
-  // "Chon tat ca" chi ap cho cac kho DANG HIEN (sau khi tim) - dung y nguoi dung
-  $('#storeAll').addEventListener('click', () => {
-    const tim = ($('#storeSearch').value || '').trim().toLowerCase();
-    const ds = STORE_LIST.filter((v) => !tim || v.toLowerCase().includes(tim));
-    state.store = [...new Set([...state.store, ...ds])];
-    storeDaDoi = true;
-    renderStoreMenu();
+  // "Chon tat ca" chi ap cho cac muc DANG HIEN (sau khi tim) - dung y nguoi dung
+  q('All').addEventListener('click', () => {
+    state[stateKey] = [...new Set([...chon(), ...locTheoTim()])];
+    daDoi = true;
+    render();
   });
-  $('#storeNone').addEventListener('click', () => {
-    state.store = [];
-    storeDaDoi = true;
-    renderStoreMenu();
+  q('None').addEventListener('click', () => {
+    state[stateKey] = [];
+    daDoi = true;
+    render();
   });
 
-  document.addEventListener('click', () => moStoreMenu(false));
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') moStoreMenu(false); });
+  const dk = {
+    id,
+    render,
+    dong: () => mo(false),
+    setList: (ds) => { danhMuc = (ds || []).slice(); render(); },
+  };
+  multiSelects[id] = dk;
+  return dk;
+}
+
+/** Dong cac menu khac khi mo mot menu (khong de hai menu chong nhau). */
+function dongTatCaMulti(tru) {
+  Object.values(multiSelects).forEach((m) => { if (m.id !== tru) m.dong(); });
+}
+
+/** Ve lai ca ba o (vd sau khi doi o tich "Bo qua cac kho CAB"). */
+function renderMultiSelects() {
+  Object.values(multiSelects).forEach((m) => m.render());
+}
+
+function initMultiSelects(apply) {
+  taoMultiSelect({
+    id: 'station',
+    stateKey: 'station',
+    donVi: 'station',
+    moTaAll: 'Tất cả các station',
+    ghim: ['HAN', 'SGN', 'DAD'],   // ba station chinh luon o dau danh sach
+  }, apply);
+
+  taoMultiSelect({
+    id: 'store',
+    stateKey: 'store',
+    donVi: 'kho',
+    moTaAll: 'Tất cả các kho',
+    biLoai: (v) => state.excludeCab && CAB_STORES.includes(v.trim().toUpperCase()),
+    nhacRong: () => {
+      const conLai = state.store.filter((v) => !CAB_STORES.includes(v.trim().toUpperCase()));
+      if (!state.excludeCab || !state.store.length || conLai.length) return '';
+      return 'Mọi kho đang chọn đều nằm trong nhóm bị "Bỏ qua các kho CAB" '
+        + '→ kết quả sẽ rỗng. Bỏ tích ô đó hoặc chọn thêm kho khác.';
+    },
+  }, apply);
+
+  taoMultiSelect({
+    id: 'dept',
+    stateKey: 'department',
+    donVi: 'trung tâm',
+    moTaAll: 'Tất cả các trung tâm',
+  }, apply);
+
+  document.addEventListener('click', () => dongTatCaMulti(null));
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') dongTatCaMulti(null); });
 }
 
 // --------------------------------------------------------------------------
@@ -2374,9 +2433,9 @@ async function init() {
     if (saved.week) state.week = saved.week;
     if (saved.quarter) state.quarter = saved.quarter;
     if (saved.year) state.year = saved.year;
-    state.station = saved.station || '';
-    state.store = normStores(saved.store);
-    state.department = saved.department || '';
+    state.station = normList(saved.station);
+    state.store = normList(saved.store);
+    state.department = normList(saved.department);
     state.excludeCC = !!saved.excludeCC;
     state.excludeCab = !!saved.excludeCab;
     if (LGC_TABS.includes(saved.lgcTab)) state.lgcTab = saved.lgcTab;
@@ -2389,9 +2448,9 @@ async function init() {
     if (urlQ.get('week')) state.week = urlQ.get('week');
     if (urlQ.get('quarter')) state.quarter = urlQ.get('quarter');
     if (urlQ.get('year')) state.year = urlQ.get('year');
-    if (urlQ.has('station')) state.station = urlQ.get('station');
-    if (urlQ.has('store')) state.store = normStores(urlQ.get('store'));
-    if (urlQ.has('department')) state.department = urlQ.get('department');
+    if (urlQ.has('station')) state.station = normList(urlQ.get('station'));
+    if (urlQ.has('store')) state.store = normList(urlQ.get('store'));
+    if (urlQ.has('department')) state.department = normList(urlQ.get('department'));
     state.excludeCC = urlQ.get('excludeCC') === '1';
     state.excludeCab = urlQ.get('excludeCab') === '1';
   }
@@ -2439,15 +2498,13 @@ async function init() {
   $('#weekInput').addEventListener('change', (e) => { state.week = e.target.value; applyFilters(); });
   $('#quarterInput').addEventListener('change', (e) => { state.quarter = e.target.value; applyFilters(); });
   $('#yearInput').addEventListener('change', (e) => { state.year = e.target.value; applyFilters(); });
-  $('#stationSelect').addEventListener('change', (e) => { state.station = e.target.value; applyFilters(); });
-  initStoreMulti(applyFilters);
-  $('#deptSelect').addEventListener('change', (e) => { state.department = e.target.value; applyFilters(); });
+  initMultiSelects(applyFilters);   // Station + Store + Trung tam (chon nhieu)
   // Checkbox "Bo qua xuat costcenter": loai receiver la so roi tinh lai KPI/bieu do tu server
   $('#ccToggle').addEventListener('change', (e) => { state.excludeCC = e.target.checked; applyFilters(); });
   // Checkbox "Bo qua cac kho CAB": loai han cac kho CAB/CAB-TD/P-THA/P-SAF/P-PAN
   $('#cabToggle').addEventListener('change', (e) => {
     state.excludeCab = e.target.checked;
-    renderStoreMenu(); // ve lai de nhan "dang bo qua" trong menu kho cho dung
+    renderMultiSelects(); // ve lai de nhan "dang bo qua" trong menu kho cho dung
     applyFilters();
   });
 
@@ -2503,9 +2560,7 @@ async function init() {
   initPickslip();
   initReceiving();
   checkHealth();
-  await loadFilters(); // doi nap xong option roi moi khoi phuc gia tri da luu
-  $('#stationSelect').value = state.station;
-  $('#deptSelect').value = state.department;
+  await loadFilters(); // nap danh muc roi ve lai nut theo gia tri da khoi phuc
   if (!LGC_ONLY) loadDashboard();
 }
 
