@@ -2492,9 +2492,14 @@ async function pickslipTemp(range, f) {
   // Chi tinh khi QTY_CANCELED <> 0. Tinh TAI CHO tren #raw.
   const txt = "LOWER(RTRIM(ISNULL(r.[PICKSLIP_TEXT], '')))";
   const daHuy = 'TRY_CONVERT(float, r.[QTY_CANCELED]) <> 0';
+  // QUAN TRONG: MOC de biet co huy/tra hay khong la QTY_CANCELED <> 0. Dong nao
+  // QTY_CANCELED <> 0 ma PICKSLIP_TEXT KHONG co tu khoa nao thi VAN LA da
+  // huy/tra - chi la chua biet thuoc loai nao. Truoc day cac dong do bi xep vao
+  // 'NORMAL' (thuc xuat) => DEM THIEU so luong huy/tra. Nay tach rieng 'KHAC'.
   const loai = `CASE
         WHEN ${daHuy} AND (${txt} LIKE '%cancel' OR ${txt} LIKE '%cancel booking') THEN 'CANCEL'
         WHEN ${daHuy} AND ${txt} LIKE '%return' THEN 'RETURN'
+        WHEN ${daHuy} THEN 'KHAC'
         ELSE 'NORMAL' END`;
 
   // BO LOC NGHIEP VU - lay nguyen tu cong cu AMOS_GUI:
@@ -2707,6 +2712,7 @@ async function enrichPickslipRows(rows, allPicking = [], allReturns = []) {
     returnDaScan: 0, returnChuaScan: 0,
     tatReturnAvg: null, tatReturnMax: null,
     tatGioAvg: null, tatGioMax: null,
+    soCoTat: 0, soChinhXacGio: 0,
   };
 
   // --- (1) Scan phieu xuat: dem theo PHIEU, ca ky ---
@@ -2740,13 +2746,24 @@ async function enrichPickslipRows(rows, allPicking = [], allReturns = []) {
       const bi = TAT_RETURN_BUCKETS.findIndex((b) => d >= b.min && d <= b.max);
       if (bi >= 0) buckets[bi] += 1;
     }
-    // TAT theo GIO: chi tinh duoc khi CA HAI dau deu co gio thuc
-    const g = hourDiff(r.gio_xuat, h.return_time_vn);
+    // TAT hoan kho theo GIO.
+    //   Moc DAU  : gio xuat kho THAT neu biet, khong thi lui ve NGAY phieu.
+    //   Moc CUOI : gio ve kho THAT neu biet, khong thi lui ve ngay tra.
+    // Lui ve ngay chi kem chinh xac TRONG MOT NGAY - khac han viec dung
+    // [MUTATION] cua dong booked (do duoc lech toi 8 THANG, da bo).
+    // Truoc day bat buoc CA HAI dau phai co gio that nen bieu do "TAT hoan kho
+    // theo Trung tam" gan nhu KHONG BAO GIO co du lieu - hien ra trong tron.
+    const dau = r.gio_xuat || r.ngay_xuat;
+    const cuoi = h.return_time_vn || h.return_date;
+    const chinhXac = !!(r.gio_xuat && h.return_time_vn);
+    const g = hourDiff(dau, cuoi);
     if (g !== null) {
       gios.push(g);
+      if (chinhXac) st.soChinhXacGio += 1;
       const k = r.department || 'PA';
-      const t = theoTt.get(k) || { so: 0, tongGio: 0, maxGio: 0 };
+      const t = theoTt.get(k) || { so: 0, tongGio: 0, maxGio: 0, chinhXac: 0 };
       t.so += 1; t.tongGio += g; t.maxGio = Math.max(t.maxGio, g);
+      if (chinhXac) t.chinhXac += 1;
       theoTt.set(k, t);
     }
   }
@@ -2758,6 +2775,7 @@ async function enrichPickslipRows(rows, allPicking = [], allReturns = []) {
     st.tatGioAvg = Math.round((gios.reduce((a, b) => a + b, 0) / gios.length) * 10) / 10;
     st.tatGioMax = Math.max(...gios);
   }
+  st.soCoTat = gios.length;
   const ttSorted = [...theoTt.entries()].sort((a, b) => b[1].tongGio / b[1].so - a[1].tongGio / a[1].so);
 
   // --- (3) Gan cot hien thi cho tung dong cua bang chi tiet ---
@@ -2771,6 +2789,7 @@ async function enrichPickslipRows(rows, allPicking = [], allReturns = []) {
     r.return_time_vn = null;
     r.tat_return = null;
     r.tat_gio = null;
+    r.tat_chinh_xac = false;
     r.return_scan = '';
     if (r.loai !== 'RETURN') continue;
 
@@ -2782,8 +2801,10 @@ async function enrichPickslipRows(rows, allPicking = [], allReturns = []) {
     r.return_time_vn = h.return_time_vn || null;
     r.return_scan = scanStateTheoStation(index, r.station, base);
     r.tat_return = dayDiff(r.pickslip_date, h.return_date);
-    // TAT tinh den GIO - chi khi biet gio xuat kho THAT (xem issueVN)
-    r.tat_gio = hourDiff(r.issue_time_vn, h.return_time_vn);
+    // TAT den GIO. Thieu gio that o dau nao thi lui ve NGAY o dau do;
+    // tat_chinh_xac cho biet dong nay co gio that ca hai dau khong.
+    r.tat_gio = hourDiff(r.issue_time_vn || r.pickslip_date, h.return_time_vn || h.return_date);
+    r.tat_chinh_xac = !!(r.issue_time_vn && h.return_time_vn);
   }
 
   return {
@@ -2797,6 +2818,8 @@ async function enrichPickslipRows(rows, allPicking = [], allReturns = []) {
         gioTb: ttSorted.map(([, v]) => Math.round((v.tongGio / v.so) * 10) / 10),
         gioMax: ttSorted.map(([, v]) => Math.round(v.maxGio * 10) / 10),
         soDong: ttSorted.map(([, v]) => v.so),
+        // Bao nhieu dong trong so do biet duoc GIO that (con lai lui ve ngay)
+        soChinhXac: ttSorted.map(([, v]) => v.chinhXac),
       },
     },
   };
@@ -2818,6 +2841,7 @@ async function qPickslip(range, f) {
     SELECT COUNT(*) AS so_dong,
            SUM(CASE WHEN x.loai = 'CANCEL' THEN 1 ELSE 0 END) AS so_cancel,
            SUM(CASE WHEN x.loai = 'RETURN' THEN 1 ELSE 0 END) AS so_return,
+           SUM(CASE WHEN x.loai = 'KHAC' THEN 1 ELSE 0 END) AS so_khac,
            SUM(x.is_cancel) AS so_dong_huy,
            COUNT(DISTINCT x.pickslipno) AS so_phieu,
            COUNT(DISTINCT CASE WHEN x.is_cancel = 1 THEN x.pickslipno END) AS so_phieu_co_huy
@@ -2826,7 +2850,8 @@ async function qPickslip(range, f) {
     -- [1] Theo Trung tam
     SELECT ${dept} AS department, COUNT(*) AS so_dong,
            SUM(CASE WHEN x.loai = 'CANCEL' THEN 1 ELSE 0 END) AS so_cancel,
-           SUM(CASE WHEN x.loai = 'RETURN' THEN 1 ELSE 0 END) AS so_return
+           SUM(CASE WHEN x.loai = 'RETURN' THEN 1 ELSE 0 END) AS so_return,
+           SUM(CASE WHEN x.loai = 'KHAC' THEN 1 ELSE 0 END) AS so_khac
     ${join} WHERE 1 = 1 ${w}
     GROUP BY ${dept};
 
@@ -2897,6 +2922,7 @@ async function qPickslip(range, f) {
       soDong: kpi.so_dong || 0,
       soCancel: kpi.so_cancel || 0,
       soReturn: kpi.so_return || 0,
+      soKhac: kpi.so_khac || 0,
       soDongHuy: kpi.so_dong_huy || 0,
       soDongThuc: (kpi.so_dong || 0) - (kpi.so_dong_huy || 0),
       tyLeHuy: pct(kpi.so_dong_huy || 0, kpi.so_dong || 0),
@@ -2919,6 +2945,8 @@ async function qPickslip(range, f) {
       // Chinh xac den GIO (chi tinh duoc khi AMOS co cot MUTATION_TIME)
       tatGioAvg: sc.tatGioAvg,
       tatGioMax: sc.tatGioMax,
+      soCoTat: sc.soCoTat,
+      soChinhXacGio: sc.soChinhXacGio,
       returnDaScan: sc.returnDaScan,
       returnChuaScan: sc.returnChuaScan,
     },
@@ -2928,10 +2956,11 @@ async function qPickslip(range, f) {
       tatTheoTt: scan.charts.tatTheoTt,
       byDept: {
         labels: deptSorted.map((r) => r.department),
-        thuc: deptSorted.map((r) => r.so_dong - r.so_cancel - r.so_return),
+        thuc: deptSorted.map((r) => r.so_dong - r.so_cancel - r.so_return - (r.so_khac || 0)),
         cancel: deptSorted.map((r) => r.so_cancel),
         ret: deptSorted.map((r) => r.so_return),
-        tyLe: deptSorted.map((r) => pct(r.so_cancel + r.so_return, r.so_dong)),
+        khac: deptSorted.map((r) => r.so_khac || 0),
+        tyLe: deptSorted.map((r) => pct(r.so_cancel + r.so_return + (r.so_khac || 0), r.so_dong)),
       },
       byDay: {
         labels: byDay.map((r) => (r.ngay instanceof Date ? r.ngay.toISOString().slice(0, 10) : String(r.ngay).slice(0, 10))),
@@ -2989,8 +3018,9 @@ async function qReceiving(range, f) {
 
   // Trung tam: theo nguoi tao phieu (CREATED_BY), lui ve 'PA' - giong cac bao
   // cao khac. LEFT JOIN SIGN nen khong the lam mat dong.
-  const dept = deptFromStaff('x.[created_by]', 'sm');
-  const join = `FROM #hi x ${signJoin('x.[created_by]', 'sm')}`;
+  // NGHIEP VU: phieu NHAP kho thong ke theo STATION va STORE, KHONG theo Trung
+  // tam (nhap kho la viec cua kho, khong quy ve trung tam bao duong).
+  // -> khong can noi sang bang SIGN nua, bot mot phep noi o moi cau.
 
   // Bo loc nghiep vu (nguyen van tu AMOS_GUI). STATION dung CONTAINS.
   let w = `
@@ -2999,7 +3029,6 @@ async function qReceiving(range, f) {
       AND NOT (LOWER(x.store) = 'main' AND LOWER(x.location) IN ('shoploc', 'lg5'))`;
   if (f.station) { params.fStation = f.station; w += " AND LOWER(x.station) LIKE '%' + LOWER(@fStation) + '%'"; }
   if (f.store) { params.fStore = f.store; w += ' AND x.store = @fStore'; }
-  if (f.department) { params.fDepartment = f.department; w += ` AND ${dept} = @fDepartment`; }
 
   // Dong B1 con hieu luc = khong co dong CR nao cung RECDETAILNO_I
   const conLai = `x.vm = 'B1' AND NOT EXISTS (
@@ -3070,22 +3099,22 @@ async function qReceiving(range, f) {
 
     -- [1] Tong so dong sau khi loc (de biet bang chi tiet co bi cat khong)
     SELECT COUNT(*) AS tong_dong, COUNT(DISTINCT x.voucherno) AS tong_phieu
-    ${join} WHERE ${conLai} ${w};
+    FROM #hi x WHERE ${conLai} ${w};
 
     -- [2] Bang chi tiet
     SELECT TOP (@top)
       x.station, x.store, x.location, x.voucherno, x.partno, x.serialno, x.batchno,
       x.psn, x.labelno, x.qty, x.tinh_trang, x.mat_class, x.orderno, x.orderdate,
-      x.del_date, x.mutation_date, x.owner, x.created_by, ${dept} AS department,
+      x.del_date, x.mutation_date, x.owner, x.created_by,
       x.historyno, x.recdetailno
-    ${join} WHERE ${conLai} ${w}
+    FROM #hi x WHERE ${conLai} ${w}
     ORDER BY x.del_date DESC, x.voucherno;
 
     -- [3] DANH SACH VOUCHER (distinct) cua TOAN KY - de dem "da/chua scan"
     --     theo PHIEU (mot voucher co nhieu dong) va KHONG bi cat boi TOP(@top).
     --     Nghiep vu yeu cau scan dat 100% nen so nay phai phu het ky.
-    SELECT x.voucherno AS vc_all, MIN(${dept}) AS department, MIN(x.station) AS station
-    ${join} WHERE ${conLai} ${w}
+    SELECT x.voucherno AS vc_all, MIN(x.station) AS station, MIN(x.store) AS store
+    FROM #hi x WHERE ${conLai} ${w}
     GROUP BY x.voucherno;
 
     DROP TABLE #hi;`;
@@ -3107,17 +3136,22 @@ async function qReceiving(range, f) {
 
   let daScan = 0;
   let chuaScan = 0;
-  const byDept = new Map();
+  // Thong ke theo STATION va STORE (khong theo Trung tam - xem ghi chu o tren)
+  const byStation = new Map();
+  const byStore = new Map();
+  const gom = (map, khoa, s) => {
+    const k = (khoa || '').trim() || '(trống)';
+    if (!map.has(k)) map.set(k, { daScan: 0, chuaScan: 0, tong: 0 });
+    const g = map.get(k);
+    g.tong += 1;
+    if (s === 'SCANNED') g.daScan += 1; else if (s === 'CHUA_SCAN') g.chuaScan += 1;
+  };
   for (const v of vouchers) {
     const s = scanStateTheoStation(index, v.station, scanKey(v.vc_all));
     if (s === 'SCANNED') daScan += 1;
     else if (s === 'CHUA_SCAN') chuaScan += 1;
-
-    const dp = v.department || 'PA';
-    if (!byDept.has(dp)) byDept.set(dp, { daScan: 0, chuaScan: 0, tong: 0 });
-    const g = byDept.get(dp);
-    g.tong += 1;
-    if (s === 'SCANNED') g.daScan += 1; else if (s === 'CHUA_SCAN') g.chuaScan += 1;
+    gom(byStation, v.station, s);
+    gom(byStore, v.store, s);
   }
 
   const byDay = new Map();
@@ -3133,7 +3167,9 @@ async function qReceiving(range, f) {
   }
 
   const pct = (a, b) => (b ? Math.round((a / b) * 1000) / 10 : 0);
-  const deptSorted = [...byDept.entries()].sort((a, b) => b[1].tong - a[1].tong);
+  const xepTheoTong = (m) => [...m.entries()].sort((a, b) => b[1].tong - a[1].tong);
+  const stationSorted = xepTheoTong(byStation);
+  const storeSorted = xepTheoTong(byStore);
   const daySorted = [...byDay.entries()].sort((a, b) => a[0].localeCompare(b[0]));
 
   return {
@@ -3152,10 +3188,15 @@ async function qReceiving(range, f) {
     },
     scanFolder: scanIndexStatus(index, dirs.receiving),
     charts: {
-      byDept: {
-        labels: deptSorted.map(([k]) => k),
-        daScan: deptSorted.map(([, v]) => v.daScan),
-        chuaScan: deptSorted.map(([, v]) => v.chuaScan),
+      byStation: {
+        labels: stationSorted.map(([k]) => k),
+        daScan: stationSorted.map(([, v]) => v.daScan),
+        chuaScan: stationSorted.map(([, v]) => v.chuaScan),
+      },
+      byStore: {
+        labels: storeSorted.map(([k]) => k),
+        daScan: storeSorted.map(([, v]) => v.daScan),
+        chuaScan: storeSorted.map(([, v]) => v.chuaScan),
       },
       byDay: {
         labels: daySorted.map(([k]) => k),

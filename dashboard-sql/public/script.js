@@ -1323,7 +1323,8 @@ const FILTER_VIEWS = {
   dashboard: { period: 1, station: 1, store: 1, dept: 1, cc: 1 },
   reports: { period: 1, station: 1, store: 1, dept: 1, cc: 1 },
   'lgc:pickslip': { period: 1, station: 1, store: 1, dept: 1, cc: 0 },
-  'lgc:receiving': { period: 1, station: 1, store: 1, dept: 1, cc: 0 },
+  // Phieu NHAP kho thong ke theo Station/Store, KHONG theo Trung tam
+  'lgc:receiving': { period: 1, station: 1, store: 1, dept: 0, cc: 0 },
   // Repair Admin la ANH CHUP HIEN TRANG: khong theo ky, chi loc station/store.
   'lgc:repair': { period: 0, station: 1, store: 1, dept: 0, cc: 0 },
   // Tra cuu Part On/Off co o tim rieng, khong dung o loc nao ben tren.
@@ -1458,7 +1459,10 @@ let pickTable = null;
 let pickTotalRows = 0;
 let pickLoadSeq = 0;
 
-const PICK_LOAI_LABEL = { CANCEL: 'Cancel', RETURN: 'Return', NORMAL: 'Bình thường' };
+const PICK_LOAI_LABEL = {
+  CANCEL: 'Cancel', RETURN: 'Return',
+  KHAC: 'Hủy/trả khác', NORMAL: 'Bình thường',
+};
 
 // --- Doi chieu FILE SCAN PDF (dung chung cho tab Xuat kho va tab Receiving) ---
 // Gia tri '' = KHONG doc duoc thu muc -> hien '—' chu KHONG bao "chua scan"
@@ -1520,15 +1524,22 @@ function renderScanBar(sel, folders) {
 const COLS_PICKSLIP = [
   {
     title: 'Loại', field: 'loai', hozAlign: 'center', width: 110,
-    headerTooltip: 'Dò ĐUÔI của PICKSLIP_TEXT: …cancel / …cancel booking → Cancel; …return → Return (và QTY_CANCELED ≠ 0)',
+    headerTooltip: 'Mốc là QTY_CANCELED ≠ 0. Rồi dò ĐUÔI của PICKSLIP_TEXT: …cancel / …cancel booking → Cancel; '
+      + '…return → Return; không có từ khóa nào → “Hủy/trả khác” (VẪN tính là hủy/trả, chỉ là chưa phân loại được).',
     formatter: (cell) => {
       const v = cell.getValue();
       if (v === 'CANCEL') return `<span class="tat-badge" style="background:${cssVar('--warning')}22;color:${cssVar('--warning')}">Cancel</span>`;
       if (v === 'RETURN') return `<span class="tat-badge" style="background:${cssVar('--series-4')}22;color:${cssVar('--series-4')}">Return</span>`;
+      if (v === 'KHAC') return `<span class="tat-badge" style="background:${cssVar('--series-5')}22;color:${cssVar('--series-5')}" title="QTY_CANCELED ≠ 0 nhưng PICKSLIP_TEXT không có từ khóa cancel/return">Hủy/trả khác</span>`;
       return '<span style="color:var(--text-muted)">Bình thường</span>';
     },
     headerFilter: 'list',
-    headerFilterParams: { values: { '': 'Tất cả', NORMAL: 'Bình thường', CANCEL: 'Cancel', RETURN: 'Return' } },
+    headerFilterParams: {
+      values: {
+        '': 'Tất cả', NORMAL: 'Bình thường', CANCEL: 'Cancel',
+        RETURN: 'Return', KHAC: 'Hủy/trả khác',
+      },
+    },
   },
   { title: 'Ngày phiếu', field: 'pickslip_date', formatter: fmtDateCell },
   {
@@ -1656,6 +1667,11 @@ function renderPickKpis(k) {
     { label: 'Thực xuất', value: k.soDongThuc, unit: 'dòng', accent: '--good' },
     { label: 'Cancel', value: k.soCancel, unit: 'dòng', accent: '--warning' },
     { label: 'Return', value: k.soReturn, unit: 'dòng', accent: '--series-4' },
+    {
+      label: 'Hủy/trả khác', value: k.soKhac ?? 0, unit: 'dòng', accent: '--series-5',
+      title: 'QTY_CANCELED ≠ 0 nhưng PICKSLIP_TEXT không có từ khóa cancel/return. '
+        + 'VẪN được tính là hủy/trả (trước đây bị xếp nhầm vào “Thực xuất”).',
+    },
     { label: 'Tỷ lệ hủy/trả', value: k.tyLeHuy, unit: '%', accent: '--critical' },
     { label: 'Phiếu có hủy/trả', value: `${k.soPhieuCoHuy}/${k.soPhieu}`, unit: `(${k.tyLePhieuCoHuy}%)`, accent: '--series-3' },
     {
@@ -1673,8 +1689,16 @@ function renderPickKpis(k) {
     {
       label: 'TAT hoàn kho TB', value: n(k.tatGioAvg), unit: 'giờ', accent: '--series-2',
       title: 'Trung bình số GIỜ từ lúc xuất kho đến lúc hàng về kho. '
-        + 'CHỈ tính trên các dòng biết được GIỜ xuất kho thật (xem cột “Giờ xuất kho”); '
-        + 'dòng chỉ biết ngày thì không đưa vào để khỏi làm sai số trung bình.',
+        + 'Thiếu giờ thật ở đầu nào thì lùi về NGÀY ở đầu đó (sai số tối đa 1 ngày). '
+        + 'Xem KPI “Chính xác đến giờ” bên cạnh để biết bao nhiêu dòng có giờ thật cả hai đầu.',
+    },
+    {
+      label: 'Chính xác đến giờ',
+      value: `${k.soChinhXacGio ?? 0}/${k.soCoTat ?? 0}`,
+      unit: `dòng (${k.soCoTat ? Math.round(((k.soChinhXacGio || 0) / k.soCoTat) * 100) : 0}%)`,
+      accent: '--series-3',
+      title: 'Số dòng có GIỜ thật ở CẢ HAI đầu (xuất kho và về kho). '
+        + 'Các dòng còn lại lùi về ngày nên TAT có thể lệch trong phạm vi 1 ngày.',
     },
     {
       label: 'TAT return TB', value: n(k.tatReturnAvg), unit: 'ngày', accent: '--series-2',
@@ -1711,7 +1735,8 @@ function renderPickCharts(c) {
       datasets: [
         { label: 'Thực xuất', data: c.byDept.thuc, backgroundColor: cssVar('--good') },
         { label: 'Cancel', data: c.byDept.cancel, backgroundColor: cssVar('--warning') },
-        { label: 'Return', data: c.byDept.ret, backgroundColor: cssVar('--series-4'), borderRadius: 4 },
+        { label: 'Return', data: c.byDept.ret, backgroundColor: cssVar('--series-4') },
+        { label: 'Hủy/trả khác', data: c.byDept.khac || [], backgroundColor: cssVar('--series-5'), borderRadius: 4 },
       ],
     },
     options: {
@@ -1953,7 +1978,6 @@ const COLS_RECEIVING = [
   { title: 'Station', field: 'station', headerFilter: 'input', width: 90 },
   { title: 'Store', field: 'store', headerFilter: 'input', width: 100 },
   { title: 'Location', field: 'location', headerFilter: 'input', width: 110 },
-  { title: 'Center', field: 'department', headerFilter: 'input', width: 95 },
   { title: 'PSN', field: 'psn', headerFilter: 'input' },
   { title: 'Label', field: 'labelno', headerFilter: 'input' },
   { title: 'Mat class', field: 'mat_class', headerFilter: 'input', width: 100 },
@@ -2003,27 +2027,32 @@ function renderRecvKpis(k) {
 function renderRecvCharts(c) {
   const d = chartDefaults();
 
-  destroyChart('recvDept');
-  charts.recvDept = new Chart($('#chartRecvDept'), {
-    type: 'bar',
-    data: {
-      labels: c.byDept.labels,
-      datasets: [
-        { label: 'Đã scan', data: c.byDept.daScan, backgroundColor: cssVar('--good') },
-        { label: 'Chưa scan', data: c.byDept.chuaScan, backgroundColor: cssVar('--critical'), borderRadius: 4 },
-      ],
-    },
-    options: {
-      ...d.common,
-      interaction: { mode: 'index', intersect: false },
-      scales: {
-        x: { ...d.common.scales.x, stacked: true },
-        y: { ...d.common.scales.y, stacked: true, grace: '8%' },
+  // Phieu NHAP kho thong ke theo STATION va STORE (khong theo Trung tam)
+  const veScan = (ten, canvas, nguon, khoaLoc) => {
+    destroyChart(ten);
+    charts[ten] = new Chart($(canvas), {
+      type: 'bar',
+      data: {
+        labels: nguon.labels,
+        datasets: [
+          { label: 'Đã scan', data: nguon.daScan, backgroundColor: cssVar('--good') },
+          { label: 'Chưa scan', data: nguon.chuaScan, backgroundColor: cssVar('--critical'), borderRadius: 4 },
+        ],
       },
-      onClick: chartDrill(c.byDept.labels, 'department'),
-    },
-    plugins: [segmentValueLabel, stackTotalLabel],
-  });
+      options: {
+        ...d.common,
+        interaction: { mode: 'index', intersect: false },
+        scales: {
+          x: { ...d.common.scales.x, stacked: true },
+          y: { ...d.common.scales.y, stacked: true, grace: '8%' },
+        },
+        onClick: khoaLoc ? chartDrill(nguon.labels, khoaLoc) : undefined,
+      },
+      plugins: [segmentValueLabel, stackTotalLabel],
+    });
+  };
+  veScan('recvStation', '#chartRecvStation', c.byStation, 'station');
+  veScan('recvStore', '#chartRecvStore', c.byStore, 'store');
 
   destroyChart('recvDay');
   charts.recvDay = new Chart($('#chartRecvDay'), {
@@ -2058,6 +2087,7 @@ async function loadReceiving() {
       + 'Đã LOẠI các dòng B1 có RECDETAILNO_I trùng với dòng VM = CR (phiếu nhập đã bị hủy). '
       + 'Bộ lọc: STATION chứa station đang chọn, CONDITION không chứa “us”, STORE thuộc MAIN/VNA, '
       + 'loại riêng STORE = MAIN có LOCATION là SHOPLOC hoặc LG5. '
+      + 'Thống kê theo STATION và STORE (nhập kho không quy về Trung tâm). '
       + 'Cột Scan đối chiếu file <VOUCHERNO>.pdf trong thư mục scan (VOUCHERNO đã bỏ tiền tố “R-”). '
       + '⚠ Thẻ KPI và biểu đồ “Đã scan / Chưa scan” đếm theo PHIẾU (voucher) và tính trên TOÀN KỲ; '
       + 'bảng chi tiết bên dưới đếm theo DÒNG và bị cắt ở MAX_ROWS.';
