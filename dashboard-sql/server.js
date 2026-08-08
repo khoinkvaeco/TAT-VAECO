@@ -4635,6 +4635,11 @@ async function chatRespond(message, ctx) {
   const intent = chatbot.interpret(message, { departments });
   switch (intent.intent) {
     case 'kb': return { intent: intent.intent, reply: intent.answer };
+    // Khop GAN DUNG: noi ro la doan, de nguoi doc con biet ma hoi lai cho ro
+    case 'kb-gan': return {
+      intent: intent.intent,
+      reply: `Mình hiểu câu hỏi của bạn là về “${intent.chuDe}”. Nếu không đúng ý, bạn hỏi lại rõ hơn nhé.\n\n${intent.answer}`,
+    };
     case 'learned': return { intent: intent.intent, reply: intent.answer };
     case 'reconcile': return { intent: intent.intent, reply: await chatAnswerReconcile(intent.term, intent.direction) };
     case 'device': return { intent: intent.intent, reply: await chatAnswerDevice(intent.term) };

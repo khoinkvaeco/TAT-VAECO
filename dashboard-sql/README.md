@@ -832,6 +832,65 @@ danh sách trên. Bảng tạm (`#…`) và biến bảng (`@…`) không tính.
 hiểm hơn nhiều so với một truy vấn chậm. **Đã kiểm chứng** bằng cách cố tình thêm
 `UPDATE [DWH_DB]..[STG_AMOS].[PICKSLIP_HEADER]`; luật bắt đúng và chặn build.
 
+## 7i. Chatbot — hỏi thoải mái trong phạm vi chương trình
+
+Chatbot chạy **hoàn toàn nội bộ** (rule/intent trong `chatbot.js`), **không gửi gì ra
+ngoài**. Ai cũng hỏi được — không phân biệt CUVT hay đơn vị khác, vì nó chỉ trả lời về
+chính chương trình này và số liệu đang hiển thị.
+
+Đã bổ sung kiến thức cho **toàn bộ tính năng mới**: đăng nhập/đổi mật khẩu, khoá tài
+khoản, chọn nhiều Station/Store/Trung tâm, bộ lọc đã lưu, hàng chip "đang lọc", nhãn
+giờ số liệu, so sánh các tháng, vì sao chậm, bảng rỗng, nút Thử lại, cột Scan, phân
+loại Hủy/trả, "(chỉ có ngày)", Receiving, Repair Admin, costcenter, MAX_ROWS, ai lập
+phiếu…
+
+### Hai cơ chế để "hỏi thoải mái" mà vẫn không trả lời bừa
+
+**1. Khớp gần đúng.** Không thể bắt người dùng gõ trúng từ khoá. Nếu không khớp chính
+xác, hệ thống chấm điểm theo tỷ lệ từ trùng; đủ điểm thì vẫn trả lời nhưng **nói rõ là
+đang đoán**: *“Mình hiểu câu hỏi của bạn là về «…». Nếu không đúng ý, bạn hỏi lại rõ
+hơn nhé.”*
+
+**2. Cổng phạm vi.** Câu không dính gì đến chương trình thì **từ chối trả lời**. Trả lời
+bừa tệ hơn không trả lời — người dùng sẽ tin theo. Cổng mở theo **hai đường**: có từ
+chuyên ngành, **hoặc** khớp đủ cụ thể một khoá trong kho kiến thức. Đường thứ hai quan
+trọng: nếu chỉ dựa vào danh sách từ chuyên ngành thì mỗi lần thêm mục KB lại phải nhớ
+thêm từ vào danh sách — hai nơi phải đồng bộ bằng tay. **Đã sập bẫy đó thật** khi thêm
+`costcenter` / `maxrows` / `khoá tài khoản`.
+
+### Ba lỗi khớp nhầm đã sửa — đều cùng một gốc
+
+`hasKey()` trước đây so **chuỗi con** và **không kể thứ tự**, nên:
+
+| Câu hỏi | Khớp nhầm vì | Trả lời sai thành |
+|---|---|---|
+| “thời tiết **hà nội** hôm nay thế nào” | khoá `noi` (mã lý do NOI) | báo cáo Other |
+| “kết quả **bó**ng đá tối **qua**” | khoá `bo qua` — `bo` nằm trong `bong` | hướng dẫn Tính lại TAT |
+| “máy bay bay **cao** **bao** nhiêu” | khoá `bao cao` — khớp đảo ngược | cấu trúc các tab |
+
+Nay `hasKey()` so theo **TỪ** và **đúng thứ tự** (vẫn cho chèn từ ở giữa, nên `lam moi`
+khớp *“**làm** sao lấy số liệu **mới** nhất”*). Danh sách từ chuyên ngành dùng chung
+`hasKey()` — trước đó nó tự kiểm bằng Set, không kể thứ tự, và để lọt đúng lỗi thứ ba.
+
+`thang` / `tuan` / `quy` / `nam` **cố ý không** nằm trong danh sách từ chuyên ngành:
+chúng là từ chỉ thời gian. Để vào thì *“lương tháng này bao nhiêu”* cũng lọt cổng.
+
+### Đo được, không phải đoán: `tools/chatcheck.js`
+
+Yêu cầu “hỏi thoải mái mà trả lời được” chỉ có nghĩa khi **đo** được. File này giữ **55
+câu hỏi mẫu** viết theo kiểu người dùng thật gõ (không dấu, viết tắt, hỏi vòng vo).
+
+Cách làm để con số trung thực: **loạt 2 được viết SAU khi đã chỉnh xong** rồi mới chạy —
+lần đầu chỉ **60%** đúng, lộ ra 6 chủ đề còn thiếu. Bổ sung xong mới đạt 100%.
+
+| | |
+|---|---|
+| Trong phạm vi | **46/46** trả lời được |
+| Ngoài phạm vi | **9/9** từ chối đúng |
+
+Mọi câu ngoài phạm vi trong danh sách đều **từng lọt cổng một lần** trong lúc làm — giữ
+lại hết để không tái phát.
+
 ## 7. Bảo mật & performance
 
 - Mật khẩu chỉ nằm trong `.env` (không hardcode, không commit).

@@ -31,6 +31,21 @@ const SYNONYMS = [
   [/\b(xuat file|tai ve|download|export)\b/g, 'xuat excel'],
   [/\b(hoan tra|tra lai kho|nhap lai kho)\b/g, 'hoan kho'],
   [/\b(kiem dinh|recert|recertify|chung nhan lai)\b/g, 'tra service'],
+  // --- Bo sung: cac tinh nang moi + cach hoi thuong gap ---
+  [/\b(dang nhap|login|sign in|vao trang lgc)\b/g, 'dang nhap'],
+  [/\b(mat khau|password|pass|matkhau)\b/g, 'mat khau'],
+  [/\b(quen mat khau|mat mat khau|khong vao duoc)\b/g, 'quen mat khau'],
+  [/\b(scan|quet|file pdf|ban scan)\b/g, 'scan'],
+  [/\b(phieu xuat|picking list|pickinglist)\b/g, 'phieu xuat'],
+  [/\b(phieu nhap|receiving|nhap kho)\b/g, 'phieu nhap'],
+  [/\b(huy phieu|cancel|huy)\b/g, 'huy'],
+  [/\b(so sanh thang|xu huong thang|nhieu thang|theo thang)\b/g, 'so sanh thang'],
+  [/\b(luu bo loc|bo loc da luu|preset)\b/g, 'bo loc da luu'],
+  [/\b(cham|lau|doi lau|treo|khong chay)\b/g, 'cham'],
+  [/\b(so lieu cu|du lieu cu|khong moi|cache|bo nho dem)\b/g, 'so lieu cu'],
+  [/\b(trong|rong|khong co du lieu|khong ra gi)\b/g, 'bang rong'],
+  [/\b(loi|error|bao do|hong)\b/g, 'loi'],
+  [/\b(ai xem duoc|quyen|phan quyen|access)\b/g, 'quyen'],
 ];
 function expandSyn(n) {
   let s = ' ' + n + ' ';
@@ -38,11 +53,31 @@ function expandSyn(n) {
   return s.replace(/\s+/g, ' ').trim();
 }
 
-/** So khop 1 tu khoa: chua nguyen cum, HOAC moi tu trong cum deu xuat hien. */
+/**
+ * So khop 1 tu khoa: chua nguyen cum, HOAC moi tu trong cum deu xuat hien
+ * NHU MOT TU RIENG.
+ *
+ * ⚠️ Phai so theo TU, khong duoc so chuoi con. Truoc day dung n.includes(t) nen
+ * khoa 'bo qua' khop cau "ket qua BOng da toi QUA" ('bo' nam trong 'bong') va
+ * chatbot tra loi huong dan "Tinh lai TAT" cho mot cau hoi bong da. Loi kieu
+ * nay khong lam gi hong - no chi lam nguoi dung mat long tin.
+ */
 function hasKey(n, key) {
   if (n.includes(key)) return true;
   const toks = key.split(' ').filter(Boolean);
-  return toks.length > 1 && toks.every((t) => n.includes(t));
+  if (toks.length <= 1) return false;
+  // Moi tu phai la MOT TU RIENG va xuat hien DUNG THU TU cua khoa (cho phep
+  // chen tu o giua: 'lam moi' van khop "LAM sao lay so lieu MOI nhat").
+  // Bat buoc dung thu tu vi neu khong, khoa 'bao cao' se khop cau
+  // "may bay bay CAO BAO nhieu" - dao nguoc va lac de hoan toan.
+  const tu = n.split(/[^a-z0-9_]+/).filter(Boolean);
+  let i = 0;
+  for (const t of toks) {
+    const j = tu.indexOf(t, i);
+    if (j < 0) return false;
+    i = j + 1;
+  }
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -146,7 +181,118 @@ const USAGE = [
   {
     keys: ['ky bao cao', 'thang', 'tuan', 'chon ky'],
     answer:
-      'Kỳ báo cáo: chọn "Tháng" (chọn tháng) hoặc "Tuần (từ T2)" (chọn ngày tham chiếu, tuần tính từ Thứ 2). Dữ liệu tự tải lại theo kỳ đã chọn.',
+      'Kỳ báo cáo: chọn "Tháng", "Tuần (từ T2)", "Quý" hoặc "Năm". Dữ liệu tự tải lại theo kỳ đã chọn.',
+  },
+  // --- Cac tinh nang bo sung gan day ---
+  {
+    keys: ['chon nhieu', 'multi select', 'nhieu station', 'nhieu kho', 'nhieu trung tam', 'chon nhieu kho'],
+    answer:
+      'Station / Store / Trung tâm đều CHỌN ĐƯỢC NHIỀU: bấm vào ô để mở menu tích chọn (có ô tìm, nút "Chọn tất cả" / "Bỏ chọn"). Không chọn gì = tất cả. Dữ liệu chỉ tải lại KHI ĐÓNG menu nên tích nhiều mục không bị chậm. Dùng được cả bàn phím: ↑↓ di chuyển, Space tích, Enter chọn, Esc đóng. HAN/SGN/DAD được ghim lên đầu danh sách station.',
+  },
+  {
+    keys: ['bo loc da luu', 'luu bo loc'],
+    answer:
+      'Bộ lọc đã lưu (nút ⭐): đặt tên cho tổ hợp Station/Store/Trung tâm + 2 ô tích hay dùng rồi gọi lại bằng một cú bấm. Nút hiện TÊN bộ lọc đang dùng nếu màn hình trùng khớp. LƯU Ý: kỳ báo cáo KHÔNG nằm trong bộ lọc đã lưu (nếu lưu cả "tháng 8" thì sang tháng sau sẽ sai) — chọn kỳ riêng mỗi lần. Bộ lọc lưu trên máy bạn, không dùng chung với người khác.',
+  },
+  {
+    keys: ['dang loc gi', 'dieu kien dang loc', 'chip', 'xoa bo loc', 'bo loc dang ap dung'],
+    answer:
+      'Hàng "ĐANG LỌC" ngay dưới thanh lọc liệt kê mọi điều kiện đang áp dụng, mỗi cái một chip có dấu × để bỏ nhanh; nút "Xoá tất cả bộ lọc" dọn sạch. Hàng này tự ẩn khi không lọc gì, và chỉ hiện điều kiện CÓ tác dụng trên màn hình bạn đang xem.',
+  },
+  {
+    keys: ['so lieu cu', 'so lieu luc may gio', 'tai lai', 'lam moi'],
+    answer:
+      'Nhãn "Số liệu lúc HH:MM" trên thanh lọc cho biết số liệu được TÍNH lúc nào (không phải lúc bạn mở trang) — máy chủ giữ kết quả vài phút để nhiều người xem cùng lúc không phải hỏi lại SQL Server. Quá 90 giây nhãn đổi màu. Muốn số mới nhất thì bấm "↻ Tải lại" — nó bỏ qua bộ nhớ đệm và hỏi lại thật.',
+  },
+  {
+    keys: ['so sanh thang'],
+    answer:
+      'Bảng "So sánh các tháng" nằm cuối tab Tổng quan: chọn 3 / 6 / 12 tháng rồi bấm "▶ Xem". Có biểu đồ (cột Chưa đối ứng + đường TAT) và bảng số. Tháng đã đóng được máy chủ lưu lại nên hiện rất nhanh (đánh dấu 💾); tháng hiện tại luôn tính lại vì còn đang phát sinh. Đổi bộ lọc thì phải bấm Xem lại.',
+  },
+  {
+    keys: ['cham', 'sao lau', 'mat bao lau moi xong'],
+    answer:
+      'Các truy vấn đọc dữ liệu AMOS đi qua linked server nên có câu mất hàng chục giây — nhất là tab LGC và các báo cáo. Trong lúc chờ, khung "đang tải" hiện NHẬT KÝ TIẾN TRÌNH theo thời gian thực: đang làm bước gì, mỗi bước mất bao lâu, hoặc bạn đang đứng thứ mấy trong hàng đợi. Nếu nhiều người cùng hỏi một truy vấn giống hệt nhau, hệ thống gộp lại chỉ chạy MỘT lần và mọi người dùng chung kết quả.',
+  },
+  {
+    keys: ['bang rong', 'khong thay du lieu'],
+    answer:
+      'Bảng trống thì đọc dòng chữ giữa bảng — nó nói rõ là kỳ này thật sự không có dữ liệu, hay bộ lọc hiện tại không khớp dòng nào (kèm liệt kê điều kiện đang lọc). Cách nhanh nhất: bấm × trên các chip ở hàng "ĐANG LỌC", hoặc "Xoá tất cả bộ lọc". Cũng nên kiểm tra lại Kỳ báo cáo.',
+  },
+  {
+    keys: ['loi', 'thu lai', 'bao loi do'],
+    answer:
+      'Gặp hộp báo lỗi đỏ: bấm nút "↻ Thử lại" ngay trong hộp đó — lỗi hay gặp nhất chỉ là linked server nghẽn nhất thời. Không cần tải lại cả trang. Nếu lặp lại nhiều lần thì báo quản trị (chi tiết lỗi đã ghi ở log máy chủ).',
+  },
+  {
+    keys: ['lgc', 'trang lgc', 'quan ly xuat kho'],
+    answer:
+      'Trang LGC (địa chỉ /lgc) gồm 3 việc nội bộ của kho: Quản lý xuất kho, Receiving (phiếu nhập), Repair Admin. CHỈ nhân viên CUVT đăng nhập được. Trang này KHÔNG tự chạy truy vấn khi mở — chọn kỳ và bộ lọc xong rồi bấm "▶ Chạy kiểm tra", vì các truy vấn ở đây khá lâu.',
+  },
+  {
+    keys: ['dang nhap', 'mat khau', 'doi mat khau'],
+    answer:
+      'Đăng nhập trang LGC: nhập MÃ NHÂN VIÊN và MẬT KHẨU. Lần đầu, mật khẩu chính là mã nhân viên VIẾT HOA; hệ thống sẽ bắt bạn đổi mật khẩu ngay (từ 6 ký tự và không được trùng mã nhân viên). Sai mật khẩu 5 lần liên tiếp thì tài khoản bị khoá 15 phút. Chỉ nhân viên CUVT mới lập được tài khoản.',
+  },
+  {
+    keys: ['quen mat khau'],
+    answer:
+      'Quên mật khẩu: hiện chưa có chức năng tự đặt lại. Liên hệ quản trị viên để xoá tài khoản của bạn trong bảng TAT_USER — sau đó bạn đăng nhập lại bằng mã nhân viên viết hoa như lần đầu và đặt mật khẩu mới.',
+  },
+  {
+    keys: ['quyen', 'ai xem duoc', 'nguoi ngoai'],
+    answer:
+      'Dashboard TAT (trang chủ) mở cho cả công ty xem. Riêng trang LGC chỉ nhân viên CUVT đăng nhập được — cả trang lẫn dữ liệu đều bị chặn ở máy chủ, không phải chỉ ẩn nút. Trang Quản trị chỉ mở cho máy quản trị theo địa chỉ IP.',
+  },
+  {
+    keys: ['scan', 'chua scan', 'da scan', 'thu muc scan'],
+    answer:
+      'Cột "Scan" đối chiếu xem phiếu đã có file PDF trong thư mục scan chưa. Mỗi station một thư mục riêng (cấu hình ở trang Quản trị). Thẻ KPI "Đã scan / Chưa scan" đếm theo PHIẾU và tính trên TOÀN KỲ (một phiếu nhiều dòng chỉ cần một file) — nên số này có thể khác bảng chi tiết vốn đếm theo dòng. Dấu "—" nghĩa là KHÔNG ĐỌC ĐƯỢC thư mục, không phải chưa scan.',
+  },
+  {
+    keys: ['huy', 'return', 'huy tra khac', 'phan loai huy'],
+    answer:
+      'Ở bảng xuất kho, cột "Loại" phân biệt: Bình thường · Cancel · Return · Hủy/trả khác. Mốc để biết CÓ hủy/trả hay không là QTY_CANCELED ≠ 0; sau đó xem đuôi nội dung phiếu để phân loại. Dòng có QTY_CANCELED ≠ 0 nhưng không có từ khoá nào thì xếp vào "Hủy/trả khác" — VẪN được tính là hủy/trả.',
+  },
+  {
+    keys: ['gio xuat kho', 'gio huy', 'gio tra', 'chi co ngay'],
+    answer:
+      'Cột "Giờ xuất kho" và "Giờ hủy / trả" gộp cả ngày lẫn giờ. AMOS không phải lúc nào cũng có GIỜ: khi thiếu, ô hiện NGÀY kèm ghi chú "(chỉ có ngày)" bằng chữ mờ — cố ý không hiện 00:00 để bạn không tưởng đó là giờ thật. Dòng Cancel hiện "(sửa cuối)" vì AMOS không có cột riêng cho giờ hủy, đó chỉ là lần sửa cuối của dòng.',
+  },
+  {
+    keys: ['khoa tai khoan', 'bi khoa', 'khoa 15 phut'],
+    answer:
+      'Tài khoản bị khoá là do sai mật khẩu 5 lần liên tiếp — hệ thống khoá 15 phút rồi tự mở lại, bạn chỉ cần chờ. Nếu không nhớ mật khẩu, liên hệ quản trị viên để đặt lại (xoá tài khoản trong bảng TAT_USER, sau đó bạn đăng nhập bằng mã nhân viên viết hoa như lần đầu).',
+  },
+  {
+    keys: ['nhan vien nao', 'ai lap phieu', 'nguoi lap phieu', 'mech sign', 'booking sign', 'nguoi tao'],
+    answer:
+      'Ai lập phiếu: bảng chi tiết có các cột "Mech sign" (người nhận hàng — cũng là căn cứ xác định Trung tâm), "Booking sign" (người đặt) và "Người tạo". Gõ mã nhân viên vào ô lọc dưới tiêu đề cột để tìm nhanh. Ở bảng Chi tiết TAT còn có "Nhân viên" (người trả unservice) và "Người lập phiếu".',
+  },
+  {
+    keys: ['costcenter', 'cost center', 'xuat costcenter'],
+    answer:
+      'Xuất costcenter là phiếu xuất mà ô Receiver ghi một CON SỐ (ví dụ 15, 1234, 12.5) chứ không phải số tàu — tức xuất cho bộ phận/đơn vị chứ không lắp lên máy bay. Ô tích "Bỏ qua xuất costcenter" trên thanh lọc sẽ loại các phiếu này rồi tính lại KPI và biểu đồ.',
+  },
+  {
+    keys: ['repair admin'],
+    answer:
+      'Repair Admin (trong nhóm LGC) là ẢNH CHỤP HIỆN TRẠNG các thiết bị đang nằm ở vị trí sửa chữa và có đơn hàng chưa về — nên KHÔNG theo kỳ báo cáo, chỉ lọc theo Station/Store. Có phân nhóm theo tuổi đơn hàng (dưới 30 ngày / trên 30 ngày) để biết cái nào tồn lâu.',
+  },
+  {
+    keys: ['maxrows', 'max rows', 'gioi han dong', 'cat bot dong', 'bao nhieu dong'],
+    answer:
+      'MAX_ROWS là giới hạn số dòng một bảng chi tiết trả về (mặc định 5.000) để trang không bị nặng. Khi chạm giới hạn, chỗ đếm số dòng hiện cảnh báo "⚠ chạm giới hạn MAX_ROWS" — lúc đó nên thu hẹp kỳ báo cáo hoặc bộ lọc. Lưu ý các thẻ KPI vẫn tính trên TOÀN KỲ, không bị cắt, nên KPI và bảng có thể lệch nhau.',
+  },
+  {
+    keys: ['da tra chua', 'tra chua', 'kiem tra da tra', 'phieu tra', 'da hoan kho chua'],
+    answer:
+      'Xem một phiếu đã trả về kho chưa: ở bảng Quản lý xuất kho (nhóm LGC), dòng loại Return có cột "Phiếu trả" (số phiếu nhập lại kho), "Giờ hủy / trả" và "TAT return" (số ngày từ lúc xuất đến lúc về kho). "NOT FOUND" nghĩa là chưa tìm thấy phiếu nhập lại. Ở tab Tổng quan thì dùng báo cáo "Chưa đối ứng" để xem thiết bị xuất đi mà chưa quay về.',
+  },
+  {
+    keys: ['phieu nhap'],
+    answer:
+      'Tab Receiving (trong nhóm LGC) thống kê phiếu NHẬP kho theo Station và Store — không theo Trung tâm, vì nhập kho là việc của kho. Kỳ tính theo ngày nhập. Có đối chiếu file scan phiếu nhập; tên file có thể ở dạng "R-259454" hoặc "259454" tuỳ station, hệ thống thử cả hai.',
   },
 ];
 
@@ -268,6 +414,71 @@ function findDeviceCode(raw) {
   return '';
 }
 
+/**
+ * TU THUOC PHAM VI CHUONG TRINH.
+ * Cau hoi khong chua tu nao trong day thi KHONG tra loi - tra "chua hieu".
+ * Vi sao can: truoc day "thoi tiet ha noi hom nay the nao" duoc tra loi (tu
+ * 'noi' trong 'ha noi' khop khoa ma ly do NOI), va "gia vang hom nay bao nhieu"
+ * bi doc thanh cau hoi so lieu vi co 'bao nhieu' + 'hom nay'. Tra loi bua con
+ * te hon khong tra loi: nguoi dung se tin theo.
+ */
+const TU_CHUYEN_NGANH = [
+  'tat', 'doi ung', 'xuat kho', 'nhap kho', 'hoan kho', 'kho', 'phieu', 'thiet bi',
+  'trung tam', 'station', 'store', 'scan', 'huy', 'return', 'unservice', 'service',
+  'install', 'lap', 'thao', 'cuvt', 'lgc', 'dashboard', 'bao cao', 'bo loc', 'loc',
+  'excel', 'mat khau', 'dang nhap', 'quyen', 'so lieu', 'du lieu', 'bang', 'cot',
+  // CO Y khong dua 'thang'/'tuan'/'quy'/'nam' vao day: chung la tu CHI THOI GIAN,
+  // khong phai tu nghiep vu. De vao thi "luong thang nay bao nhieu" cung lot
+  // cong va bi doc thanh cau hoi so lieu. Cau hoi ve ky bao cao that su luon
+  // kem mot tu nghiep vu khac ('tat thang truoc', 'so lieu thang 7'...).
+  'bieu do', 'ky bao cao', 'part', 'serial', 'label',
+  'amos', 'repair', 'receiving', 'picking', 'cancel', 'kpi', 'chi so', 'tra cuu',
+  'cham', 'loi', 'tai lai', 'lam moi', 'trang', 'tab', 'so sanh',
+];
+/**
+ * Cau hoi co dinh den nghiep vu/chuong trinh khong?
+ *
+ * HAI duong vao:
+ *   (a) chua mot tu trong TU_CHUYEN_NGANH (so khop theo TU, khong phai chuoi
+ *       con - de 'noi' trong 'ha noi' khong bi tinh la tu nghiep vu), HOAC
+ *   (b) khop DU CU THE mot khoa nao do trong kho kien thuc.
+ *
+ * (b) quan trong: neu chi dua vao danh sach (a) thi moi lan them muc KB moi lai
+ * phai nho them tu vao danh sach - hai noi phai dong bo bang tay. Da sap bay
+ * that: them muc 'costcenter', 'maxrows', 'khoa tai khoan' xong van bi cong
+ * chan vi quen cap nhat danh sach. Nay them muc KB la tu dong mo pham vi.
+ *
+ * "Du cu the" = khoa >= 2 tu, hoac khoa 1 tu nhung dai >= 6 ky tu. Nguong nay
+ * de khoa ngan nhu 'noi' / 'rob' khong keo cau hoi ngoai le vao.
+ */
+function trongPhamVi(n) {
+  // Dung chung hasKey() de cung theo TU va DUNG THU TU. Truoc day cho nay tu
+  // kiem tra bang Set (khong ke thu tu) nen 'bao cao' khop "bay CAO BAO nhieu"
+  // va cau hoi ngoai le lot cong - dung y het loi da sua trong hasKey().
+  if (TU_CHUYEN_NGANH.some((k) => hasKey(n, k))) return true;
+  for (const item of [...DEFINITIONS, ...USAGE, ...LEARNED]) {
+    for (const k of item.keys) {
+      const toks = k.split(' ').filter(Boolean);
+      const duCuThe = toks.length >= 2 || (toks.length === 1 && toks[0].length >= 6);
+      if (duCuThe && hasKey(n, k)) return true;
+    }
+  }
+  return false;
+}
+
+/** So tu (bo tu mo) cua khoa khop dai nhat trong mot danh sach KB. */
+function doCuThe(list, n) {
+  let best = 0; let ans = null;
+  for (const item of list) {
+    for (const k of item.keys) {
+      if (!hasKey(n, k)) continue;
+      const d = k.split(' ').filter(Boolean).length;
+      if (d > best) { best = d; ans = item.answer; }
+    }
+  }
+  return { do: best, answer: ans };
+}
+
 function interpret(message, ctx = {}) {
   const raw = String(message || '');
   const n = expandSyn(norm(raw)); // bo dau + ap dong nghia
@@ -305,6 +516,9 @@ function interpret(message, ctx = {}) {
     return { intent: 'help' };
   }
 
+  // --- (2b) CONG PHAM VI: cau khong dinh gi den chuong trinh -> khong tra loi ---
+  if (!trongPhamVi(n)) return { intent: 'unknown', suggestions: suggestTopics(n) };
+
   // --- (3) Dinh nghia (uu tien khi hoi "la gi") ---
   if (isDefine) {
     const ans = matchKB(DEFINITIONS, n);
@@ -317,6 +531,21 @@ function interpret(message, ctx = {}) {
   const rankTop = /(cao nhat|top|xep hang|nhieu nhat)/.test(n);
   const rankLow = /(thap nhat|it nhat)/.test(n);
   const wantsSummary = /(tong quan|tong hop|tom tat|summary|ky nay|tinh hinh|so lieu)/.test(n);
+
+  // --- (3b) HUONG DAN THANG khi no CU THE HON cau hoi so lieu ---
+  //     "sao gio xuat kho chi co ngay" co tu 'xuat kho' (mot chi so) nhung y
+  //     nguoi hoi ro rang la HUONG DAN, vi khoa 'chi co ngay' (3 tu) cu the hon
+  //     'xuat kho' (2 tu). Khong co chi so nao thi khoa phai >= 2 tu moi duoc
+  //     uu tien - neu khong 'thang' se nuot moi cau hoi so lieu theo thang.
+  if (!rankTop && !rankLow) {
+    const kb = doCuThe([...USAGE, ...DEFINITIONS, ...LEARNED], n);
+    const mDo = metrics.length
+      ? Math.max(...metrics.map((mt) => Math.max(...mt.keys.filter((k) => hasKey(n, k))
+        .map((k) => k.split(' ').filter(Boolean).length))))
+      : 0;
+    if (kb.answer && kb.do >= 2 && kb.do > mDo) return { intent: 'kb', answer: kb.answer };
+  }
+
   if (metrics.length || rankTop || rankLow || isQuestionWord || period || department || wantsSummary) {
     return {
       intent: 'kpi',
@@ -335,10 +564,47 @@ function interpret(message, ctx = {}) {
   const usage = matchKB(USAGE, n);
   if (usage) return { intent: 'kb', answer: usage };
 
-  // --- (6) Con lai: thu KB dinh nghia lan cuoi, khong thi tra ve unknown ---
+  // --- (6) Thu KB dinh nghia lan cuoi ---
   const anyDef = matchKB(DEFINITIONS, n);
   if (anyDef) return { intent: 'kb', answer: anyDef };
+
+  // --- (7) KHOP GAN DUNG: nguoi dung hoi theo cach cua ho, khong the doi ho
+  //     go trung tu khoa. matchKB() doi PHAI CO DU moi tu trong khoa nen rat
+  //     de truot. O day cham diem theo TY LE tu khop; du diem thi van tra loi,
+  //     nhung noi ro la doan de nguoi doc con biet ma hoi lai.
+  const gan = timGanDung(n);
+  if (gan) return { intent: 'kb-gan', answer: gan.answer, chuDe: gan.chuDe };
+
   return { intent: 'unknown', suggestions: suggestTopics(n) };
+}
+
+/**
+ * Tim muc KB GAN DUNG nhat voi cau hoi.
+ * Cham diem = ty le tu trong khoa xuat hien trong cau hoi. Yeu cau:
+ *   - khop it nhat 1 tu "co nghia" (bo cac tu qua ngan / qua pho bien), VA
+ *   - ty le >= 0.6 (khoa 2 tu phai trung ca 2; khoa 3 tu duoc phep truot 1)
+ * Nguong nay cot de KHONG tra loi bua: tha bao "chua hieu" con hon tra loi
+ * lac de - nguoi dung se tin nham.
+ */
+const TU_MO = new Set(['la', 'gi', 'the', 'nao', 'cua', 'cho', 'khi', 'co', 'thi', 'va', 'o', 'tren', 'trong']);
+function timGanDung(n) {
+  let best = null;
+  for (const item of [...DEFINITIONS, ...USAGE, ...LEARNED]) {
+    for (const k of item.keys) {
+      const toks = k.split(' ').filter((t) => t && !TU_MO.has(t));
+      if (!toks.length) continue;
+      const trung = toks.filter((t) => n.includes(t));
+      if (!trung.length) continue;
+      const diem = trung.length / toks.length;
+      if (diem < 0.6) continue;
+      // Khoa MOT tu thi tu do phai du dai, tranh khop lung tung ('tab', 'loi'...)
+      if (toks.length === 1 && toks[0].length < 5) continue;
+      if (!best || diem > best.diem || (diem === best.diem && trung.length > best.soTu)) {
+        best = { diem, soTu: trung.length, answer: item.answer, chuDe: item.keys[0] };
+      }
+    }
+  }
+  return best;
 }
 
 /** Goi y chu de gan nhat dua tren so tu khoa trung (khi chua hieu cau hoi). */
