@@ -192,6 +192,88 @@ async function queryMulti(text, params = {}) {
 }
 
 // ---------------------------------------------------------------------------
+// 2a. NHAT KY TIEN TRINH THOI GIAN THUC (giong log cua ban Python)
+// ---------------------------------------------------------------------------
+//  VI SAO: truy van LGC di qua linked server, co cau mat hang chuc giay. Truoc
+//  day nguoi dung chi thay MOT vong xoay - khong biet chuong trinh dang lam gi,
+//  con bao lau, hay da treo. Nay server ban tung buoc ve trinh duyet ngay khi
+//  no xay ra.
+//
+//  CACH LAM: trinh duyet tu sinh mot ma viec (job) roi:
+//    1. mo GET /api/progress/:job  (SSE - ket noi mo suot, server day du lieu ve)
+//    2. goi /api/pickslip?...&job=<ma>  nhu binh thuong
+//  Server ghi cac buoc vao JOBS[ma], SSE day ngay ve. Xong thi ban 'done'.
+//
+//  KHONG dung WebSocket: SSE la HTTP thuong, di qua duoc moi proxy noi bo va
+//  chi can vai dong code - trong khi ta chi can MOT chieu server -> trinh duyet.
+// ---------------------------------------------------------------------------
+const JOBS = new Map();          // ma viec -> { buoc: [], nghe: Set<res>, xong, luc }
+const JOB_TTL_MS = 5 * 60 * 1000;
+const JOB_MAX = 200;             // chan phinh bo nho neu client bo ngang lien tuc
+
+/** Don cac viec da qua han (goi moi lan tao viec moi - khong can setInterval). */
+function donJobCu() {
+  const now = Date.now();
+  for (const [ma, j] of JOBS) {
+    if (now - j.luc > JOB_TTL_MS) { j.nghe.forEach((r) => r.end()); JOBS.delete(ma); }
+  }
+  while (JOBS.size > JOB_MAX) JOBS.delete(JOBS.keys().next().value);
+}
+
+/** Ma viec do CLIENT gui len - phai lam sach truoc khi dung lam khoa. */
+function maJobHopLe(v) {
+  const s = String(v || '').trim();
+  return /^[A-Za-z0-9_-]{1,64}$/.test(s) ? s : '';
+}
+
+/**
+ * Tra ve ham ghi nhat ky cho mot ma viec.
+ * Khong co ma viec (client cu, hoac endpoint khong can) -> tra ve ham RONG,
+ * nen cho goi khong phai kiem tra gi ca.
+ * @returns {(text: string, xong?: boolean) => void}
+ */
+function moNhatKy(maRaw) {
+  const ma = maJobHopLe(maRaw);
+  if (!ma) return () => {};
+  donJobCu();
+  if (!JOBS.has(ma)) JOBS.set(ma, { buoc: [], nghe: new Set(), xong: false, luc: Date.now(), t0: Date.now() });
+  const j = JOBS.get(ma);
+  return (text, xong = false) => {
+    const b = { text: String(text), ms: Date.now() - j.t0, luc: new Date().toISOString() };
+    j.buoc.push(b);
+    if (j.buoc.length > 200) j.buoc.shift();     // nhat ky dai bat thuong -> cat bot
+    j.xong = j.xong || xong;
+    const goi = `data: ${JSON.stringify({ ...b, xong: j.xong })}\n\n`;
+    j.nghe.forEach((r) => { try { r.write(goi); } catch (_) { /* client da dong */ } });
+    if (xong) { j.nghe.forEach((r) => { try { r.end(); } catch (_) {} }); j.nghe.clear(); }
+  };
+}
+
+/** Bao ket thuc (ke ca khi loi) - de trinh duyet dong SSE thay vi cho mai. */
+function dongNhatKy(maRaw, text) {
+  const ma = maJobHopLe(maRaw);
+  if (!ma || !JOBS.has(ma)) return;
+  moNhatKy(ma)(text, true);
+}
+
+/**
+ * Bam gio MOT buoc va tu ghi nhat ky ca luc bat dau lan luc xong.
+ * Ghi ca thoi gian chay giup nguoi dung (va ta) biet buoc nao that su cham.
+ */
+async function buoc(ghi, ten, fn) {
+  ghi(`▶ ${ten}…`);
+  const t = Date.now();
+  try {
+    const kq = await fn();
+    ghi(`✔ ${ten} — ${Date.now() - t} ms`);
+    return kq;
+  } catch (e) {
+    ghi(`✘ ${ten} — lỗi sau ${Date.now() - t} ms: ${e.message}`);
+    throw e;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // 2b. CACHE BANG SIGN VE BANG LOCAL (tang toc: bo truy van linked server Oracle)
 //     Moi lan load dashboard co ~10 luot join SIGN; truoc day moi luot deu keo
 //     [DWH_DB]..[STG_AMOS].[SIGN] qua linked server -> rat cham. Nay:
@@ -2368,11 +2450,14 @@ function amosValueToDate(v) {
 
 const _repairMemo = new Map();
 /** Chay 1 lan cho ca 2 bao cao (tong hop + chi tiet) trong vong 60s. */
-async function getRepairAdmin(f) {
+async function getRepairAdmin(f, ghi = () => {}) {
   const key = JSON.stringify([[...(f.station || [])].sort(), [...(f.store || [])].sort()]);
   const hit = _repairMemo.get(key);
-  if (hit && Date.now() - hit.t < 60 * 1000) return hit.p;
-  const p = loadRepairAdmin(f);
+  if (hit && Date.now() - hit.t < 60 * 1000) {
+    ghi('✔ Dùng lại kết quả vừa lấy (còn hạn 60 giây)');
+    return hit.p;
+  }
+  const p = loadRepairAdmin(f, ghi);
   p.catch(() => _repairMemo.delete(key));
   _repairMemo.set(key, { t: Date.now(), p });
   if (_repairMemo.size > 20) {
@@ -2395,7 +2480,7 @@ async function getRepairAdmin(f) {
  *     vi tham so thuong khong duoc day xuong may chu tu xa);
  *   - SELECT chi lay COT THO (khong RTRIM) - cat got de lam o Node ben duoi.
  */
-async function loadRepairAdmin(f) {
+async function loadRepairAdmin(f, ghi = () => {}) {
   const t0 = Date.now();
   // Dat gia tri TRUC TIEP vao cau lenh (khong dung @p) de dieu kien duoc day
   // xuong AMOS. Chuoi duoc nhan doi dau nhay -> khong the chen lenh.
@@ -2404,17 +2489,20 @@ async function loadRepairAdmin(f) {
   if (f.station && f.station.length) where += ` AND l.[station] IN (${f.station.map(q).join(', ')})`;
   if (f.store && f.store.length) where += ` AND l.[store] IN (${f.store.map(q).join(', ')})`;
 
-  const rot = await query(
-    `SELECT l.[locationno_i], l.[station], l.[store], l.[location],
-            r.[partno], r.[serialno], r.[psn], r.[orderno], r.[orderdate], r.[labelno],
-            d.[status] AS od_status, d.[state] AS od_state,
-            d.[backorder] AS od_backorder, d.[ext_state] AS od_ext_state
-     FROM [DWH_DB]..[STG_AMOS].[LOCATION] l
-     JOIN [DWH_DB]..[STG_AMOS].[ROTABLES] r ON l.[locationno_i] = r.[locationno_i]
-     JOIN [DWH_DB]..[STG_AMOS].[OD_DETAIL] d
-       ON r.[psn] = d.[psn] AND r.[labelno] = d.[labelno]
-     ${where}`
-  );
+  const rot = await buoc(ghi,
+    'Nối LOCATION × ROTABLES × OD_DETAIL trên AMOS (qua linked server — bước lâu nhất)',
+    () => query(
+      `SELECT l.[locationno_i], l.[station], l.[store], l.[location],
+              r.[partno], r.[serialno], r.[psn], r.[orderno], r.[orderdate], r.[labelno],
+              d.[status] AS od_status, d.[state] AS od_state,
+              d.[backorder] AS od_backorder, d.[ext_state] AS od_ext_state
+       FROM [DWH_DB]..[STG_AMOS].[LOCATION] l
+       JOIN [DWH_DB]..[STG_AMOS].[ROTABLES] r ON l.[locationno_i] = r.[locationno_i]
+       JOIN [DWH_DB]..[STG_AMOS].[OD_DETAIL] d
+         ON r.[psn] = d.[psn] AND r.[labelno] = d.[labelno]
+       ${where}`
+    ));
+  ghi(`Nhận ${rot.length.toLocaleString('vi')} dòng, đang tính tuổi đơn hàng…`);
   console.log(`[PERF] repair-admin: ${rot.length} dong (${Date.now() - t0}ms)`);
   const tr = (v) => (typeof v === 'string' ? v.trim() : v);
 
@@ -2454,8 +2542,8 @@ async function loadRepairAdmin(f) {
  * Bang tong hop (< 30 ngay / >= 30 ngay theo Station+Store+Vi tri) duoc dung
  * ngay tren trinh duyet tu chinh danh sach nay -> luon khop tuyet doi.
  */
-async function qRepairAdmin(range, f) {
-  const items = await getRepairAdmin(f);
+async function qRepairAdmin(range, f, ghi = () => {}) {
+  const items = await getRepairAdmin(f, ghi);
   return items
     .filter((it) => it.tinh_tong_hop)
     .map(({ od_status, od_state, od_backorder, od_ext_state, tinh_tong_hop, ...rest }) => rest)
@@ -2806,15 +2894,17 @@ const TAT_RETURN_BUCKETS = [
  * @param allPicking  [{ pl_all }]              - phieu xuat DISTINCT ca ky
  * @param allReturns  [{ seq_ret, ngay_xuat }]  - dong Return DISTINCT ca ky
  */
-async function enrichPickslipRows(rows, allPicking = [], allReturns = []) {
+async function enrichPickslipRows(rows, allPicking = [], allReturns = [], ghi = () => {}) {
   const dirs = loadScanDirs();
   // MOI STATION MOT THU MUC (xem loadScanDirs): tra cuu theo station cua TUNG
   // dong, nho vay xem "Tat ca station" van doi chieu dung tung phieu.
-  const index = await loadScanIndex(dirs.picking, 'prefix');
+  const index = await buoc(ghi, 'Đọc thư mục file scan phiếu xuất',
+    () => loadScanIndex(dirs.picking, 'prefix'));
 
   // Hoi HISTORY cho TOAN BO dong Return cua ky (khong chi phan hien tren bang)
   const hist = allReturns.length
-    ? await fetchReturnHistory(allReturns.map((r) => r.seq_ret))
+    ? await buoc(ghi, `Hỏi HISTORY cho ${allReturns.length} dòng Return (chia lô 400/lượt)`,
+      () => fetchReturnHistory(allReturns.map((r) => r.seq_ret)))
     : new Map();
 
   const st = {
@@ -2970,9 +3060,10 @@ async function enrichPickslipRows(rows, allPicking = [], allReturns = []) {
  * Tat ca tinh tren #ps (da o local) nen nhieu phep gom cung chi ton 1 luot
  * hoi linked server duy nhat.
  */
-async function qPickslip(range, f) {
+async function qPickslip(range, f, ghi = () => {}) {
   const params = { from: range.from, to: range.to, top: CONFIG.maxRows, ...amosDayParams(range) };
-  const { pull, dept, join, drop } = await pickslipTemp(range, f);
+  const { pull, dept, join, drop } = await buoc(ghi, 'Dò cấu trúc bảng AMOS (MUTATION_TIME…)',
+    () => pickslipTemp(range, f));
   const w = pickslipWhere(f, dept, params);
 
   const text = `${pull}
@@ -3042,7 +3133,10 @@ async function qPickslip(range, f) {
     ${drop}`;
 
   const tSql = Date.now();
-  const sets = await queryMulti(text, params);
+  ghi(`Kỳ báo cáo: ${range.label} (${String(range.from).slice(0, 10)} → ${String(range.to).slice(0, 10)})`);
+  const sets = await buoc(ghi,
+    'Kéo PICKSLIP_BOOKED × PICKSLIP_HEADER về #temp rồi gom số liệu (qua linked server — bước lâu nhất)',
+    () => queryMulti(text, params));
   console.log(`[PERF] pickslip: SQL ${Date.now() - tSql}ms (ky ${range.from} -> ${range.to})`);
   const pick = (k) => sets.find((s) => s.length && k in s[0]) || [];
   const kpi = (pick('so_phieu')[0]) || {};
@@ -3052,7 +3146,8 @@ async function qPickslip(range, f) {
   const rows = sets.find((s) => s.length && 'pickslipno' in s[0] && 'remarks' in s[0]) || [];
 
   // --- DOI CHIEU FILE SCAN + PHIEU TRA + TAT RETURN (tinh o Node, khong SQL) ---
-  const scan = await enrichPickslipRows(rows, pick('pl_all'), pick('seq_ret'));
+  const scan = await buoc(ghi, 'Đối chiếu file scan + tra phiếu trả trong HISTORY + tính TAT',
+    () => enrichPickslipRows(rows, pick('pl_all'), pick('seq_ret'), ghi));
 
   const pct = (a, b) => (b ? Math.round((a / b) * 1000) / 10 : 0);
   const deptSorted = [...byDept].sort((a, b) => b.so_dong - a.so_dong);
@@ -3144,7 +3239,7 @@ function amosDayExact(range) {
   };
 }
 
-async function qReceiving(range, f) {
+async function qReceiving(range, f, ghi = () => {}) {
   const dx = amosDayExact(range);
   // SO TRUC TIEP, khong dung tham so @p (tham so hay chan viec day dieu kien
   // xuong may chu AMOS - xem giai thich o pickslipTemp).
@@ -3267,7 +3362,10 @@ async function qReceiving(range, f) {
 
     DROP TABLE #hi;`;
 
-  const sets = await queryMulti(text, params);
+  ghi(`Kỳ báo cáo: ${range.label} (${String(range.from).slice(0, 10)} → ${String(range.to).slice(0, 10)})`);
+  const sets = await buoc(ghi,
+    'Kéo HISTORY (VM = B1 + CR) về #temp rồi gom số liệu (qua linked server — bước lâu nhất)',
+    () => queryMulti(text, params));
   const pick = (k) => sets.find((s) => s.length && k in s[0]) || [];
   const cnt = pick('b1_tho')[0] || {};
   const tot = pick('tong_dong')[0] || {};
@@ -3279,7 +3377,8 @@ async function qReceiving(range, f) {
   const vouchers = pick('vc_all');
   const dirs = loadScanDirs();
   // MOI STATION MOT THU MUC - tra cuu theo station cua tung voucher
-  const index = await loadScanIndex(dirs.receiving, 'full');
+  const index = await buoc(ghi, 'Đọc thư mục file scan phiếu nhập',
+    () => loadScanIndex(dirs.receiving, 'full'));
   // TEN FILE SCAN KHAC NHAU THEO STATION:
   //   HAN bo tien to 'R-'  -> file '259454.pdf'
   //   SGN giu nguyen       -> file 'R-259454.pdf'
@@ -4874,7 +4973,14 @@ function startReportScheduler() {
 // 8. EXPRESS APP + ROUTES
 // ---------------------------------------------------------------------------
 const app = express();
-app.use(compression());
+// KHONG nen SSE: `compression` gom du lieu lai roi moi day di, nen nhat ky tien
+// trinh se ra MOT CUC o cuoi thay vi hien dan tung buoc - dung het y nghia.
+app.use(compression({
+  filter: (req, res) => {
+    if (String(res.getHeader('Content-Type') || '').includes('text/event-stream')) return false;
+    return compression.filter(req, res);
+  },
+}));
 // KHONG bat CORS: trang va API cung origin; mo CORS nghia la trang web BAT KY
 // nhan vien mo trong LAN cung doc duoc so lieu qua trinh duyet cua ho.
 app.use(express.json());
@@ -4930,13 +5036,26 @@ function cacheEvictUntilFits(needBytes) {
  * Boc route co cache theo URL day du (path + query string).
  * @param {number} ttlMs  thoi gian song cua cache (ms)
  */
+/** Khoa cache = duong dan + query string DA BO `job` (xem giai thich duoi). */
+function cacheKeyKhongJob(req) {
+  const u = new URLSearchParams(req.query);
+  u.delete('job');
+  u.sort();                       // ?a=1&b=2 va ?b=2&a=1 la cung mot khoa
+  const qs = u.toString();
+  return req.path + (qs ? '?' + qs : '');
+}
+
 function cached(ttlMs, fn) {
   return h(async (req, res) => {
     if (CONFIG.demoMode) return fn(req, res); // demo: khong cache
-    const key = req.originalUrl;
+    // BO tham so `job` khoi khoa cache: no la ma NGAU NHIEN cho moi lan bam,
+    // de nguyen thi moi request deu la mot khoa moi -> cache khong bao gio trung
+    // va van chay lai truy van nang.
+    const key = cacheKeyKhongJob(req);
     const hit = apiCache.get(key);
     if (hit && Date.now() - hit.t < ttlMs) {
       res.set('X-Cache', 'HIT');
+      dongNhatKy(req.query.job, '✔ Lấy lại kết quả trong bộ nhớ đệm (không phải hỏi SQL Server)');
       return res.json(hit.data);
     }
     // Chan res.json de luu ket qua vao cache truoc khi tra ve
@@ -5089,6 +5208,33 @@ app.post(
 // --- May dang xem CO QUYEN SUA khong? (khong chan IP - ai goi cung duoc)
 //     Frontend dung de an/hien nut "Xac nhan doi ung". Day CHI la goi y giao
 //     dien; chan that su van o adminGuard phia server (khong the gia mao). ---
+// --- NHAT KY TIEN TRINH (SSE). Trinh duyet mo truoc, roi moi goi API nang. ---
+//     Khong dung `h()` vi day KHONG phai JSON: ket noi mo suot va day du lieu.
+app.get('/api/progress/:job', (req, res) => {
+  const ma = maJobHopLe(req.params.job);
+  if (!ma) return res.status(400).end();
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    // Tat buffer cua nginx neu co dat truoc mat - khong thi log ra mot cuc o cuoi
+    'X-Accel-Buffering': 'no',
+  });
+  res.flushHeaders?.();
+
+  donJobCu();
+  if (!JOBS.has(ma)) JOBS.set(ma, { buoc: [], nghe: new Set(), xong: false, luc: Date.now(), t0: Date.now() });
+  const j = JOBS.get(ma);
+  // Gui lai cac buoc DA xay ra truoc khi client kip ket noi (tranh mat dong dau)
+  j.buoc.forEach((b) => res.write(`data: ${JSON.stringify({ ...b, xong: j.xong })}\n\n`));
+  if (j.xong) return res.end();
+
+  j.nghe.add(res);
+  // Nhip tim: mot so proxy dong ket noi "im lang" qua 30s
+  const tim = setInterval(() => { try { res.write(': ping\n\n'); } catch (_) {} }, 15000);
+  req.on('close', () => { clearInterval(tim); j.nghe.delete(res); });
+});
+
 app.get('/api/whoami', h(async (req, res) => {
   const ip = String(req.socket.remoteAddress || '').replace(/^::ffff:/, '') || 'unknown';
   res.json({ ip, isAdmin: isAdminAllowed(ip) });
@@ -5288,7 +5434,15 @@ app.get(
     const range = resolveRange(req.query);
     const f = readFilters(req.query);
     if (CONFIG.demoMode) return res.json(DEMO.pickslip(range, f));
-    res.json(await qPickslip(range, f));
+    const ghi = moNhatKy(req.query.job);
+    try {
+      const kq = await qPickslip(range, f, ghi);
+      ghi(`✔ Xong — ${(kq.rows || []).length.toLocaleString('vi')} dòng`, true);
+      res.json(kq);
+    } catch (e) {
+      dongNhatKy(req.query.job, `✘ Lỗi: ${e.message}`);
+      throw e;
+    }
   })
 );
 
@@ -5299,7 +5453,15 @@ app.get(
     const range = resolveRange(req.query);
     const f = readFilters(req.query);
     if (CONFIG.demoMode) return res.json(DEMO.receiving(range, f));
-    res.json(await qReceiving(range, f));
+    const ghi = moNhatKy(req.query.job);
+    try {
+      const kq = await qReceiving(range, f, ghi);
+      ghi(`✔ Xong — ${(kq.rows || []).length.toLocaleString('vi')} dòng`, true);
+      res.json(kq);
+    } catch (e) {
+      dongNhatKy(req.query.job, `✘ Lỗi: ${e.message}`);
+      throw e;
+    }
   })
 );
 
@@ -5404,8 +5566,20 @@ app.get(
     if (!def) return res.status(404).json({ error: true, message: 'Bao cao khong ton tai.' });
     const range = resolveRange(req.query);
     const f = readFilters(req.query);
-    const data = (CONFIG.demoMode && def.demo) ? DEMO[def.demo](range, f) : await def.live(range, f);
-    res.json({ rows: data, count: data.length, range });
+    const ghi = moNhatKy(req.query.job);
+    // Bao cao nao chua ghi nhat ky rieng thi it nhat cung co dong mo dau, de
+    // nguoi dung thay chuong trinh DANG chay chu khong phai dung im.
+    ghi(`Báo cáo: ${req.params.name} — kỳ ${range.label}. Đang hỏi SQL Server…`);
+    try {
+      const data = (CONFIG.demoMode && def.demo)
+        ? DEMO[def.demo](range, f)
+        : await def.live(range, f, ghi);
+      ghi(`✔ Xong — ${data.length.toLocaleString('vi')} dòng`, true);
+      res.json({ rows: data, count: data.length, range });
+    } catch (e) {
+      dongNhatKy(req.query.job, `✘ Lỗi: ${e.message}`);
+      throw e;
+    }
   })
 );
 

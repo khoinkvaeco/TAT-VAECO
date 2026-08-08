@@ -125,8 +125,14 @@ function buildQuery() {
   return p.toString();
 }
 
-async function api(path) {
-  const url = path.includes('?') ? `${path}&${buildQuery()}` : `${path}?${buildQuery()}`;
+/**
+ * @param {string} path
+ * @param {string} [job] ma viec de server ban nhat ky tien trinh ve (xem §3b).
+ *                       Server BO tham so nay khi tinh khoa cache.
+ */
+async function api(path, job) {
+  const qs = buildQuery() + (job ? `&job=${encodeURIComponent(job)}` : '');
+  const url = path.includes('?') ? `${path}&${qs}` : `${path}?${qs}`;
   const res = await fetch(url);
   const data = await res.json();
   if (!res.ok || data.error) {
@@ -174,7 +180,88 @@ function setBusy(sel, on, text = 'Đang tải dữ liệu…', delay = 120) {
     host.classList.remove('is-busy');
     const ov = host.querySelector(':scope > .busy-overlay');
     if (ov) ov.remove();
+    _nhatKyCho.delete(sel);   // bo cac dong con cho: lan tai nay da xong
   }
+}
+
+// --------------------------------------------------------------------------
+// 3b. NHAT KY TIEN TRINH THOI GIAN THUC
+//     Truy van LGC di qua linked server, co cau mat hang chuc giay. Chi mot
+//     vong xoay thi nguoi dung khong biet chuong trinh dang lam gi, con bao
+//     lau, hay da treo. Nay server ban tung buoc ve qua SSE va hien ngay o day.
+// --------------------------------------------------------------------------
+let _jobDem = 0;
+
+/** Ma viec duy nhat cho MOI lan bam (server dung lam khoa kenh SSE). */
+function taoMaJob() {
+  return `j${Date.now().toString(36)}${(_jobDem++).toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+}
+
+// Dong log den TRUOC khi lop phu kip ve thi giu tam o day.
+// setBusy() ve lop phu trong setTimeout, nen ngay ca voi delay 0 no van ve o
+// tick SAU - trong khi dong dau tien (vd "lay lai tu bo nho dem") co the toi
+// trong cung tick. Khong dem thi dong do BIEN MAT (da gap khi chay kiem thu).
+const _nhatKyCho = new Map();   // sel -> [dong dang cho]
+
+function veDongNhatKy(ov, b) {
+  let log = ov.querySelector('.busy-log');
+  if (!log) {
+    log = document.createElement('div');
+    log.className = 'busy-log';
+    ov.appendChild(log);
+  }
+  const d = document.createElement('div');
+  d.className = 'busy-log-dong';
+  // Gio thuc te: nguoi dung doi lau thi con biet buoc nao dung tu luc nao
+  const gio = new Date().toLocaleTimeString('vi', { hour12: false });
+  d.innerHTML = `<span class="busy-log-gio">${gio}</span> ${escapeHtml(b.text)}`;
+  log.appendChild(d);
+  while (log.children.length > 40) log.removeChild(log.firstChild);
+  log.scrollTop = log.scrollHeight;
+}
+
+/** Do cac dong dang cho ra lop phu (neu no da duoc ve). */
+function xaNhatKyCho(sel) {
+  const ds = _nhatKyCho.get(sel);
+  if (!ds || !ds.length) return;
+  const ov = $(sel)?.querySelector(':scope > .busy-overlay');
+  if (!ov) return;                       // van chua ve -> cho luot sau
+  _nhatKyCho.delete(sel);
+  ds.forEach((b) => veDongNhatKy(ov, b));
+}
+
+/** Them mot dong vao nhat ky trong lop phu "dang tai" cua vung `sel`. */
+function themDongNhatKy(sel, b) {
+  if (!$(sel)) return;
+  const ov = $(sel).querySelector(':scope > .busy-overlay');
+  if (ov) { xaNhatKyCho(sel); veDongNhatKy(ov, b); return; }
+  const ds = _nhatKyCho.get(sel) || [];
+  ds.push(b);
+  _nhatKyCho.set(sel, ds.slice(-40));
+  setTimeout(() => xaNhatKyCho(sel), 30);
+}
+
+/**
+ * Mo kenh nhat ky cho mot lan tai du lieu.
+ * Tra ve { job, dong() }: dua `job` vao URL API, goi `dong()` o finally.
+ * Neu trinh duyet khong ho tro EventSource thi van chay binh thuong, chi la
+ * khong co nhat ky - KHONG duoc lam hong viec tai du lieu.
+ */
+function moTienTrinh(sel) {
+  const job = taoMaJob();
+  let es = null;
+  try {
+    es = new EventSource(`/api/progress/${job}`);
+    es.onmessage = (ev) => {
+      try {
+        const b = JSON.parse(ev.data);
+        themDongNhatKy(sel, b);
+        if (b.xong) { es.close(); es = null; }
+      } catch (_) { /* dong hong - bo qua */ }
+    };
+    es.onerror = () => { try { es && es.close(); } catch (_) {} es = null; };
+  } catch (_) { es = null; }
+  return { job, dong: () => { try { es && es.close(); } catch (_) {} es = null; } };
 }
 
 /** Cham nhay tren nut tab dang tai (bao cao / tab chinh). */
@@ -1201,17 +1288,18 @@ async function loadReport(name, hostKey = 'report') {
     reportTables[hostKey].setColumns(withHeaderFilters(def.columns));
     reportTables[hostKey].replaceData([]);
   }
-  setBusy(H.pane, true);
+  setBusy(H.pane, true, 'Đang tải báo cáo…', 0);
   if (H.tabSel) setTabLoading(H.tabSel, name, true);
 
   showError('');
   showLoading(true);
+  const tt = moTienTrinh(H.pane);
   try {
     // Dung cache theo (bao cao + filter) de doi tab khong load lai du lieu
     const cacheKey = `${name}?${buildQuery()}`;
     let data = reportCache.get(cacheKey);
     if (!data) {
-      data = await api(`/api/reports/${name}`);
+      data = await api(`/api/reports/${name}`, tt.job);
       reportCache.set(cacheKey, data);
     }
     if (seq !== reportSeqs[hostKey]) return; // da co request moi hon -> bo qua
@@ -1263,6 +1351,7 @@ async function loadReport(name, hostKey = 'report') {
   } catch (err) {
     showError(err.message);
   } finally {
+    tt.dong();
     showLoading(false);
     if (seq === reportSeqs[hostKey]) {
       setBusy(H.pane, false);
@@ -2430,10 +2519,12 @@ async function loadPickslip() {
   const seq = ++pickLoadSeq;
   showError('');
   showLoading(true);
-  setBusy('#pickPane', true);
+  // delay 0: hien lop phu NGAY de nhat ky co cho ma ve (truy van nay von lau)
+  setBusy('#pickPane', true, 'Đang lấy dữ liệu xuất kho…', 0);
   setTabLoading('.mainTab', 'pickslip', true);
+  const tt = moTienTrinh('#pickPane');
   try {
-    const data = await api('/api/pickslip');
+    const data = await api('/api/pickslip', tt.job);
     if (seq !== pickLoadSeq) return;
     buSoLieuNgayGio(data.rows);
     $('#rangeLabel').textContent = `${data.range.label}: ${fmtDateTime(data.range.from)} → ${fmtRangeEnd(data.range.to)}`;
@@ -2474,6 +2565,7 @@ async function loadPickslip() {
   } catch (err) {
     showError(err.message);
   } finally {
+    tt.dong();
     showLoading(false);
     if (seq === pickLoadSeq) {
       setBusy('#pickPane', false);
@@ -2622,10 +2714,11 @@ async function loadReceiving() {
   const seq = ++recvLoadSeq;
   showError('');
   showLoading(true);
-  setBusy('#recvPane', true);
+  setBusy('#recvPane', true, 'Đang lấy dữ liệu nhập kho…', 0);
   setTabLoading('.mainTab', 'receiving', true);
+  const tt = moTienTrinh('#recvPane');
   try {
-    const data = await api('/api/receiving');
+    const data = await api('/api/receiving', tt.job);
     if (seq !== recvLoadSeq) return;
     $('#rangeLabel').textContent = `${data.range.label}: ${fmtDateTime(data.range.from)} → ${fmtRangeEnd(data.range.to)}`;
     renderRecvKpis(data.kpis);
@@ -2666,6 +2759,7 @@ async function loadReceiving() {
   } catch (err) {
     showError(err.message);
   } finally {
+    tt.dong();
     showLoading(false);
     if (seq === recvLoadSeq) {
       setBusy('#recvPane', false);

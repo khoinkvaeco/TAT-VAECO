@@ -563,6 +563,63 @@ chạy `npm run build:assets`. (Đã kiểm chứng bằng cách cố tình thê
 > dựng sẵn tôi đặt `tailwind.css` lên trước và **khung chat mở sẵn ngay khi vào
 > trang**; đảo lại thứ tự là đúng như cũ.
 
+## 7d. Nhật ký tiến trình thời gian thực (giống log của bản Python)
+
+Truy vấn LGC đi qua linked server, có câu mất hàng chục giây. Trước đây người dùng
+chỉ thấy **một vòng xoay** — không biết chương trình đang làm gì, còn bao lâu, hay
+đã treo. Nay server **bắn từng bước về trình duyệt ngay khi nó xảy ra**, hiện trong
+lớp phủ “đang tải”:
+
+```
+03:32:20  ▶ Dò cấu trúc bảng AMOS (MUTATION_TIME…)…
+03:32:20  ✔ Dò cấu trúc bảng AMOS (MUTATION_TIME…) — 412 ms
+03:32:20  Kỳ báo cáo: Tháng (2026-08-01 → 2026-09-01)
+03:32:21  ▶ Kéo PICKSLIP_BOOKED × PICKSLIP_HEADER về #temp rồi gom số liệu (qua linked server — bước lâu nhất)…
+03:32:48  ✔ Kéo PICKSLIP_BOOKED × PICKSLIP_HEADER về #temp rồi gom số liệu — 27.418 ms
+03:32:48  ▶ Đọc thư mục file scan phiếu xuất…
+```
+
+Mỗi bước ghi kèm **thời gian chạy**, nên nhìn log là biết ngay bước nào thật sự chậm —
+không phải đoán.
+
+### Cách hoạt động
+
+Dùng **SSE** (Server-Sent Events) — chỉ là HTTP thường, đi qua được mọi proxy nội bộ
+và chỉ cần vài dòng code; ta chỉ cần **một chiều** server → trình duyệt nên không cần
+WebSocket. Trình duyệt tự sinh một **mã việc** rồi:
+
+1. mở `GET /api/progress/:job` (kết nối để mở, server đẩy dữ liệu về);
+2. gọi `/api/pickslip?…&job=<mã>` như bình thường.
+
+Server ghi các bước vào `JOBS[mã]`, SSE đẩy ngay về; xong thì bắn `xong: true` để
+trình duyệt đóng kết nối. Phía server: `moNhatKy()` trả về hàm ghi, `buoc()` bấm giờ
+một bước và tự ghi cả lúc bắt đầu lẫn lúc xong. Không có mã việc → `moNhatKy()` trả
+hàm **rỗng**, nên chỗ gọi không phải kiểm tra gì.
+
+Đã gắn cho: **Quản lý xuất kho**, **Receiving**, **Repair Admin** và **9 báo cáo**
+(báo cáo chưa có bước riêng thì ít nhất có dòng mở đầu). Dashboard chưa gắn.
+
+### Bốn cái bẫy đã xử lý (đều đã kiểm chứng)
+
+1. **`compression` gom SSE lại thành một cục** → nhật ký hiện ra hết ở cuối, mất sạch
+   ý nghĩa. Đã thêm `filter` bỏ qua `text/event-stream`. Kiểm tra: phản hồi SSE có
+   `Content-Encoding` rỗng.
+2. **Mã việc làm hỏng khóa cache.** Khóa cache trước đây là `req.originalUrl`, mà mã
+   việc **ngẫu nhiên mỗi lần bấm** → không lần nào trúng cache, truy vấn nặng chạy lại
+   từ đầu. `cacheKeyKhongJob()` bỏ `job` ra khỏi khóa (và `sort()` để thứ tự tham số
+   không đổi khóa). Kiểm tra: gọi lại cùng URL với `job` khác → `X-Cache: HIT`.
+3. **Dòng log đến trước khi lớp phủ kịp vẽ thì bị mất.** `setBusy()` vẽ trong
+   `setTimeout`, nên ngay cả `delay = 0` nó vẫn vẽ ở tick **sau**. Dòng đầu tiên
+   (ví dụ “lấy lại từ bộ nhớ đệm”) có thể tới trong cùng tick. Đã đệm ở `_nhatKyCho`
+   rồi xả ra khi lớp phủ xuất hiện. Kiểm tra: bắn 8 dòng cùng tick với `setBusy` →
+   hiện đủ 8 (trước khi sửa: 0).
+4. **Lớp phủ căn giữa theo chiều cao pane** (KPI + 4 biểu đồ + bảng ≈ vài nghìn px)
+   → vòng xoay và nhật ký rơi xuống tận giữa trang, ngoài tầm nhìn. Đã đổi sang căn
+   **lên trên**.
+
+Bộ nhớ: mỗi việc tự hết hạn sau 5 phút, tối đa 200 việc, mỗi việc giữ tối đa 200 dòng.
+Nhịp tim 15 giây/lần để proxy không cắt kết nối “im lặng”.
+
 ## 7. Bảo mật & performance
 
 - Mật khẩu chỉ nằm trong `.env` (không hardcode, không commit).
