@@ -1972,6 +1972,34 @@ function applyLgcOnlyMode() {
     a.textContent = 'Xem dashboard TAT đầy đủ →';
     nav.appendChild(a);
   }
+  chaoNguoiDungLgc();
+}
+
+/**
+ * Hien "Xin chao <ma nhan vien>" + nut Thoat tren thanh dau trang LGC.
+ * Vao duoc trang nay nghia la da qua cong ma nhan vien (server kiem tra), nen
+ * day chi la hien thi - KHONG phai cho kiem tra quyen o phia trinh duyet.
+ */
+async function chaoNguoiDungLgc() {
+  let me = null;
+  try { me = await fetch('/api/lgc/me').then((r) => r.json()); } catch (_) { return; }
+  if (!me || !me.ok || !me.ma) return;          // cong dang tat -> khong hien gi
+  const host = document.querySelector('header .ml-auto');
+  if (!host) return;
+  const box = document.createElement('span');
+  box.className = 'lgc-chao';
+  box.innerHTML = `<span>Xin chào <b>${escapeHtml(me.ma)}</b></span>`;
+  const nut = document.createElement('button');
+  nut.type = 'button';
+  nut.className = 'lgc-thoat';
+  nut.textContent = 'Thoát';
+  nut.title = 'Quên mã nhân viên trên máy này';
+  nut.addEventListener('click', async () => {
+    await fetch('/api/lgc/logout', { method: 'POST' }).catch(() => {});
+    location.href = '/lgc';
+  });
+  box.appendChild(nut);
+  host.insertBefore(box, host.firstChild);
 }
 
 // --- Nhom LGC: KHONG tu chay truy van ------------------------------------

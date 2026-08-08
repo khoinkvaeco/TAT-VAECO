@@ -62,6 +62,9 @@ async function main() {
       DB_USER: 'smoke',
       DB_PASSWORD: 'smoke',
       SIGN_CACHE: 'false',
+      // Tat cong LGC: o day ta kiem tra CAU SQL, khong kiem tra phan quyen.
+      // Cong LGC co bai kiem tra rieng - xem tools/gatecheck.js.
+      LGC_GATE: 'false',
     },
     stdio: 'ignore',
   });

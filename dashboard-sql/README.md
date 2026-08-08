@@ -287,6 +287,50 @@ kèm **5 dòng thật đã giải mã** để đối chiếu mắt thường. **
 - **Ghi log truy cập:** mọi request được ghi vào `logs/access-YYYY-MM-DD.log` (1 file/ngày, định dạng TSV — mở trực tiếp bằng Excel) gồm: thời gian, IP, tên máy, method, đường dẫn, mã trạng thái, thời gian xử lý. Thư mục `logs/` không commit lên git (`.gitignore`).
   - **Tra tên máy** theo 2 bước, cache 10 phút/IP: (1) reverse-DNS (PTR record) — chỉ có nếu DNS nội bộ khai báo; (2) nếu thất bại và server chạy trên **Windows**, thử `nbtstat -A <ip>` (NetBIOS qua UDP 137) — không phụ thuộc DNS, thường lấy được tên máy Windows trong cùng LAN. Nếu cả hai đều thất bại (mạng khác VLAN chặn UDP 137, máy tắt NetBIOS, hoặc server chạy Linux/macOS), cột tên máy ghi `N/A` — vẫn còn cột IP để tra thủ công.
 
+## 6f. Cổng vào trang LGC — hỏi mã nhân viên, chỉ cho CUVT
+
+Khi dashboard được công bố cho **cả công ty**, `/lgc` không thể để mở nữa: ai gõ đúng
+địa chỉ là xem được toàn bộ nghiệp vụ nội bộ của kho. Nay `/lgc` và `/kho` ra **màn
+hình nhập mã nhân viên**; server tra Trung tâm của mã đó trong `SIGN` (hoặc
+`SIGN_CACHE`), chỉ **`CUVT`** mới được vào, rồi chào *“Xin chào &lt;mã&gt;”* trên thanh đầu
+kèm nút **Thoát**.
+
+### ⚠️ Đây là NHẬN DIỆN, không phải XÁC THỰC
+
+**Không có mật khẩu.** Ai biết — hoặc đoán trúng — một mã nhân viên CUVT đều vào được.
+Đây là giải pháp **trước mắt** theo yêu cầu nghiệp vụ, **không** phải kiểm soát truy cập
+thật. Muốn chặn thật thì phải đăng nhập Windows/AD qua reverse proxy (IIS/nginx).
+Đừng ghi số liệu nhạy cảm hơn vào trang này với giả định nó đã được bảo vệ.
+
+Bù lại có hai lớp giảm thiệt hại:
+
+- **Giới hạn 8 lần thử / phút / IP** → không dò mã hàng loạt được.
+- **Ghi log mọi lượt** vào `logs/lgc-access-YYYY-MM-DD.log` (`ALLOW` / `DENY` /
+  `RATE_LIMIT` / `FORM`) → truy ngược được ai đã vào.
+
+### Chi tiết kỹ thuật
+
+| | |
+|---|---|
+| Chặn ở | `lgcGuard` — middleware, đặt **trước** `express.static` nên chặn cả trang lẫn API |
+| Phạm vi | `/lgc`, `/kho`, `/api/pickslip`, `/api/receiving`, `/api/reports/repair-admin` |
+| Vé | Cookie `lgc_ok` = `<mã>.<hạn>.<HMAC-SHA256>`, `HttpOnly`, `SameSite=Lax`, hạn **12 giờ** |
+| Khoá ký | `data/lgc-secret.txt` (tự sinh, `chmod 600`) — để **khởi động lại không đăng xuất ai** |
+| So chữ ký | `crypto.timingSafeEqual` |
+| Tắt cổng | `LGC_GATE=false` trong `.env` |
+
+Trang `/` và `/api/dashboard` **không** bị ảnh hưởng — đó là phần công bố cho cả công ty.
+
+### Kiểm tra tự động: `tools/gatecheck.js`
+
+Cổng bảo mật mà không có bài kiểm tra thì rất dễ hở lại một cách âm thầm (đổi đường
+dẫn, thêm endpoint mới, sửa middleware order…). `npm run smoke` nay chạy thêm
+`gatecheck` — dựng server DEMO rồi thử **12 trường hợp**, trong đó có hai cái dễ sai
+nhất: **cookie bịa chữ ký** và **cookie hợp lệ nhưng sửa hạn**. Cả hai phải bị từ chối.
+
+> `smoke.js` và `sqlcheck.js` chạy với `LGC_GATE=false` — ở đó ta kiểm tra **câu SQL**,
+> không phải phân quyền; nếu bật cổng thì 3 endpoint LGC trả 401 và báo trượt oan.
+
 ## 6e. Trang LGC lấy dữ liệu của TẤT CẢ station / store / trung tâm
 
 Trang LGC nay đã có đủ ba ô lọc *Station · Store · Trung tâm* (chọn nhiều) giống

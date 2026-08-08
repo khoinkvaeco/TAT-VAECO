@@ -9,9 +9,10 @@
     "dev": "node --watch server.js",
     "service:install": "node service-install.js",
     "service:uninstall": "node service-uninstall.js",
-    "smoke": "node tools/smoke.js && node tools/sqlcheck.js && node tools/build-assets.js --check",
+    "smoke": "node tools/smoke.js && node tools/sqlcheck.js && node tools/gatecheck.js && node tools/build-assets.js --check",
     "sqlcheck": "node tools/sqlcheck.js",
-    "build:assets": "node tools/build-assets.js"
+    "build:assets": "node tools/build-assets.js",
+    "gatecheck": "node tools/gatecheck.js"
   },
   "keywords": [
     "dashboard",

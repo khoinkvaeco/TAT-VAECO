@@ -22,6 +22,7 @@ const compression = require('compression');
 const path = require('path');
 const fs = require('fs');
 const dns = require('dns');
+const crypto = require('crypto');
 const { execFile } = require('child_process');
 const sql = require('mssql');
 
@@ -77,6 +78,9 @@ const CONFIG = {
   // complete in 60000ms" tren cac ky dai.
   dbRequestTimeout: parseInt(process.env.DB_REQUEST_TIMEOUT_MS || '180000', 10),
   signCache: String(process.env.SIGN_CACHE || 'true').toLowerCase() !== 'false',
+  // --- CONG VAO TRANG LGC: hoi ma nhan vien, chi cho nguoi thuoc CUVT ---
+  // Dat LGC_GATE=false de tat (vd khi chua cong bo cho ca cong ty).
+  lgcGate: String(process.env.LGC_GATE || 'true').toLowerCase() !== 'false',
   signCacheMinutes: parseInt(process.env.SIGN_CACHE_MINUTES || '360', 10), // mac dinh 6h
   // --- Bao cao dinh ky day len Teams / SharePoint (phuong an 3) - MAC DINH TAT ---
   // URL webhook cua Teams Workflows ("Post to a channel when a webhook request
@@ -4985,7 +4989,91 @@ app.use(compression({
 // nhan vien mo trong LAN cung doc duoc so lieu qua trinh duyet cua ho.
 app.use(express.json());
 app.use(accessLogger); // ghi log IP + ten may cho MOI request (truoc static/API)
+// ---------------------------------------------------------------------------
+// CONG VAO TRANG LGC - hoi MA NHAN VIEN, chi cho nguoi thuoc CUVT
+// ---------------------------------------------------------------------------
+//  ⚠️ DAY LA "NHAN DIEN", KHONG PHAI "XAC THUC". Khong co mat khau: ai biet
+//  (hoac doan trung) mot ma nhan vien CUVT deu vao duoc. Day la giai phap
+//  TRUOC MAT theo yeu cau nghiep vu; muon chan that phai dung dang nhap
+//  Windows/AD qua reverse proxy. Bu lai, o day co:
+//    - GIOI HAN SO LAN THU theo IP  -> khong the do ma hang loat
+//    - GHI LOG moi lan vao/bi tu choi -> truy nguoc duoc
+//  Dung cho: trang /lgc, /kho va cac API chi LGC dung.
+// ---------------------------------------------------------------------------
+const LGC_COOKIE = 'lgc_ok';
+const LGC_TTL_MS = 12 * 60 * 60 * 1000;              // 12 gio roi hoi lai
+const LGC_DEPTS = ['CUVT'];                          // trung tam duoc vao
+const LGC_SECRET_FILE = path.join(CONFIG.dataDir, 'lgc-secret.txt');
+
+/** Bi mat de ky cookie. Luu vao dataDir de KHOI DONG LAI khong dang xuat ai. */
+function lgcSecret() {
+  if (lgcSecret._v) return lgcSecret._v;
+  try {
+    if (fs.existsSync(LGC_SECRET_FILE)) {
+      lgcSecret._v = fs.readFileSync(LGC_SECRET_FILE, 'utf8').trim();
+    }
+  } catch (_) { /* doc khong duoc thi tao moi */ }
+  if (!lgcSecret._v) {
+    lgcSecret._v = crypto.randomBytes(32).toString('hex');
+    try {
+      if (!fs.existsSync(CONFIG.dataDir)) fs.mkdirSync(CONFIG.dataDir, { recursive: true });
+      fs.writeFileSync(LGC_SECRET_FILE, lgcSecret._v, { encoding: 'utf8', mode: 0o600 });
+    } catch (e) { console.warn('[LGC] Khong luu duoc lgc-secret.txt:', e.message); }
+  }
+  return lgcSecret._v;
+}
+
+const lgcKy = (v) => crypto.createHmac('sha256', lgcSecret()).update(v).digest('hex').slice(0, 32);
+
+/** Tao gia tri cookie: "<ma>.<han>.<chu ky>". */
+function lgcTaoVe(ma) {
+  const than = `${encodeURIComponent(ma)}.${Date.now() + LGC_TTL_MS}`;
+  return `${than}.${lgcKy(than)}`;
+}
+
+/** Doc + kiem tra cookie. Tra ve ma nhan vien, hoac '' neu khong hop le. */
+function lgcDocVe(req) {
+  const raw = String(req.headers.cookie || '')
+    .split(';').map((v) => v.trim()).find((v) => v.startsWith(LGC_COOKIE + '='));
+  if (!raw) return '';
+  const [ma, han, chuKy] = raw.slice(LGC_COOKIE.length + 1).split('.');
+  if (!ma || !han || !chuKy) return '';
+  const than = `${ma}.${han}`;
+  // So sanh chong do thoi gian (timing-safe) - hai chuoi phai cung do dai
+  const mong = lgcKy(than);
+  if (chuKy.length !== mong.length) return '';
+  if (!crypto.timingSafeEqual(Buffer.from(chuKy), Buffer.from(mong))) return '';
+  if (Number(han) < Date.now()) return '';
+  return decodeURIComponent(ma);
+}
+
+function lgcGhiLog(ip, ma, ketQua, ghiChu) {
+  const day = new Date().toISOString().slice(0, 10);
+  const vn = new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh', hour12: false });
+  const line = [vn, ip, ma || '-', ketQua, ghiChu || ''].join('\t') + '\n';
+  fs.appendFile(path.join(LOG_DIR, `lgc-access-${day}.log`), line, () => {});
+}
+
+/** Duong dan thuoc khu vuc LGC (trang + API chi LGC dung). */
+function isLgcPath(p) {
+  if (/^\/(lgc|kho)(\.html)?\/?$/.test(p)) return true;
+  return p === '/api/pickslip' || p === '/api/receiving' || p === '/api/reports/repair-admin';
+}
+
+function lgcGuard(req, res, next) {
+  if (!CONFIG.lgcGate || !isLgcPath(req.path)) return next();
+  if (lgcDocVe(req)) return next();
+  const ip = String(req.socket.remoteAddress || '').replace(/^::ffff:/, '') || 'unknown';
+  if (req.path.startsWith('/api/')) {
+    res.status(401);
+    return res.json({ error: true, code: 'LGC_LOCKED', message: 'Cần nhập mã nhân viên để xem dữ liệu LGC.' });
+  }
+  lgcGhiLog(ip, '', 'FORM', req.originalUrl);
+  return res.sendFile(path.join(__dirname, 'public', 'lgc-login.html'));
+}
+
 app.use(adminGuard);   // chan truy cap admin tu IP la (truoc static de chan /admin.html)
+app.use(lgcGuard);     // chan trang LGC neu chua nhap ma nhan vien thuoc CUVT
 app.use(express.static(path.join(__dirname, 'public')));
 
 /** Boc route async + xu ly loi tap trung.
@@ -5279,6 +5367,71 @@ app.get('/api/progress/:job', (req, res) => {
   const tim = setInterval(() => { try { res.write(': ping\n\n'); } catch (_) {} }, 15000);
   req.on('close', () => { clearInterval(tim); j.nghe.delete(res); });
 });
+
+// --- CONG LGC: nhap ma nhan vien -> tra SIGN xem co thuoc CUVT khong ---
+//     Gioi han so lan thu theo IP de khong the do ma hang loat.
+const LGC_THU_TOI_DA = 8;          // 8 lan / phut / IP
+
+/** Tra Trung tam cua mot ma nhan vien. Tra '' neu khong tim thay. */
+async function trungTamCuaMa(ma) {
+  if (CONFIG.demoMode) {
+    // DEMO: ma bat dau bang 'CU' coi nhu thuoc CUVT, de chay thu giao dien
+    return /^cu/i.test(ma) ? 'CUVT' : 'PA';
+  }
+  const bang = signCacheReady
+    ? '[NQT].[dbo].[SIGN_CACHE]'
+    : '[DWH_DB]..[STG_AMOS].[SIGN]';
+  const rows = await query(
+    `SELECT TOP 1 MAX(LTRIM(RTRIM([DEPARTMENT]))) AS dept
+     FROM ${bang} WHERE LTRIM(RTRIM([USER_SIGN])) = @ma`,
+    { ma }
+  );
+  return String((rows[0] && rows[0].dept) || '').trim().toUpperCase();
+}
+
+app.post('/api/lgc/login', h(async (req, res) => {
+  const ip = String(req.socket.remoteAddress || '').replace(/^::ffff:/, '') || 'unknown';
+  if (rateLimited(`lgc:${ip}`, LGC_THU_TOI_DA)) {
+    lgcGhiLog(ip, '', 'RATE_LIMIT', '');
+    return res.status(429).json({ error: true, message: 'Bạn thử quá nhiều lần. Chờ một phút rồi nhập lại.' });
+  }
+  const ma = String((req.body || {}).ma || '').trim().toUpperCase().slice(0, 32);
+  if (!ma) return res.status(400).json({ error: true, message: 'Chưa nhập mã nhân viên.' });
+
+  let dept = '';
+  try {
+    dept = await trungTamCuaMa(ma);
+  } catch (e) {
+    lgcGhiLog(ip, ma, 'ERROR', e.message);
+    return res.status(500).json({ error: true, message: 'Không tra cứu được mã nhân viên. Thử lại sau.' });
+  }
+  if (!dept) {
+    lgcGhiLog(ip, ma, 'DENY', 'khong tim thay ma');
+    return res.status(403).json({ error: true, message: `Không tìm thấy mã nhân viên “${ma}” trong hệ thống AMOS.` });
+  }
+  if (!LGC_DEPTS.includes(dept)) {
+    lgcGhiLog(ip, ma, 'DENY', `dept=${dept}`);
+    return res.status(403).json({
+      error: true,
+      message: `Mã “${ma}” thuộc ${dept}. Trang LGC chỉ dành cho nhân viên ${LGC_DEPTS.join(' / ')}.`,
+    });
+  }
+  lgcGhiLog(ip, ma, 'ALLOW', `dept=${dept}`);
+  res.setHeader('Set-Cookie',
+    `${LGC_COOKIE}=${lgcTaoVe(ma)}; Path=/; Max-Age=${Math.floor(LGC_TTL_MS / 1000)}; HttpOnly; SameSite=Lax`);
+  res.json({ ok: true, ma, department: dept });
+}));
+
+/** Ai dang dung trang LGC (de hien "Xin chao ..."). */
+app.get('/api/lgc/me', h(async (req, res) => {
+  const ma = lgcDocVe(req);
+  res.json({ ok: !!ma, ma, gate: CONFIG.lgcGate });
+}));
+
+app.post('/api/lgc/logout', h(async (req, res) => {
+  res.setHeader('Set-Cookie', `${LGC_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax`);
+  res.json({ ok: true });
+}));
 
 app.get('/api/whoami', h(async (req, res) => {
   const ip = String(req.socket.remoteAddress || '').replace(/^::ffff:/, '') || 'unknown';

@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LGC · Nhập mã nhân viên</title>
+  <!-- CSS viết thẳng ở đây: trang này phải hiện được kể cả khi mọi thứ khác hỏng. -->
+  <style>
+    :root {
+      --bg:#eef2f4; --surface:#fff; --hair:#dbe3e7; --text:#0f1e28; --muted:#5b6b73;
+      --brand1:#0b4f5a; --brand2:#0e6b74; --accent:#d4a017; --bad:#d03b3b; --good:#0ca30c;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg:#0b141a; --surface:#14212a; --hair:#24333d; --text:#eef4f6; --muted:#9fb2ba; }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin:0; min-height:100vh; display:grid; place-items:center; padding:24px;
+      font-family: system-ui,-apple-system,"Segoe UI",sans-serif;
+      background:var(--bg); color:var(--text);
+    }
+    .hop { width:100%; max-width:430px; background:var(--surface);
+           border:1px solid var(--hair); border-radius:16px; overflow:hidden;
+           box-shadow:0 6px 28px rgba(15,30,40,.12); }
+    .dau { background:linear-gradient(100deg,var(--brand1),var(--brand2)); color:#eaf5f6;
+           padding:18px 22px; border-bottom:3px solid var(--accent);
+           display:flex; align-items:center; gap:12px; }
+    .logo { width:40px; height:40px; border-radius:11px; display:grid; place-items:center;
+            background:var(--accent); color:var(--brand1); flex:none; }
+    h1 { font-size:17px; margin:0; font-weight:700; }
+    .phu { font-size:12px; opacity:.8; margin-top:2px; }
+    .than { padding:22px; }
+    label { display:block; font-size:13px; font-weight:600; margin-bottom:6px; }
+    input {
+      width:100%; padding:11px 13px; font-size:16px; letter-spacing:.06em;
+      text-transform:uppercase; border-radius:10px; border:1px solid var(--hair);
+      background:var(--bg); color:var(--text);
+    }
+    input:focus { outline:2px solid var(--accent); outline-offset:-1px; }
+    .goiy { font-size:12px; color:var(--muted); margin-top:7px; line-height:1.5; }
+    button {
+      width:100%; margin-top:16px; padding:11px; font-size:15px; font-weight:700;
+      border:0; border-radius:10px; background:var(--brand2); color:#fff; cursor:pointer;
+    }
+    button:hover:not(:disabled) { filter:brightness(1.08); }
+    button:disabled { opacity:.6; cursor:progress; }
+    .bao { margin-top:14px; padding:10px 12px; border-radius:10px; font-size:13px;
+           line-height:1.5; display:none; }
+    .bao.loi  { display:block; background:color-mix(in srgb,var(--bad) 12%,transparent);
+                border:1px solid color-mix(in srgb,var(--bad) 40%,transparent); color:var(--bad); }
+    .bao.ok   { display:block; background:color-mix(in srgb,var(--good) 12%,transparent);
+                border:1px solid color-mix(in srgb,var(--good) 40%,transparent); color:var(--good); }
+    .chan { border-top:1px solid var(--hair); padding:13px 22px; font-size:12px; color:var(--muted); }
+    .chan a { color:var(--brand2); }
+  </style>
+</head>
+<body>
+  <div class="hop">
+    <div class="dau">
+      <div class="logo">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true">
+          <path d="M21 16v-2l-8-5V3.5A1.5 1.5 0 0 0 11.5 2 1.5 1.5 0 0 0 10 3.5V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5L21 16z"/>
+        </svg>
+      </div>
+      <div>
+        <h1>Trang LGC</h1>
+        <div class="phu">VAECO · Logistics Center · dành riêng cho nhân viên CUVT</div>
+      </div>
+    </div>
+
+    <form class="than" id="form">
+      <label for="ma">Mã nhân viên</label>
+      <input id="ma" name="ma" autocomplete="off" autocapitalize="characters"
+             spellcheck="false" placeholder="VD: VAE12345" autofocus required />
+      <p class="goiy">
+        Nhập mã nhân viên bạn dùng trong AMOS. Hệ thống tra Trung tâm của mã này;
+        chỉ nhân viên <b>CUVT</b> mới xem được trang LGC.
+      </p>
+      <button type="submit" id="nut">Vào trang LGC</button>
+      <div class="bao" id="bao" role="alert" aria-live="polite"></div>
+    </form>
+
+    <div class="chan">
+      Không thuộc CUVT? <a href="/">Xem Dashboard TAT →</a>
+    </div>
+  </div>
+
+  <script>
+    const $ = (s) => document.querySelector(s);
+    const bao = (loai, chu) => { const b = $('#bao'); b.className = 'bao ' + loai; b.textContent = chu; };
+
+    $('#form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const ma = $('#ma').value.trim().toUpperCase();
+      if (!ma) return;
+      $('#nut').disabled = true;
+      $('#nut').textContent = 'Đang kiểm tra…';
+      bao('', '');
+      try {
+        const r = await fetch('/api/lgc/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ma }),
+        });
+        const d = await r.json();
+        if (!r.ok || d.error) {
+          bao('loi', d.message || 'Không vào được. Thử lại.');
+          $('#nut').disabled = false;
+          $('#nut').textContent = 'Vào trang LGC';
+          return;
+        }
+        bao('ok', `Xin chào ${d.ma} (${d.department}). Đang mở trang LGC…`);
+        // Quay lai dung trang nguoi dung dinh vao (mac dinh /lgc)
+        const den = new URLSearchParams(location.search).get('den') || '/lgc';
+        setTimeout(() => { location.href = den.startsWith('/') ? den : '/lgc'; }, 600);
+      } catch (err) {
+        bao('loi', 'Lỗi kết nối: ' + err.message);
+        $('#nut').disabled = false;
+        $('#nut').textContent = 'Vào trang LGC';
+      }
+    });
+  </script>
+</body>
+</html>
