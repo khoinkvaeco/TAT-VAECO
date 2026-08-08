@@ -2369,6 +2369,27 @@ function renderPickCharts(c) {
   });
 }
 
+/**
+ * Bu hai truong `issue_shown` / `issue_exact` NGAY TAI TRINH DUYET neu server
+ * chua tra ve.
+ *
+ * VI SAO: cot "Gio xuat kho" gop lam mot doc `issue_shown`. Truong nay do
+ * server tinh (ISNULL(gio that, ngay phieu)). Neu chi cap nhat public/ ma
+ * QUEN cap nhat + khoi dong lai server.js thi truong do khong ton tai va cot
+ * TRONG TRON - loi im lang, khong bao gi ca. Da xay ra that.
+ *
+ * Frontend co san ca `issue_time_vn` lan `pickslip_date` (server cu van tra
+ * du hai truong nay), nen tu tinh lay duoc. Nho vay trang chay dung voi CA
+ * server cu lan moi, va thu tu cap nhat file khong con quan trong.
+ */
+function buSoLieuGioXuatKho(rows) {
+  (rows || []).forEach((r) => {
+    if (r.issue_shown != null) return;          // server moi -> khong dung den
+    r.issue_shown = r.issue_time_vn || r.pickslip_date || null;
+    r.issue_exact = r.issue_time_vn ? 1 : 0;
+  });
+}
+
 async function loadPickslip() {
   const seq = ++pickLoadSeq;
   showError('');
@@ -2378,6 +2399,7 @@ async function loadPickslip() {
   try {
     const data = await api('/api/pickslip');
     if (seq !== pickLoadSeq) return;
+    buSoLieuGioXuatKho(data.rows);
     $('#rangeLabel').textContent = `${data.range.label}: ${fmtDateTime(data.range.from)} → ${fmtRangeEnd(data.range.to)}`;
     renderPickKpis(data.kpis);
     renderPickCharts(data.charts);

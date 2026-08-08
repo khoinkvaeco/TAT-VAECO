@@ -181,6 +181,12 @@ Nhờ vậy *TAT hoàn kho* tính được **theo giờ** thay vì ngày tròn: 
   và `issue_exact` (0/1 → giao diện biết có nên làm mờ không).
   ⚠️ Khi không có giờ thật, giao diện **cắt hẳn phần giờ** (`slice(0, 10)`) chứ **không** cắt chuỗi
   `"00:00"`: nếu dữ liệu lỡ mang giờ rác thì hiện ra người đọc sẽ tưởng đó là giờ xuất kho thật.
+  **Frontend KHÔNG phụ thuộc vào hai trường này.** Nếu server chưa được cập nhật (chỉ chép `public/`
+  mà quên `server.js`, hoặc quên khởi động lại) thì `issue_shown` không tồn tại và cột sẽ **trống
+  trơn — lỗi im lặng, không báo gì cả**. Đã xảy ra thật. Vì vậy `buSoLieuGioXuatKho()` trong
+  `script.js` **tự bù** từ `issue_time_vn` + `pickslip_date` (server cũ vẫn trả đủ hai trường này)
+  khi thiếu, nên trang chạy đúng với **cả server cũ lẫn mới** và thứ tự cập nhật file không còn
+  quan trọng. Đã kiểm thử bằng cách giả lập server cũ (bỏ hẳn hai trường khỏi phản hồi).
   *(Trước đây bảng phải bày ba cột — `Ngày phiếu`, `Giờ xuất kho`, `Sửa cuối (dòng)` — vì cột giờ hay
   trống. Hai cột đầu và cột `Sửa cuối (dòng)` đã bỏ; bỏ `Ngày phiếu` mà không có `issue_shown` thì
   các dòng thiếu giờ sẽ **mất hẳn ngày**.)*
