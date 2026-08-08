@@ -2895,6 +2895,8 @@ async function enrichPickslipRows(rows, allPicking = [], allReturns = []) {
     r.return_no = '';
     r.return_date = null;
     r.return_time_vn = null;
+    r.return_shown = null;   // xem chu thich o duoi (giong cap issue_shown)
+    r.return_exact = 0;
     r.tat_return = null;
     r.tat_gio = null;
     r.tat_chinh_xac = false;
@@ -2907,6 +2909,11 @@ async function enrichPickslipRows(rows, allPicking = [], allReturns = []) {
     r.return_no = base + '-R';
     r.return_date = h.return_date;
     r.return_time_vn = h.return_time_vn || null;
+    // GIONG cap issue_shown/issue_exact cua phieu xuat: bang chi can MOT cot
+    // thoi gian tra kho. Co gio that thi lay gio, khong thi lui ve NGAY tra -
+    // nho vay bo duoc cot "Ngay tra kho" rieng ma khong dong nao mat ngay.
+    r.return_shown = r.return_time_vn || r.return_date || null;
+    r.return_exact = r.return_time_vn ? 1 : 0;
     r.return_scan = scanStateTheoStation(index, r.station, base);
     r.tat_return = dayDiff(r.pickslip_date, h.return_date);
     // TAT den GIO. Thieu gio that o dau nao thi lui ve NGAY o dau do;

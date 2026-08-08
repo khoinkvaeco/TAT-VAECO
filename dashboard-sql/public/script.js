@@ -514,6 +514,31 @@ const dateFilterFunc = (term, rowVal) =>
   fmtDateTime(rowVal).toLowerCase().includes(String(term ?? '').toLowerCase());
 
 /**
+ * COT NGAY+GIO GOP LAM MOT.
+ *
+ * AMOS khong phai luc nao cung co GIO (xem §5b README): cho nao thieu thi truoc
+ * day phai bay THEM mot cot "Ngay ..." rieng, vua ton cho vua kho doc. Nay mot
+ * cot lo het: co gio that -> hien `dd/mm/yyyy hh:mm`; khong co -> hien NGAY kem
+ * ghi chu "(chỉ có ngày)" chu mo.
+ *
+ * ⚠️ Khi khong co gio that thi CAT HAN phan gio (`slice(0, 10)`) chu KHONG cat
+ * chuoi "00:00": neu du lieu lo mang gio rac ma hien ra thi nguoi doc se tuong
+ * do la gio that.
+ *
+ * @param {string} coGio ten truong 0/1 cho biet gia tri co GIO THAT hay khong
+ */
+function fmtNgayGioGop(coGio) {
+  return (cell) => {
+    const s = fmtDateTime(cell.getValue());
+    if (!s) return '';
+    if (cell.getRow().getData()[coGio]) return s;
+    return '<span style="color:var(--text-muted)" title="AMOS chỉ cho biết NGÀY, không có giờ">'
+      + `${escapeHtml(s.slice(0, 10))}`
+      + ' <span style="font-size:11px">(chỉ có ngày)</span></span>';
+  };
+}
+
+/**
  * Tu dong bo sung header-filter cho MOI cot chua khai bao (tru cot checkbox
  * "Bo qua" - khong co field). Cot ngay (formatter=fmtDateCell) loc theo chuoi
  * hien thi; cot so TAT (fmtTatCell) loc kieu 'like' (chua); con lai 'input'.
@@ -2017,18 +2042,7 @@ const COLS_PICKSLIP = [
     headerTooltip: 'Giờ chỉ có khi MUTATION của phiếu RƠI ĐÚNG vào ngày phiếu (PICKSLIP_DATE) — '
       + 'khi đó MUTATION_TIME mới đúng là giờ lập phiếu. Không có giờ thì hiện NGÀY phiếu '
       + 'và ghi rõ “chỉ có ngày” (không bao giờ trình bày 00:00 như thể đó là giờ thật).',
-    formatter: (cell) => {
-      const r = cell.getRow().getData();
-      const s = fmtDateTime(cell.getValue());
-      if (!s) return '';
-      if (r.issue_exact) return s;
-      // AMOS chi cho biet NGAY -> bo HAN phan gio di (khong cat chuoi "00:00"
-      // ma lay 10 ky tu dau "dd/mm/yyyy": du lieu co the mang gio rac, hien ra
-      // la nguoi doc tuong do la gio xuat kho that).
-      return `<span style="color:var(--text-muted)" title="AMOS chỉ cho biết NGÀY lập phiếu, không có giờ">`
-        + `${escapeHtml(s.slice(0, 10))}`
-        + ` <span style="font-size:11px">(chỉ có ngày)</span></span>`;
-    },
+    formatter: fmtNgayGioGop('issue_exact'),
   },
   { title: 'Pickslip', field: 'pickslipno', headerFilter: 'input' },
   {
@@ -2076,10 +2090,15 @@ const COLS_PICKSLIP = [
     headerTooltip: 'Lần sửa cuối của dòng Cancel — mốc gần nhất có thể coi là lúc hủy, '
       + 'nhưng AMOS không có cột riêng cho giờ hủy nên KHÔNG chắc chắn.',
   },
-  { title: 'Ngày trả kho', field: 'return_date', formatter: fmtDateCell, width: 115 },
+  // GIONG cot "Gio xuat kho": MOT cot lo het ngay + gio, thieu gio thi lui ve
+  // NGAY tra kho va ghi ro. Cot "Ngay tra kho" rieng da bo.
   {
-    title: 'Giờ trả kho', field: 'return_time_vn', formatter: fmtDateCell, width: 145,
-    headerTooltip: 'HISTORY.MUTATION + MUTATION_TIME → giờ VN (+7).',
+    title: 'Giờ trả kho', field: 'return_shown', width: 165,
+    headerFilter: 'input', headerFilterFunc: dateFilterFunc,
+    headerTooltip: 'HISTORY.MUTATION + MUTATION_TIME → giờ VN (+7). Bảng HISTORY là bảng SỰ KIỆN '
+      + 'nên MUTATION chính là thời điểm trả kho. Môi trường nào thiếu MUTATION_TIME thì '
+      + 'chỉ có NGÀY — khi đó hiện ngày kèm ghi chú “chỉ có ngày”.',
+    formatter: fmtNgayGioGop('return_exact'),
   },
   {
     title: 'TAT hoàn kho (giờ)', field: 'tat_gio', hozAlign: 'right', sorter: 'number', width: 150,
@@ -2370,23 +2389,28 @@ function renderPickCharts(c) {
 }
 
 /**
- * Bu hai truong `issue_shown` / `issue_exact` NGAY TAI TRINH DUYET neu server
- * chua tra ve.
+ * Bu cac truong `*_shown` / `*_exact` NGAY TAI TRINH DUYET neu server chua tra ve.
  *
- * VI SAO: cot "Gio xuat kho" gop lam mot doc `issue_shown`. Truong nay do
- * server tinh (ISNULL(gio that, ngay phieu)). Neu chi cap nhat public/ ma
- * QUEN cap nhat + khoi dong lai server.js thi truong do khong ton tai va cot
- * TRONG TRON - loi im lang, khong bao gi ca. Da xay ra that.
+ * VI SAO: hai cot gop ("Gio xuat kho", "Gio tra kho") doc `issue_shown` /
+ * `return_shown` do SERVER tinh. Neu chi cap nhat public/ ma QUEN cap nhat +
+ * khoi dong lai server.js thi cac truong do khong ton tai va cot TRONG TRON -
+ * loi im lang, khong bao gi ca. Da xay ra that voi cot "Gio xuat kho".
  *
- * Frontend co san ca `issue_time_vn` lan `pickslip_date` (server cu van tra
- * du hai truong nay), nen tu tinh lay duoc. Nho vay trang chay dung voi CA
- * server cu lan moi, va thu tu cap nhat file khong con quan trong.
+ * Frontend co san cac truong goc (`issue_time_vn` + `pickslip_date`,
+ * `return_time_vn` + `return_date`) ma server cu VAN tra du, nen tu tinh lay
+ * duoc. Nho vay trang chay dung voi CA server cu lan moi, va thu tu cap nhat
+ * file khong con quan trong.
  */
-function buSoLieuGioXuatKho(rows) {
+function buSoLieuNgayGio(rows) {
   (rows || []).forEach((r) => {
-    if (r.issue_shown != null) return;          // server moi -> khong dung den
-    r.issue_shown = r.issue_time_vn || r.pickslip_date || null;
-    r.issue_exact = r.issue_time_vn ? 1 : 0;
+    if (r.issue_shown == null) {
+      r.issue_shown = r.issue_time_vn || r.pickslip_date || null;
+      r.issue_exact = r.issue_time_vn ? 1 : 0;
+    }
+    if (r.return_shown == null) {
+      r.return_shown = r.return_time_vn || r.return_date || null;
+      r.return_exact = r.return_time_vn ? 1 : 0;
+    }
   });
 }
 
@@ -2399,7 +2423,7 @@ async function loadPickslip() {
   try {
     const data = await api('/api/pickslip');
     if (seq !== pickLoadSeq) return;
-    buSoLieuGioXuatKho(data.rows);
+    buSoLieuNgayGio(data.rows);
     $('#rangeLabel').textContent = `${data.range.label}: ${fmtDateTime(data.range.from)} → ${fmtRangeEnd(data.range.to)}`;
     renderPickKpis(data.kpis);
     renderPickCharts(data.charts);

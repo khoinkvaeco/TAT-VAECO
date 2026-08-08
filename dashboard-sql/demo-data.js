@@ -698,6 +698,8 @@ function pickslip(range, f) {
     r.return_no = '';
     r.return_date = null;
     r.return_time_vn = null;
+    r.return_shown = null;
+    r.return_exact = 0;
     r.tat_return = null;
     r.tat_gio = null;
     r.return_scan = '';
@@ -709,7 +711,14 @@ function pickslip(range, f) {
     r.tat_return = tat;
     // Gio chinh xac (demo: cong them so gio le)
     const gioLe = rndInt(0, 23);
-    r.return_time_vn = new Date(Date.parse(r.booked_time_vn) + tat * 86400000 + gioLe * 3600000).toISOString();
+    // ~75% moi truong co MUTATION_TIME -> biet GIO tra kho that; con lai chi co
+    // NGAY. Phai sinh ca hai truong hop, neu khong se khong lo ra loi o nhanh
+    // "chỉ có ngày" cua cot "Gio tra kho".
+    r.return_time_vn = rndInt(0, 9) < 8
+      ? new Date(Date.parse(r.booked_time_vn) + tat * 86400000 + gioLe * 3600000).toISOString()
+      : null;
+    r.return_shown = r.return_time_vn || r.return_date;
+    r.return_exact = r.return_time_vn ? 1 : 0;
     r.tat_gio = Math.round((tat * 24 + (r.issue_time_vn ? gioLe : 0)) * 10) / 10;
     r.tat_chinh_xac = !!r.issue_time_vn;
     r.return_scan = rndInt(0, 9) < 6 ? 'SCANNED' : 'CHUA_SCAN';

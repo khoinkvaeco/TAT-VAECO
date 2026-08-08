@@ -194,6 +194,11 @@ Nhờ vậy *TAT hoàn kho* tính được **theo giờ** thay vì ngày tròn: 
 - **Giờ trả kho** lấy từ `HISTORY.MUTATION + MUTATION_TIME` — `HISTORY` là bảng **sự kiện**
   (mỗi dòng một lần dịch chuyển) nên `MUTATION` chính là thời điểm sự kiện; đo được `MUTATION`
   lệch `DEL_DATE` 0–2 ngày, chấp nhận được.
+  Cột này **làm y hệt “Giờ xuất kho”**: gộp `Ngày trả kho` + `Giờ trả kho` thành **một cột** —
+  có giờ thật thì hiện đủ, môi trường nào thiếu `MUTATION_TIME` thì hiện **NGÀY** kèm “(chỉ có ngày)”.
+  Server trả kèm `return_shown` / `return_exact` (tính ở Node trong `enrichPickslipRows`, không phải SQL,
+  vì phiếu trả lấy theo lô từ `HISTORY` sau truy vấn chính). Cột `Ngày trả kho` riêng đã bỏ.
+  Cả hai cặp dùng **chung một formatter** `fmtNgayGioGop(<tên trường _exact>)` trong `script.js`.
 - AMOS **không có** cột riêng cho *giờ hủy*; cột hiển thị là **“Sửa cuối (dòng hủy)”** —
   mốc gần nhất có thể coi là lúc hủy, và tên cột nói rõ điều đó thay vì hứa hẹn quá.
 
