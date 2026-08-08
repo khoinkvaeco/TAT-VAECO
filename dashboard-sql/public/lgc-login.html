@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>LGC · Nhập mã nhân viên</title>
+  <title>LGC · Đăng nhập</title>
   <!-- CSS viết thẳng ở đây: trang này phải hiện được kể cả khi mọi thứ khác hỏng. -->
   <style>
     :root {
@@ -19,7 +19,7 @@
       font-family: system-ui,-apple-system,"Segoe UI",sans-serif;
       background:var(--bg); color:var(--text);
     }
-    .hop { width:100%; max-width:430px; background:var(--surface);
+    .hop { width:100%; max-width:440px; background:var(--surface);
            border:1px solid var(--hair); border-radius:16px; overflow:hidden;
            box-shadow:0 6px 28px rgba(15,30,40,.12); }
     .dau { background:linear-gradient(100deg,var(--brand1),var(--brand2)); color:#eaf5f6;
@@ -28,30 +28,35 @@
     .logo { width:40px; height:40px; border-radius:11px; display:grid; place-items:center;
             background:var(--accent); color:var(--brand1); flex:none; }
     h1 { font-size:17px; margin:0; font-weight:700; }
-    .phu { font-size:12px; opacity:.8; margin-top:2px; }
-    .than { padding:22px; }
-    label { display:block; font-size:13px; font-weight:600; margin-bottom:6px; }
+    .phu { font-size:12px; opacity:.85; margin-top:2px; }
+    form { padding:22px; }
+    label { display:block; font-size:13px; font-weight:600; margin-bottom:6px; margin-top:14px; }
+    label:first-of-type { margin-top:0; }
     input {
-      width:100%; padding:11px 13px; font-size:16px; letter-spacing:.06em;
-      text-transform:uppercase; border-radius:10px; border:1px solid var(--hair);
+      width:100%; padding:11px 13px; font-size:15px;
+      border-radius:10px; border:1px solid var(--hair);
       background:var(--bg); color:var(--text);
     }
+    #ma { text-transform:uppercase; letter-spacing:.06em; }
     input:focus { outline:2px solid var(--accent); outline-offset:-1px; }
-    .goiy { font-size:12px; color:var(--muted); margin-top:7px; line-height:1.5; }
+    .goiy { font-size:12px; color:var(--muted); margin:8px 0 0; line-height:1.55; }
     button {
-      width:100%; margin-top:16px; padding:11px; font-size:15px; font-weight:700;
+      width:100%; margin-top:18px; padding:11px; font-size:15px; font-weight:700;
       border:0; border-radius:10px; background:var(--brand2); color:#fff; cursor:pointer;
     }
     button:hover:not(:disabled) { filter:brightness(1.08); }
     button:disabled { opacity:.6; cursor:progress; }
     .bao { margin-top:14px; padding:10px 12px; border-radius:10px; font-size:13px;
-           line-height:1.5; display:none; }
+           line-height:1.55; display:none; }
     .bao.loi  { display:block; background:color-mix(in srgb,var(--bad) 12%,transparent);
                 border:1px solid color-mix(in srgb,var(--bad) 40%,transparent); color:var(--bad); }
     .bao.ok   { display:block; background:color-mix(in srgb,var(--good) 12%,transparent);
                 border:1px solid color-mix(in srgb,var(--good) 40%,transparent); color:var(--good); }
     .chan { border-top:1px solid var(--hair); padding:13px 22px; font-size:12px; color:var(--muted); }
     .chan a { color:var(--brand2); }
+    .an { display:none; }
+    .chao { padding:12px 22px 0; font-size:13px; }
+    .chao b { color:var(--brand2); }
   </style>
 </head>
 <body>
@@ -63,21 +68,46 @@
         </svg>
       </div>
       <div>
-        <h1>Trang LGC</h1>
+        <h1 id="tieuDe">Đăng nhập trang LGC</h1>
         <div class="phu">VAECO · Logistics Center · dành riêng cho nhân viên CUVT</div>
       </div>
     </div>
 
-    <form class="than" id="form">
+    <!-- ===== Bước 1: đăng nhập ===== -->
+    <form id="formDn">
       <label for="ma">Mã nhân viên</label>
-      <input id="ma" name="ma" autocomplete="off" autocapitalize="characters"
+      <input id="ma" name="ma" autocomplete="username" autocapitalize="characters"
              spellcheck="false" placeholder="VD: VAE12345" autofocus required />
+
+      <label for="mk">Mật khẩu</label>
+      <input id="mk" name="mk" type="password" autocomplete="current-password" required />
+
       <p class="goiy">
-        Nhập mã nhân viên bạn dùng trong AMOS. Hệ thống tra Trung tâm của mã này;
-        chỉ nhân viên <b>CUVT</b> mới xem được trang LGC.
+        <b>Lần đầu đăng nhập:</b> mật khẩu chính là <b>mã nhân viên viết hoa</b>.
+        Hệ thống sẽ yêu cầu bạn đổi mật khẩu ngay sau đó.
       </p>
-      <button type="submit" id="nut">Vào trang LGC</button>
-      <div class="bao" id="bao" role="alert" aria-live="polite"></div>
+      <button type="submit" id="nutDn">Đăng nhập</button>
+      <div class="bao" id="baoDn" role="alert" aria-live="polite"></div>
+    </form>
+
+    <!-- ===== Bước 2: đổi mật khẩu (bắt buộc lần đầu) ===== -->
+    <div class="chao an" id="chao"></div>
+    <form id="formDoi" class="an">
+      <label for="mkCu">Mật khẩu hiện tại</label>
+      <input id="mkCu" name="mkCu" type="password" autocomplete="current-password" required />
+
+      <label for="mkMoi">Mật khẩu mới</label>
+      <input id="mkMoi" name="mkMoi" type="password" autocomplete="new-password" required />
+
+      <label for="mkMoi2">Nhập lại mật khẩu mới</label>
+      <input id="mkMoi2" name="mkMoi2" type="password" autocomplete="new-password" required />
+
+      <p class="goiy">
+        Từ 6 ký tự trở lên và <b>không được trùng mã nhân viên</b> — nếu trùng thì coi như
+        chưa đổi, ai biết mã cũng vào được.
+      </p>
+      <button type="submit" id="nutDoi">Đổi mật khẩu và vào trang</button>
+      <div class="bao" id="baoDoi" role="alert" aria-live="polite"></div>
     </form>
 
     <div class="chan">
@@ -87,38 +117,77 @@
 
   <script>
     const $ = (s) => document.querySelector(s);
-    const bao = (loai, chu) => { const b = $('#bao'); b.className = 'bao ' + loai; b.textContent = chu; };
+    const bao = (el, loai, chu) => { const b = $(el); b.className = 'bao ' + loai; b.textContent = chu; };
+    const den = () => {
+      const d = new URLSearchParams(location.search).get('den') || '/lgc';
+      return d.startsWith('/') ? d : '/lgc';
+    };
 
-    $('#form').addEventListener('submit', async (e) => {
+    function sangBuocDoiMatKhau(ma, ten, batBuoc) {
+      $('#formDn').classList.add('an');
+      $('#formDoi').classList.remove('an');
+      $('#chao').classList.remove('an');
+      $('#tieuDe').textContent = batBuoc ? 'Đổi mật khẩu lần đầu' : 'Đổi mật khẩu';
+      $('#chao').innerHTML = `Xin chào <b>${(ten || ma).replace(/[<>&]/g, '')}</b>`
+        + (batBuoc ? ' — bạn cần đổi mật khẩu trước khi vào trang LGC.' : '');
+      // Mat khau hien tai = ma nhan vien (lan dau) -> dien san cho do phai go lai
+      $('#mkCu').value = $('#mk').value;
+      $('#mkMoi').focus();
+    }
+
+    $('#formDn').addEventListener('submit', async (e) => {
       e.preventDefault();
       const ma = $('#ma').value.trim().toUpperCase();
-      if (!ma) return;
-      $('#nut').disabled = true;
-      $('#nut').textContent = 'Đang kiểm tra…';
-      bao('', '');
+      const matKhau = $('#mk').value;
+      if (!ma || !matKhau) return;
+      $('#nutDn').disabled = true; $('#nutDn').textContent = 'Đang kiểm tra…';
+      bao('#baoDn', '', '');
       try {
         const r = await fetch('/api/lgc/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ma }),
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ma, matKhau }),
         });
         const d = await r.json();
         if (!r.ok || d.error) {
-          bao('loi', d.message || 'Không vào được. Thử lại.');
-          $('#nut').disabled = false;
-          $('#nut').textContent = 'Vào trang LGC';
+          bao('#baoDn', 'loi', d.message || 'Không đăng nhập được.');
           return;
         }
-        bao('ok', `Xin chào ${d.ma} (${d.department}). Đang mở trang LGC…`);
-        // Quay lai dung trang nguoi dung dinh vao (mac dinh /lgc)
-        const den = new URLSearchParams(location.search).get('den') || '/lgc';
-        setTimeout(() => { location.href = den.startsWith('/') ? den : '/lgc'; }, 600);
+        if (d.doiMk) { sangBuocDoiMatKhau(d.ma, d.ten, true); return; }
+        bao('#baoDn', 'ok', `Xin chào ${d.ten || d.ma}. Đang mở trang LGC…`);
+        setTimeout(() => { location.href = den(); }, 500);
       } catch (err) {
-        bao('loi', 'Lỗi kết nối: ' + err.message);
-        $('#nut').disabled = false;
-        $('#nut').textContent = 'Vào trang LGC';
+        bao('#baoDn', 'loi', 'Lỗi kết nối: ' + err.message);
+      } finally {
+        $('#nutDn').disabled = false; $('#nutDn').textContent = 'Đăng nhập';
       }
     });
+
+    $('#formDoi').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const cu = $('#mkCu').value, moi = $('#mkMoi').value, moi2 = $('#mkMoi2').value;
+      if (moi !== moi2) { bao('#baoDoi', 'loi', 'Hai ô mật khẩu mới không giống nhau.'); return; }
+      $('#nutDoi').disabled = true; $('#nutDoi').textContent = 'Đang đổi…';
+      bao('#baoDoi', '', '');
+      try {
+        const r = await fetch('/api/lgc/doi-mat-khau', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ matKhauCu: cu, matKhauMoi: moi }),
+        });
+        const d = await r.json();
+        if (!r.ok || d.error) { bao('#baoDoi', 'loi', d.message || 'Không đổi được mật khẩu.'); return; }
+        bao('#baoDoi', 'ok', 'Đã đổi mật khẩu. Đang mở trang LGC…');
+        setTimeout(() => { location.href = den(); }, 600);
+      } catch (err) {
+        bao('#baoDoi', 'loi', 'Lỗi kết nối: ' + err.message);
+      } finally {
+        $('#nutDoi').disabled = false; $('#nutDoi').textContent = 'Đổi mật khẩu và vào trang';
+      }
+    });
+
+    // Da dang nhap nhung con no viec doi mat khau -> vao thang buoc 2
+    fetch('/api/lgc/me').then((r) => r.json()).then((d) => {
+      if (d && d.ok && d.doiMk) sangBuocDoiMatKhau(d.ma, d.ten, true);
+    }).catch(() => {});
   </script>
 </body>
 </html>

@@ -4,16 +4,20 @@
  * ---------------------------------------------------------------------------
  * VI SAO CAN: truoc day `/lgc` chi la "don gian hoa giao dien" - ai go dung
  * dia chi deu vao duoc. Khi cong bo dashboard cho CA CONG TY thi dieu do co
- * nghia la cong bo luon nghiep vu noi bo cua kho. Nay da co cong hoi ma nhan
- * vien; bai kiem tra nay bao dam cong do KHONG bi ho tro lai mot cach am tham.
+ * nghia la cong bo luon nghiep vu noi bo cua kho. Nay da co XAC THUC (ma nhan
+ * vien + mat khau); bai kiem tra nay bao dam no KHONG bi ho tro lai am tham.
  *
  * Chay server o DEMO_MODE (ma bat dau bang 'CU' = thuoc CUVT) roi thu:
- *   1. Chua nhap ma  -> trang /lgc ra man nhap ma, API LGC tra 401
+ *   1. Chua dang nhap -> trang /lgc ra man dang nhap, API LGC tra 401
  *   2. Trang dashboard cong khai KHONG bi chan
  *   3. Ma khong thuoc CUVT -> tu choi
- *   4. Ma thuoc CUVT -> cho vao, va cookie dung duoc cho API
- *   5. Cookie GIA MAO / SUA HAN -> tu choi  (day la cho de sai nhat)
- *   6. Do ma hang loat -> bi chan (429)
+ *   4. Ma CUVT nhung mat khau khoi tao sai -> tu choi
+ *   5. Ma CUVT + mat khau khoi tao dung -> vao duoc NHUNG phai doi mat khau,
+ *      va TRONG LUC CHUA DOI thi VAN BI CHAN  (cho de lam hinh thuc nhat)
+ *   6. Mat khau moi khong duoc trung ma nhan vien / khong duoc qua ngan
+ *   7. Doi xong -> vao duoc; mat khau CU khong dung duoc nua
+ *   8. Cookie GIA MAO / SUA HAN -> tu choi  (cho de sai nhat)
+ *   9. Sai mat khau nhieu lan -> KHOA tai khoan
  *
  * CHAY:  node tools/gatecheck.js   (da nam trong `npm run smoke`)
  */
@@ -46,14 +50,17 @@ async function main() {
     if (!up) { console.error('✖ Khong khoi dong duoc server de kiem tra cong LGC.'); process.exit(1); }
 
     const API_LGC = `/api/pickslip?periodType=month&month=2026-08`;
+    const dn = (ma, matKhau) => fetch(`${BASE}/api/lgc/login`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ma, matKhau }),
+    });
 
-    // 1. Chua nhap ma
+    // 1. Chua dang nhap
     const trang = await fetch(`${BASE}/lgc`).then((r) => r.text());
-    kiemTra('Chua nhap ma -> /lgc ra man hinh nhap ma',
-      trang.includes('Nhập mã nhân viên'));
+    kiemTra('Chua dang nhap -> /lgc ra man hinh dang nhap', trang.includes('Đăng nhập'));
     for (const ep of [API_LGC, '/api/receiving', '/api/reports/repair-admin']) {
       const r = await fetch(BASE + ep);
-      kiemTra(`Chua nhap ma -> ${ep.split('?')[0]} bi chan`, r.status === 401, `HTTP ${r.status}`);
+      kiemTra(`Chua dang nhap -> ${ep.split('?')[0]} bi chan`, r.status === 401, `HTTP ${r.status}`);
     }
 
     // 2. Trang cong khai khong bi anh huong
@@ -63,45 +70,64 @@ async function main() {
     }
 
     // 3. Ma khong thuoc CUVT
-    const sai = await fetch(`${BASE}/api/lgc/login`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ma: 'VAE12345' }),
+    const paDept = await dn('VAE12345', 'VAE12345');
+    kiemTra('Ma KHONG thuoc CUVT -> tu choi', paDept.status === 403, `HTTP ${paDept.status}`);
+
+    // 4. Ma CUVT nhung mat khau khoi tao sai
+    const saiMk = await dn('CU001', 'linh-tinh');
+    kiemTra('Ma CUVT + mat khau khoi tao SAI -> tu choi', saiMk.status === 401, `HTTP ${saiMk.status}`);
+
+    // 5. Mat khau khoi tao dung = MA NHAN VIEN VIET HOA
+    const ok1 = await dn('cu001', 'CU001');
+    const d1 = await ok1.json();
+    const cookie = (ok1.headers.get('set-cookie') || '').split(';')[0];
+    kiemTra('Mat khau khoi tao = ma nhan vien viet hoa -> vao duoc',
+      ok1.ok && d1.doiMk === true, `doiMk=${d1.doiMk}, ten="${d1.ten || ''}"`);
+    kiemTra('Ten nhan vien lay tu cot DESCRIPTION cua SIGN', !!d1.ten, `ten="${d1.ten || ''}"`);
+
+    // CHUA doi mat khau -> VAN BI CHAN (neu khong thi buoc doi chi la hinh thuc)
+    const chuaDoi = await fetch(BASE + API_LGC, { headers: { Cookie: cookie } });
+    kiemTra('CHUA doi mat khau -> van BI CHAN', chuaDoi.status === 401, `HTTP ${chuaDoi.status}`);
+
+    // 6. Luat mat khau moi
+    const doi = (cu, moi) => fetch(`${BASE}/api/lgc/doi-mat-khau`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: cookie },
+      body: JSON.stringify({ matKhauCu: cu, matKhauMoi: moi }),
     });
-    kiemTra('Ma KHONG thuoc CUVT -> tu choi', sai.status === 403, `HTTP ${sai.status}`);
+    // ⚠️ Cac phep thu duoi day PHAI deu THAT BAI, neu khong mat khau bi doi
+    // giua chung va cac buoc sau se sai mat khau hien tai (da dinh mot lan).
+    kiemTra('Mat khau moi qua ngan -> tu choi', (await doi('CU001', 'abc')).status === 400);
+    const trungMa = await doi('CU001', 'CU001');
+    kiemTra('Mat khau moi = ma nhan vien -> tu choi', trungMa.status === 400, `HTTP ${trungMa.status}`);
+    kiemTra('Mat khau cu SAI -> tu choi doi', (await doi('sai-het', 'MatKhau123')).status === 401);
 
-    // 4. Ma thuoc CUVT
-    const ok = await fetch(`${BASE}/api/lgc/login`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ma: 'CU001' }),
-    });
-    const cookie = (ok.headers.get('set-cookie') || '').split(';')[0];
-    kiemTra('Ma thuoc CUVT -> cho vao', ok.ok && cookie.startsWith('lgc_ok='), `HTTP ${ok.status}`);
+    // 7. Doi thanh cong -> vao duoc; mat khau cu het tac dung
+    kiemTra('Doi mat khau hop le', (await doi('CU001', 'MatKhau123')).ok);
+    const sauDoi = await fetch(BASE + API_LGC, { headers: { Cookie: cookie } });
+    kiemTra('Sau khi doi -> API LGC chay duoc', sauDoi.ok, `HTTP ${sauDoi.status}`);
+    kiemTra('Mat khau CU khong dung duoc nua', (await dn('CU001', 'CU001')).status === 401);
+    kiemTra('Mat khau MOI dang nhap duoc', (await dn('CU001', 'MatKhau123')).ok);
 
-    const coVe = await fetch(BASE + API_LGC, { headers: { Cookie: cookie } });
-    kiemTra('Co cookie hop le -> API LGC chay duoc', coVe.ok, `HTTP ${coVe.status}`);
-
-    // 5. Cookie gia mao / sua han  <-- cho de sai nhat
+    // 8. Cookie gia mao / sua han  <-- cho de sai nhat
     const gia = await fetch(BASE + API_LGC, {
-      headers: { Cookie: 'lgc_ok=CU001.99999999999999.deadbeefdeadbeefdeadbeefdeadbeef' },
+      headers: { Cookie: 'lgc_auth=CU001.99999999999999.deadbeefdeadbeefdeadbeefdeadbeef' },
     });
     kiemTra('Cookie BIA chu ky -> tu choi', gia.status === 401, `HTTP ${gia.status}`);
-
-    const [ma, , chuKy] = cookie.slice('lgc_ok='.length).split('.');
+    const [ma, , chuKy] = cookie.slice('lgc_auth='.length).split('.');
     const keoHan = await fetch(BASE + API_LGC, {
-      headers: { Cookie: `lgc_ok=${ma}.99999999999999.${chuKy}` },
+      headers: { Cookie: `lgc_auth=${ma}.99999999999999.${chuKy}` },
     });
     kiemTra('Cookie hop le nhung SUA HAN -> tu choi', keoHan.status === 401, `HTTP ${keoHan.status}`);
 
-    // 6. Do ma hang loat
-    let bichan = 0;
-    for (let i = 0; i < 14; i++) {
-      const r = await fetch(`${BASE}/api/lgc/login`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ma: `ZZ${i}` }),
-      });
-      if (r.status === 429) bichan += 1;
+    // 9. Sai mat khau nhieu lan -> khoa tai khoan
+    await dn('cuvt99', 'CUVT99');                 // lap tai khoan thu hai
+    let daKhoa = false;
+    for (let i = 0; i < 6; i++) {
+      const r = await dn('CUVT99', 'sai-mat-khau');
+      const b = await r.json().catch(() => ({}));
+      if (/kho[áa]/i.test(b.message || '')) daKhoa = true;
     }
-    kiemTra('Do ma hang loat -> bi chan', bichan > 0, `${bichan}/14 luot bi chan`);
+    kiemTra('Sai mat khau nhieu lan -> KHOA tai khoan', daKhoa);
   } finally {
     srv.kill();
   }

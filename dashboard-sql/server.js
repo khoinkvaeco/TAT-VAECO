@@ -4998,69 +4998,16 @@ app.use(compression({
 app.use(express.json());
 app.use(accessLogger); // ghi log IP + ten may cho MOI request (truoc static/API)
 // ---------------------------------------------------------------------------
-// CONG VAO TRANG LGC - hoi MA NHAN VIEN, chi cho nguoi thuoc CUVT
+// XAC THUC TRANG LGC (chi nhan vien CUVT) - chi tiet o auth-lgc.js
 // ---------------------------------------------------------------------------
-//  ⚠️ DAY LA "NHAN DIEN", KHONG PHAI "XAC THUC". Khong co mat khau: ai biet
-//  (hoac doan trung) mot ma nhan vien CUVT deu vao duoc. Day la giai phap
-//  TRUOC MAT theo yeu cau nghiep vu; muon chan that phai dung dang nhap
-//  Windows/AD qua reverse proxy. Bu lai, o day co:
-//    - GIOI HAN SO LAN THU theo IP  -> khong the do ma hang loat
-//    - GHI LOG moi lan vao/bi tu choi -> truy nguoc duoc
-//  Dung cho: trang /lgc, /kho va cac API chi LGC dung.
+//  Truoc day day chi la "cong nhan dien": hoi ma nhan vien, khong co mat khau
+//  -> ai biet mot ma CUVT deu vao duoc. Nay la XAC THUC THAT: ma nhan vien +
+//  mat khau, mat khau lan dau = ma nhan vien VIET HOA va BAT BUOC doi ngay.
+//  Tai khoan luu o bang [NQT].[dbo].[TAT_USER] (app tu tao).
 // ---------------------------------------------------------------------------
-const LGC_COOKIE = 'lgc_ok';
-const LGC_TTL_MS = 12 * 60 * 60 * 1000;              // 12 gio roi hoi lai
-const LGC_DEPTS = ['CUVT'];                          // trung tam duoc vao
-const LGC_SECRET_FILE = path.join(CONFIG.dataDir, 'lgc-secret.txt');
-
-/** Bi mat de ky cookie. Luu vao dataDir de KHOI DONG LAI khong dang xuat ai. */
-function lgcSecret() {
-  if (lgcSecret._v) return lgcSecret._v;
-  try {
-    if (fs.existsSync(LGC_SECRET_FILE)) {
-      lgcSecret._v = fs.readFileSync(LGC_SECRET_FILE, 'utf8').trim();
-    }
-  } catch (_) { /* doc khong duoc thi tao moi */ }
-  if (!lgcSecret._v) {
-    lgcSecret._v = crypto.randomBytes(32).toString('hex');
-    try {
-      if (!fs.existsSync(CONFIG.dataDir)) fs.mkdirSync(CONFIG.dataDir, { recursive: true });
-      fs.writeFileSync(LGC_SECRET_FILE, lgcSecret._v, { encoding: 'utf8', mode: 0o600 });
-    } catch (e) { console.warn('[LGC] Khong luu duoc lgc-secret.txt:', e.message); }
-  }
-  return lgcSecret._v;
-}
-
-const lgcKy = (v) => crypto.createHmac('sha256', lgcSecret()).update(v).digest('hex').slice(0, 32);
-
-/** Tao gia tri cookie: "<ma>.<han>.<chu ky>". */
-function lgcTaoVe(ma) {
-  const than = `${encodeURIComponent(ma)}.${Date.now() + LGC_TTL_MS}`;
-  return `${than}.${lgcKy(than)}`;
-}
-
-/** Doc + kiem tra cookie. Tra ve ma nhan vien, hoac '' neu khong hop le. */
-function lgcDocVe(req) {
-  const raw = String(req.headers.cookie || '')
-    .split(';').map((v) => v.trim()).find((v) => v.startsWith(LGC_COOKIE + '='));
-  if (!raw) return '';
-  const [ma, han, chuKy] = raw.slice(LGC_COOKIE.length + 1).split('.');
-  if (!ma || !han || !chuKy) return '';
-  const than = `${ma}.${han}`;
-  // So sanh chong do thoi gian (timing-safe) - hai chuoi phai cung do dai
-  const mong = lgcKy(than);
-  if (chuKy.length !== mong.length) return '';
-  if (!crypto.timingSafeEqual(Buffer.from(chuKy), Buffer.from(mong))) return '';
-  if (Number(han) < Date.now()) return '';
-  return decodeURIComponent(ma);
-}
-
-function lgcGhiLog(ip, ma, ketQua, ghiChu) {
-  const day = new Date().toISOString().slice(0, 10);
-  const vn = new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh', hour12: false });
-  const line = [vn, ip, ma || '-', ketQua, ghiChu || ''].join('\t') + '\n';
-  fs.appendFile(path.join(LOG_DIR, `lgc-access-${day}.log`), line, () => {});
-}
+const authLgc = require('./auth-lgc')({
+  query, dataDir: CONFIG.dataDir, logDir: LOG_DIR, demoMode: CONFIG.demoMode,
+});
 
 /** Duong dan thuoc khu vuc LGC (trang + API chi LGC dung). */
 function isLgcPath(p) {
@@ -5068,15 +5015,22 @@ function isLgcPath(p) {
   return p === '/api/pickslip' || p === '/api/receiving' || p === '/api/reports/repair-admin';
 }
 
-function lgcGuard(req, res, next) {
+async function lgcGuard(req, res, next) {
   if (!CONFIG.lgcGate || !isLgcPath(req.path)) return next();
-  if (lgcDocVe(req)) return next();
+  let ai = null;
+  try { ai = await authLgc.aiDangDung(req); } catch (_) { ai = null; }
+  // CHUA doi mat khau lan dau thi CHUA duoc xem du lieu - neu khong thi buoc
+  // doi mat khau chi la hinh thuc, ai cung vao duoc bang mat khau mac dinh.
+  if (ai && !ai.doiMk) return next();
   const ip = String(req.socket.remoteAddress || '').replace(/^::ffff:/, '') || 'unknown';
   if (req.path.startsWith('/api/')) {
-    res.status(401);
-    return res.json({ error: true, code: 'LGC_LOCKED', message: 'Cần nhập mã nhân viên để xem dữ liệu LGC.' });
+    return res.status(401).json({
+      error: true, code: ai ? 'LGC_DOI_MK' : 'LGC_LOCKED',
+      message: ai ? 'Bạn cần đổi mật khẩu trước khi xem dữ liệu LGC.'
+        : 'Cần đăng nhập để xem dữ liệu LGC.',
+    });
   }
-  lgcGhiLog(ip, '', 'FORM', req.originalUrl);
+  authLgc.ghiLog(ip, ai ? ai.ma : '', 'FORM', req.originalUrl);
   return res.sendFile(path.join(__dirname, 'public', 'lgc-login.html'));
 }
 
@@ -5481,89 +5435,72 @@ app.get('/api/progress/:job', (req, res) => {
   req.on('close', () => { clearInterval(tim); j.nghe.delete(res); });
 });
 
-// --- CONG LGC: nhap ma nhan vien -> tra SIGN xem co thuoc CUVT khong ---
-//     Gioi han so lan thu theo IP de khong the do ma hang loat.
-const LGC_THU_TOI_DA = 8;          // 8 lan / phut / IP
+// --- XAC THUC LGC: dang nhap / doi mat khau / thong tin nguoi dung ---
+//     Gioi han so lan thu theo IP (chong do mat khau tu nhieu tai khoan khac
+//     nhau - khoa theo tai khoan o auth-lgc.js khong chan duoc kieu do nay).
+const LGC_THU_TOI_DA = 10;         // 10 lan / phut / IP
 
-/** Tra Trung tam cua mot ma nhan vien. Tra '' neu khong tim thay. */
-async function trungTamCuaMa(ma) {
-  if (CONFIG.demoMode) {
-    // DEMO: ma bat dau bang 'CU' coi nhu thuoc CUVT, de chay thu giao dien
-    return /^cu/i.test(ma) ? 'CUVT' : 'PA';
-  }
-  const bang = signCacheReady
-    ? '[NQT].[dbo].[SIGN_CACHE]'
-    : '[DWH_DB]..[STG_AMOS].[SIGN]';
-  const rows = await query(
-    `SELECT TOP 1 MAX(LTRIM(RTRIM([DEPARTMENT]))) AS dept
-     FROM ${bang} WHERE LTRIM(RTRIM([USER_SIGN])) = @ma`,
-    { ma }
-  );
-  return String((rows[0] && rows[0].dept) || '').trim().toUpperCase();
-}
+const datCookieLgc = (res, ma) => res.setHeader('Set-Cookie',
+  `${authLgc.COOKIE}=${authLgc.taoVe(ma)}; Path=/; Max-Age=${Math.floor(authLgc.TTL_MS / 1000)}; HttpOnly; SameSite=Lax`);
 
 app.post('/api/lgc/login', h(async (req, res) => {
   const ip = String(req.socket.remoteAddress || '').replace(/^::ffff:/, '') || 'unknown';
   if (rateLimited(`lgc:${ip}`, LGC_THU_TOI_DA)) {
-    lgcGhiLog(ip, '', 'RATE_LIMIT', '');
-    return res.status(429).json({ error: true, message: 'Bạn thử quá nhiều lần. Chờ một phút rồi nhập lại.' });
+    authLgc.ghiLog(ip, '', 'RATE_LIMIT', '');
+    return res.status(429).json({ error: true, message: 'Bạn thử quá nhiều lần. Chờ một phút rồi thử lại.' });
   }
-  const ma = String((req.body || {}).ma || '').trim().toUpperCase().slice(0, 32);
-  if (!ma) return res.status(400).json({ error: true, message: 'Chưa nhập mã nhân viên.' });
-
-  let dept = '';
-  try {
-    dept = await trungTamCuaMa(ma);
-  } catch (e) {
-    lgcGhiLog(ip, ma, 'ERROR', e.message);
-    return res.status(500).json({ error: true, message: 'Không tra cứu được mã nhân viên. Thử lại sau.' });
-  }
-  if (!dept) {
-    lgcGhiLog(ip, ma, 'DENY', 'khong tim thay ma');
-    return res.status(403).json({ error: true, message: `Không tìm thấy mã nhân viên “${ma}” trong hệ thống AMOS.` });
-  }
-  if (!LGC_DEPTS.includes(dept)) {
-    lgcGhiLog(ip, ma, 'DENY', `dept=${dept}`);
-    return res.status(403).json({
-      error: true,
-      message: `Mã “${ma}” thuộc ${dept}. Trang LGC chỉ dành cho nhân viên ${LGC_DEPTS.join(' / ')}.`,
-    });
-  }
-  lgcGhiLog(ip, ma, 'ALLOW', `dept=${dept}`);
-  res.setHeader('Set-Cookie',
-    `${LGC_COOKIE}=${lgcTaoVe(ma)}; Path=/; Max-Age=${Math.floor(LGC_TTL_MS / 1000)}; HttpOnly; SameSite=Lax`);
-  res.json({ ok: true, ma, department: dept });
+  const b = req.body || {};
+  const kq = await authLgc.dangNhap(b.ma, b.matKhau, ip);
+  if (!kq.ok) return res.status(kq.status || 401).json({ error: true, code: kq.maLoi, message: kq.message });
+  datCookieLgc(res, kq.ma);
+  res.json({ ok: true, ma: kq.ma, ten: kq.ten, doiMk: kq.doiMk });
 }));
 
-/** Ai dang dung trang LGC (de hien "Xin chao ..."). */
-app.get('/api/lgc/me', h(async (req, res) => {
-  const ma = lgcDocVe(req);
-  res.json({ ok: !!ma, ma, gate: CONFIG.lgcGate });
-}));
-
-app.post('/api/lgc/logout', h(async (req, res) => {
-  res.setHeader('Set-Cookie', `${LGC_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax`);
+app.post('/api/lgc/doi-mat-khau', h(async (req, res) => {
+  const ip = String(req.socket.remoteAddress || '').replace(/^::ffff:/, '') || 'unknown';
+  const ma = authLgc.docVe(req);
+  if (!ma) return res.status(401).json({ error: true, message: 'Phiên đăng nhập đã hết hạn. Đăng nhập lại.' });
+  const b = req.body || {};
+  const kq = await authLgc.doiMatKhau(ma, b.matKhauCu, b.matKhauMoi, ip);
+  if (!kq.ok) return res.status(kq.status || 400).json({ error: true, message: kq.message });
+  datCookieLgc(res, ma);            // gia han ve sau khi doi mat khau
   res.json({ ok: true });
 }));
 
-// --- ADMIN: xem / xoa ban luu KPI theo thang (JSON) ---
+app.get('/api/lgc/me', h(async (req, res) => {
+  const ai = await authLgc.aiDangDung(req).catch(() => null);
+  res.json({ ok: !!ai, ...(ai || {}), gate: CONFIG.lgcGate, ...authLgc.trangThai() });
+}));
+
+app.post('/api/lgc/logout', h(async (req, res) => {
+  res.setHeader('Set-Cookie', `${authLgc.COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax`);
+  res.json({ ok: true });
+}));
+
+// --- ADMIN: xem / xoa ban luu KPI theo thang ([NQT].[dbo].[TAT_KPI_THANG]) ---
 app.get('/api/admin/snapshot', h(async (req, res) => {
-  const d = docSnapshot();
-  const ds = Object.entries(d.muc).map(([k, v]) => ({
-    khoa: k, month: v.month, luuLuc: v.luuLuc,
-  })).sort((a, b) => b.month.localeCompare(a.month));
-  res.json({
-    version: d.version, soBan: ds.length, file: SNAPSHOT_FILE,
-    choNgay: SNAPSHOT_CHO_NGAY, toiDa: SNAPSHOT_MAX, ds: ds.slice(0, 100),
-  });
+  const chung = {
+    bang: '[NQT].[dbo].[TAT_KPI_THANG]', sanSang: snapSanSang,
+    phienBan: SNAPSHOT_VERSION, choNgay: SNAPSHOT_CHO_NGAY, toiDa: SNAPSHOT_MAX,
+  };
+  if (CONFIG.demoMode) return res.json({ ...chung, demo: true, soBan: snapDemo.size });
+  const rows = await query(
+    `SELECT TOP 100 [thang], [van_tay], [phien_ban], [bo_loc], [luu_luc]
+     FROM [NQT].[dbo].[TAT_KPI_THANG] ORDER BY [luu_luc] DESC`
+  );
+  const tong = await query('SELECT COUNT(*) AS n FROM [NQT].[dbo].[TAT_KPI_THANG]');
+  res.json({ ...chung, soBan: (tong[0] || {}).n || 0, ds: rows });
 }));
 
 /** Xoa ban luu - dung khi nghi so lieu thang cu bi sai va muon tinh lai. */
 app.post('/api/admin/snapshot/clear', h(async (req, res) => {
-  const truoc = Object.keys(docSnapshot().muc).length;
-  _snap = { version: SNAPSHOT_VERSION, muc: {} };
-  ghiSnapshot();
-  res.json({ ok: true, daXoa: truoc });
+  if (CONFIG.demoMode) {
+    const n = snapDemo.size; snapDemo.clear();
+    return res.json({ ok: true, daXoa: n });
+  }
+  const tong = await query('SELECT COUNT(*) AS n FROM [NQT].[dbo].[TAT_KPI_THANG]');
+  await query('DELETE FROM [NQT].[dbo].[TAT_KPI_THANG]');
+  res.json({ ok: true, daXoa: (tong[0] || {}).n || 0 });
 }));
 
 app.get('/api/whoami', h(async (req, res) => {
@@ -5746,40 +5683,41 @@ app.get(
 // ---------------------------------------------------------------------------
 const SNAPSHOT_VERSION = 1;          // TANG khi doi cach tinh KPI/TAT
 const SNAPSHOT_CHO_NGAY = 3;         // cho N ngay sau khi thang ket thuc moi chup
-const SNAPSHOT_MAX = 400;            // chan file phinh vo han
-const SNAPSHOT_FILE = path.join(CONFIG.dataDir, 'thang-snapshot.json');
-let _snap = null;
+const SNAPSHOT_MAX = 2000;           // chan bang phinh vo han
+let snapSanSang = false;
+const snapDemo = new Map();          // DEMO_MODE: giu trong bo nho, khong dung SQL
 
-function docSnapshot() {
-  if (_snap) return _snap;
+/** Tao bang luu (chi tao BANG CUA APP - tien to TAT_). */
+async function khoiTaoSnapshot() {
+  if (CONFIG.demoMode) { snapSanSang = true; return; }
   try {
-    const d = JSON.parse(fs.readFileSync(SNAPSHOT_FILE, 'utf8'));
-    _snap = (d && d.version === SNAPSHOT_VERSION && d.muc) ? d : { version: SNAPSHOT_VERSION, muc: {} };
-  } catch (_) {
-    _snap = { version: SNAPSHOT_VERSION, muc: {} };
+    await query(`
+      IF OBJECT_ID('[NQT].[dbo].[TAT_KPI_THANG]', 'U') IS NULL
+      CREATE TABLE [NQT].[dbo].[TAT_KPI_THANG] (
+        [thang]    CHAR(7)        NOT NULL,
+        [van_tay]  CHAR(32)       NOT NULL,   -- MD5 cua bo loc (xem vanTayFilter)
+        [phien_ban] INT           NOT NULL,   -- SNAPSHOT_VERSION luc chup
+        [bo_loc]   NVARCHAR(400)  NULL,       -- de nguoi doc hieu van_tay la gi
+        [kpi_json] NVARCHAR(MAX)  NOT NULL,
+        [luu_luc]  DATETIME2(0)   NOT NULL CONSTRAINT DF_TAT_KPI_luu DEFAULT (SYSUTCDATETIME()),
+        CONSTRAINT PK_TAT_KPI_THANG PRIMARY KEY ([thang], [van_tay], [phien_ban])
+      );`);
+    snapSanSang = true;
+    console.log('[SNAPSHOT] Bang [NQT].[dbo].[TAT_KPI_THANG] san sang.');
+  } catch (e) {
+    snapSanSang = false;
+    console.warn('[SNAPSHOT] ⚠ Khong tao duoc bang TAT_KPI_THANG:', e.message);
+    console.warn('[SNAPSHOT]   Bang so sanh thang van chay, chi la KHONG duoc tang toc.');
   }
-  return _snap;
-}
-
-function ghiSnapshot() {
-  const d = docSnapshot();
-  const khoa = Object.keys(d.muc);
-  if (khoa.length > SNAPSHOT_MAX) {
-    // Bo cac ban chup CU NHAT (theo luc chup)
-    khoa.sort((a, b) => (d.muc[a].luuLuc || '').localeCompare(d.muc[b].luuLuc || ''))
-      .slice(0, khoa.length - SNAPSHOT_MAX)
-      .forEach((k) => delete d.muc[k]);
-  }
-  try { saveJsonSafe(SNAPSHOT_FILE, d); }
-  catch (e) { console.warn('[SNAPSHOT] Khong luu duoc:', e.message); }
 }
 
 /** Van tay cua bo loc: so lieu phu thuoc bo loc nen khoa phai gom ca no. */
 function vanTayFilter(f) {
-  return JSON.stringify([
+  const mo = JSON.stringify([
     [...(f.station || [])].sort(), [...(f.store || [])].sort(),
     [...(f.department || [])].sort(), !!f.excludeCC, !!f.excludeCab,
   ]);
+  return { bam: crypto.createHash('md5').update(mo).digest('hex'), mo: mo.slice(0, 400) };
 }
 
 /** Thang `YYYY-MM` da DONG va du lau de chup chua? */
@@ -5787,6 +5725,68 @@ function thangDaDong(mstr) {
   const [y, m] = mstr.split('-').map(Number);
   const hetThang = new Date(Date.UTC(y, m, 1));            // 00:00 ngay 1 thang sau
   return Date.now() >= hetThang.getTime() + SNAPSHOT_CHO_NGAY * 86400000;
+}
+
+/** Doc cac ban chup da co cho mot loat thang. -> Map<thang, kpi> */
+async function docSnapshot(thangs, vt) {
+  if (!snapSanSang || !thangs.length) return new Map();
+  if (CONFIG.demoMode) {
+    const m = new Map();
+    thangs.forEach((t) => { const v = snapDemo.get(`${t}|${vt.bam}`); if (v) m.set(t, v); });
+    return m;
+  }
+  const params = { vt: vt.bam, pb: SNAPSHOT_VERSION };
+  const ten = thangs.map((t, i) => { params[`t${i}`] = t; return `@t${i}`; });
+  try {
+    const rows = await query(
+      `SELECT [thang], [kpi_json] FROM [NQT].[dbo].[TAT_KPI_THANG]
+       WHERE [van_tay] = @vt AND [phien_ban] = @pb AND [thang] IN (${ten.join(', ')})`,
+      params
+    );
+    const m = new Map();
+    rows.forEach((r) => { try { m.set(String(r.thang).trim(), JSON.parse(r.kpi_json)); } catch (_) { /* bo qua ban hong */ } });
+    return m;
+  } catch (e) {
+    console.warn('[SNAPSHOT] Khong doc duoc ban luu:', e.message);
+    return new Map();
+  }
+}
+
+/** Ghi mot ban chup (bo qua neu khong ghi duoc - chi mat toc do, khong mat gi). */
+async function ghiSnapshot(thang, vt, kpi) {
+  if (!snapSanSang) return;
+  if (CONFIG.demoMode) { snapDemo.set(`${thang}|${vt.bam}`, kpi); return; }
+  try {
+    // MERGE de chay lai khong bi trung khoa chinh
+    await query(
+      `MERGE [NQT].[dbo].[TAT_KPI_THANG] AS t
+       USING (SELECT @thang AS thang, @vt AS van_tay, @pb AS phien_ban) AS s
+         ON t.[thang] = s.thang AND t.[van_tay] = s.van_tay AND t.[phien_ban] = s.phien_ban
+       WHEN MATCHED THEN UPDATE SET [kpi_json] = @kpi, [luu_luc] = SYSUTCDATETIME()
+       WHEN NOT MATCHED THEN
+         INSERT ([thang], [van_tay], [phien_ban], [bo_loc], [kpi_json])
+         VALUES (@thang, @vt, @pb, @moTa, @kpi);`,
+      { thang, vt: vt.bam, pb: SNAPSHOT_VERSION, moTa: vt.mo, kpi: JSON.stringify(kpi) }
+    );
+  } catch (e) {
+    console.warn('[SNAPSHOT] Khong ghi duoc ban luu:', e.message);
+  }
+}
+
+/** Don bot khi bang qua lon + bo cac ban thuoc PHIEN BAN CU (cach tinh da doi). */
+async function donSnapshot() {
+  if (!snapSanSang || CONFIG.demoMode) return;
+  try {
+    await query(
+      `DELETE FROM [NQT].[dbo].[TAT_KPI_THANG] WHERE [phien_ban] <> @pb;
+       WITH x AS (
+         SELECT ROW_NUMBER() OVER (ORDER BY [luu_luc] DESC) AS rn
+         FROM [NQT].[dbo].[TAT_KPI_THANG]
+       )
+       DELETE FROM x WHERE rn > ${SNAPSHOT_MAX};`,
+      { pb: SNAPSHOT_VERSION }
+    );
+  } catch (e) { console.warn('[SNAPSHOT] Khong don duoc bang:', e.message); }
 }
 
 app.get(
@@ -5807,16 +5807,16 @@ app.get(
     }
     const ghi = moNhatKy(req.query.job);
     const vt = vanTayFilter(f);
-    const snap = docSnapshot();
+    // Doc TAT CA ban luu trong MOT cau (khong hoi tung thang mot)
+    const daCo = await docSnapshot(monthStrs.filter(thangDaDong), vt);
     let tuSnapshot = 0;
 
     // Chay SONG SONG cac thang (pool max 10 chiu duoc) -> nhanh gap ~N lan
     // so voi cho tung thang noi duoi nhau nhu truoc.
-    // THANG DA DONG thi lay tu JSON, khoi hoi AMOS lai - xem docSnapshot().
+    // THANG DA DONG thi lay tu bang TAT_KPI_THANG, khoi hoi AMOS lai.
     const series = await Promise.all(monthStrs.map(async (mstr) => {
-      const khoa = `${mstr}|${vt}`;
-      const cu = snap.muc[khoa];
-      if (cu && thangDaDong(mstr)) { tuSnapshot += 1; return { ...cu.kpi, month: mstr, tuSnapshot: true }; }
+      const cu = daCo.get(mstr);
+      if (cu) { tuSnapshot += 1; return { ...cu, month: mstr, tuSnapshot: true }; }
 
       const range = { ...monthRange(mstr), label: 'Thang' };
       const dash = CONFIG.demoMode
@@ -5831,13 +5831,11 @@ app.get(
       // Chi chup THANG DA DONG (thang hien tai con phat sinh, chup la sai).
       // Che do DEMO cung chup: vua kiem thu duoc co che, vua lam so demo on
       // dinh thay vi nhay lung tung moi lan tai (demo sinh so ngau nhien).
-      if (thangDaDong(mstr)) {
-        snap.muc[khoa] = { month: mstr, luuLuc: new Date().toISOString(), kpi };
-      }
+      if (thangDaDong(mstr)) await ghiSnapshot(mstr, vt, kpi);
       return { ...kpi, month: mstr, tuSnapshot: false };
     }));
-    ghiSnapshot();
-    ghi(`✔ Xong — ${tuSnapshot}/${monthStrs.length} tháng lấy từ bản lưu JSON `
+    donSnapshot();      // khong cho: don dep khong duoc lam nguoi dung phai doi
+    ghi(`✔ Xong — ${tuSnapshot}/${monthStrs.length} tháng lấy từ bản lưu `
       + `(chỉ ${monthStrs.length - tuSnapshot} tháng phải hỏi SQL Server)`, true);
     res.json({ series, months, tuSnapshot });
   })
@@ -7175,6 +7173,12 @@ app.listen(CONFIG.port, () => {
     console.log('  Bao cao dinh ky Teams/SharePoint: TAT (chua cau hinh)');
   }
   console.log('====================================================');
+  // Tao bang tai khoan LGC neu chua co (chi tao bang cua app, tien to TAT_).
+  // Goi CA o che do DEMO: o demo ham nay chi bat co san sang, khong dung SQL -
+  // thieu no thi trang dang nhap bao "he thong chua san sang" va khong kiem
+  // thu duoc gi.
+  authLgc.khoiTao();
+  khoiTaoSnapshot();   // bang luu KPI theo thang - cung chi la BANG CUA APP
   if (!CONFIG.demoMode) {
     // Thu ket noi som de bao loi ngay neu cau hinh sai
     getPool().catch((err) =>

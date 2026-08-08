@@ -122,7 +122,49 @@ function findFuncInRemoteWhere(sql) {
   return hits;
 }
 
+/**
+ * LUAT 4: CHI duoc GHI vao BANG CUA APP.
+ * ---------------------------------------------------------------------------
+ * Yeu cau nghiep vu (bat di bat dich): tai khoan SQL nay co quyen SUA, nhung
+ * app CHI duoc tao/ghi vao bang CUA RIENG NO. TUYET DOI khong duoc dong vao
+ * bang khac cua SQL Server - lam hong du lieu AMOS/NQT la hong that, khong
+ * quay lai duoc.
+ *
+ * Bang cua app: tien to `TAT_`, cong them `SIGN_CACHE` (co tu truoc).
+ * Bang tam (#...) va bien bang (@...) khong tinh - chung nam trong tempdb va
+ * tu bien mat khi dong ket noi.
+ *
+ * Day la luat LAM TRUOT, khong phai canh bao: mot cau UPDATE nham bang that
+ * nguy hiem hon nhieu so voi mot truy van cham.
+ */
+const BANG_CUA_APP = /^(TAT_[A-Z0-9_]*|SIGN_CACHE)$/i;
+const LENH_GHI = /\b(INSERT\s+INTO|UPDATE|DELETE\s+FROM|TRUNCATE\s+TABLE|MERGE(?:\s+INTO)?|CREATE\s+TABLE|ALTER\s+TABLE|DROP\s+TABLE)\s+((?:\[[^\]]+\]|[A-Za-z0-9_#@]+)(?:\s*\.\s*(?:\[[^\]]+\]|[A-Za-z0-9_]*))*)/gi;
+
+/** Lay ten bang tran trui tu "[NQT].[dbo].[TAT_USER]" -> "TAT_USER". */
+function tenBangTran(raw) {
+  const phan = String(raw).split('.').map((v) => v.trim().replace(/^\[|\]$/g, '')).filter(Boolean);
+  return phan[phan.length - 1] || '';
+}
+
+function findWriteOutsideAppTables(sql) {
+  const hits = [];
+  const txt = stripComments(sql);
+  let m;
+  LENH_GHI.lastIndex = 0;
+  while ((m = LENH_GHI.exec(txt)) !== null) {
+    const lenh = m[1].replace(/\s+/g, ' ').toUpperCase();
+    const bang = tenBangTran(m[2]);
+    if (!bang) continue;
+    if (bang.startsWith('#') || bang.startsWith('@')) continue;   // bang tam
+    if (BANG_CUA_APP.test(bang)) continue;                        // bang cua app
+    hits.push(`${lenh} vao bang KHONG PHAI cua app: ${m[2].trim()} `
+      + '(chi duoc ghi vao bang tien to TAT_ hoac SIGN_CACHE)');
+  }
+  return hits;
+}
+
 const RULES = [
+  { ten: 'Ghi vao bang KHONG phai cua app', tim: findWriteOutsideAppTables },
   { ten: 'Ham gom chua subquery (Msg 130)', tim: findAggWithSubquery },
   { ten: 'APPLY vao linked server', tim: findApplyOnLinkedServer },
   // canhBao = chi nhac, khong lam TRUOT (xem giai thich o findFuncInRemoteWhere)

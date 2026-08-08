@@ -2,8 +2,8 @@
 /**
  * SNAPCHECK - kiem tra BAN LUU KPI THEO THANG (data/thang-snapshot.json).
  * ---------------------------------------------------------------------------
- * Bang "So sanh cac thang" tren dashboard doc ban luu de khoi hoi AMOS lai cho
- * nhung thang DA DONG. Loi o day KHONG lam trang chet - no lam trang hien SO
+ * Bang "So sanh cac thang" tren dashboard doc ban luu ([NQT].[dbo].[TAT_KPI_THANG])
+ * de khoi hoi AMOS lai cho nhung thang DA DONG. Loi o day KHONG lam trang chet - no lam trang hien SO
  * SAI mot cach im lang, nguy hiem hon nhieu. Ba cho phai dung:
  *
  *   1. Thang DA DONG -> lay tu ban luu (nhanh)
@@ -76,10 +76,9 @@ async function main() {
     const l4 = await goi('&station=HAN');
     kiemTra('Moi bo loc co ban luu RIENG', l4.tuSnapshot === 5, `tuSnapshot=${l4.tuSnapshot}/6`);
 
-    const f = path.join(DATA, 'thang-snapshot.json');
-    const d = JSON.parse(fs.readFileSync(f, 'utf8'));
-    kiemTra('File ban luu ghi dung (2 bo loc x 5 thang)',
-      Object.keys(d.muc).length === 10, `${Object.keys(d.muc).length} ban ghi, version=${d.version}`);
+    const tt = await fetch(`${BASE}/api/admin/snapshot`).then((r) => r.json());
+    kiemTra('Ban luu ghi dung (2 bo loc x 5 thang)',
+      tt.soBan === 10, `${tt.soBan} ban ghi, phien ban=${tt.phienBan}, bang=${tt.bang}`);
 
     const xoa = await fetch(`${BASE}/api/admin/snapshot/clear`, { method: 'POST' }).then((r) => r.json());
     const l5 = await goi();

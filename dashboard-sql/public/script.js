@@ -2059,7 +2059,10 @@ async function chaoNguoiDungLgc() {
   if (!host) return;
   const box = document.createElement('span');
   box.className = 'lgc-chao';
-  box.innerHTML = `<span>Xin chào <b>${escapeHtml(me.ma)}</b></span>`;
+  // Ten lay tu cot DESCRIPTION cua bang SIGN; khong co ten thi hien ma
+  const ten = me.ten || me.ma;
+  box.innerHTML = `<span>Xin chào <b>${escapeHtml(ten)}</b></span>`;
+  box.title = `Mã nhân viên: ${me.ma}${me.department ? ' · ' + me.department : ''}`;
   const nut = document.createElement('button');
   nut.type = 'button';
   nut.className = 'lgc-thoat';

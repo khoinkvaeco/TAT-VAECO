@@ -287,49 +287,53 @@ kèm **5 dòng thật đã giải mã** để đối chiếu mắt thường. **
 - **Ghi log truy cập:** mọi request được ghi vào `logs/access-YYYY-MM-DD.log` (1 file/ngày, định dạng TSV — mở trực tiếp bằng Excel) gồm: thời gian, IP, tên máy, method, đường dẫn, mã trạng thái, thời gian xử lý. Thư mục `logs/` không commit lên git (`.gitignore`).
   - **Tra tên máy** theo 2 bước, cache 10 phút/IP: (1) reverse-DNS (PTR record) — chỉ có nếu DNS nội bộ khai báo; (2) nếu thất bại và server chạy trên **Windows**, thử `nbtstat -A <ip>` (NetBIOS qua UDP 137) — không phụ thuộc DNS, thường lấy được tên máy Windows trong cùng LAN. Nếu cả hai đều thất bại (mạng khác VLAN chặn UDP 137, máy tắt NetBIOS, hoặc server chạy Linux/macOS), cột tên máy ghi `N/A` — vẫn còn cột IP để tra thủ công.
 
-## 6f. Cổng vào trang LGC — hỏi mã nhân viên, chỉ cho CUVT
+## 6f. Xác thực trang LGC — mã nhân viên + mật khẩu, chỉ CUVT
 
-Khi dashboard được công bố cho **cả công ty**, `/lgc` không thể để mở nữa: ai gõ đúng
-địa chỉ là xem được toàn bộ nghiệp vụ nội bộ của kho. Nay `/lgc` và `/kho` ra **màn
-hình nhập mã nhân viên**; server tra Trung tâm của mã đó trong `SIGN` (hoặc
-`SIGN_CACHE`), chỉ **`CUVT`** mới được vào, rồi chào *“Xin chào &lt;mã&gt;”* trên thanh đầu
-kèm nút **Thoát**.
+Khi dashboard được công bố cho **cả công ty**, `/lgc` không thể để mở. Trước đây chỉ
+hỏi mã nhân viên (không mật khẩu) — đó là **nhận diện**, ai biết một mã CUVT đều vào
+được. Nay là **xác thực thật**.
 
-### ⚠️ Đây là NHẬN DIỆN, không phải XÁC THỰC
+### Luồng
 
-**Không có mật khẩu.** Ai biết — hoặc đoán trúng — một mã nhân viên CUVT đều vào được.
-Đây là giải pháp **trước mắt** theo yêu cầu nghiệp vụ, **không** phải kiểm soát truy cập
-thật. Muốn chặn thật thì phải đăng nhập Windows/AD qua reverse proxy (IIS/nginx).
-Đừng ghi số liệu nhạy cảm hơn vào trang này với giả định nó đã được bảo vệ.
+1. Nhập **mã nhân viên + mật khẩu**.
+2. Chưa có tài khoản → tra bảng `SIGN`: phải thuộc **CUVT** mới được lập tài khoản, và
+   mật khẩu lần đầu **phải là chính mã nhân viên VIẾT HOA**.
+3. Lập xong → **bắt buộc đổi mật khẩu ngay**. Chưa đổi thì **chưa xem được dữ liệu** —
+   không phải chỉ là màn hình nhắc nhở; `lgcGuard` chặn thật cả trang lẫn API.
+4. **Tên nhân viên** lấy từ cột **`[DESCRIPTION]`** của bảng `SIGN`, hiện ở lời chào
+   *“Xin chào &lt;tên&gt;”* trên thanh đầu, kèm nút **Thoát**.
 
-Bù lại có hai lớp giảm thiệt hại:
-
-- **Giới hạn 8 lần thử / phút / IP** → không dò mã hàng loạt được.
-- **Ghi log mọi lượt** vào `logs/lgc-access-YYYY-MM-DD.log` (`ALLOW` / `DENY` /
-  `RATE_LIMIT` / `FORM`) → truy ngược được ai đã vào.
-
-### Chi tiết kỹ thuật
+### Quy tắc mật khẩu và chống dò
 
 | | |
 |---|---|
-| Chặn ở | `lgcGuard` — middleware, đặt **trước** `express.static` nên chặn cả trang lẫn API |
-| Phạm vi | `/lgc`, `/kho`, `/api/pickslip`, `/api/receiving`, `/api/reports/repair-admin` |
-| Vé | Cookie `lgc_ok` = `<mã>.<hạn>.<HMAC-SHA256>`, `HttpOnly`, `SameSite=Lax`, hạn **12 giờ** |
-| Khoá ký | `data/lgc-secret.txt` (tự sinh, `chmod 600`) — để **khởi động lại không đăng xuất ai** |
+| Băm | **scrypt** (có sẵn trong Node) + muối ngẫu nhiên 16 byte **riêng từng người** |
+| Lưu | Chỉ băm + muối. **Không bao giờ** lưu mật khẩu gốc |
+| Mật khẩu mới | ≥ 6 ký tự, **không được trùng mã nhân viên** (trùng thì coi như chưa đổi) |
+| Sai liên tiếp | 5 lần → **khoá tài khoản 15 phút** |
+| Theo IP | 10 lần thử/phút — chặn kiểu dò nhiều tài khoản khác nhau |
+| Vé | Cookie `lgc_auth` = `<mã>.<hạn>.<HMAC-SHA256>`, `HttpOnly`, hạn 12 giờ |
 | So chữ ký | `crypto.timingSafeEqual` |
-| Tắt cổng | `LGC_GATE=false` trong `.env` |
+| Nhật ký | `logs/lgc-access-YYYY-MM-DD.log` — `ALLOW`/`DENY`/`FAIL`/`LOCKED`/`CREATE`/`CHGPW_OK`… |
 
-Trang `/` và `/api/dashboard` **không** bị ảnh hưởng — đó là phần công bố cho cả công ty.
+Mã nguồn nằm riêng ở **`auth-lgc.js`**; `server.js` chỉ gắn middleware và route.
+Tài khoản lưu ở bảng **`[NQT].[dbo].[TAT_USER]`** (app tự tạo).
 
-### Kiểm tra tự động: `tools/gatecheck.js`
+> **Còn thiếu gì so với hệ thống lớn:** không có SSO, không tự hết hạn mật khẩu, không
+> có quên-mật-khẩu (phải nhờ quản trị xoá dòng trong `TAT_USER` để về mặc định). Đủ
+> dùng cho phạm vi nội bộ, nhưng đừng nhầm đây là mức bảo mật của một hệ thống trung
+> tâm.
 
-Cổng bảo mật mà không có bài kiểm tra thì rất dễ hở lại một cách âm thầm (đổi đường
-dẫn, thêm endpoint mới, sửa middleware order…). `npm run smoke` nay chạy thêm
-`gatecheck` — dựng server DEMO rồi thử **12 trường hợp**, trong đó có hai cái dễ sai
-nhất: **cookie bịa chữ ký** và **cookie hợp lệ nhưng sửa hạn**. Cả hai phải bị từ chối.
+### Kiểm tra tự động: `tools/gatecheck.js` — 21 trường hợp
 
-> `smoke.js` và `sqlcheck.js` chạy với `LGC_GATE=false` — ở đó ta kiểm tra **câu SQL**,
-> không phải phân quyền; nếu bật cổng thì 3 endpoint LGC trả 401 và báo trượt oan.
+Cổng bảo mật không có bài kiểm tra thì rất dễ hở lại âm thầm. Bốn chỗ dễ sai nhất đều
+được kiểm:
+
+- **Chưa đổi mật khẩu mà vẫn xem được dữ liệu** — làm bước đổi mật khẩu thành hình thức.
+  *(Đã dính thật một lần: nhánh DEMO của `themUser` quên đặt `doi_mk`.)*
+- **Cookie bịa chữ ký** và **cookie hợp lệ nhưng sửa hạn**.
+- **Mật khẩu mới trùng mã nhân viên**.
+- **Mật khẩu cũ vẫn dùng được** sau khi đã đổi.
 
 ## 6e. Trang LGC lấy dữ liệu của TẤT CẢ station / store / trung tâm
 
@@ -759,52 +763,74 @@ hàm **rỗng**, nên chỗ gọi không phải kiểm tra gì.
 Bộ nhớ: mỗi việc tự hết hạn sau 5 phút, tối đa 200 việc, mỗi việc giữ tối đa 200 dòng.
 Nhịp tim 15 giây/lần để proxy không cắt kết nối “im lặng”.
 
-## 7g. Bảng so sánh các tháng + bản lưu KPI ra JSON
+## 7g. Bảng so sánh các tháng + bản lưu KPI trong SQL
 
 Bảng **So sánh các tháng** (trước ở trang beta) nay nằm trên **Dashboard**: biểu đồ
-kết hợp (cột *Chưa đối ứng* + đường TAT) và một bảng số bên dưới, chọn được 3 / 6 / 12
-tháng.
+kết hợp (cột *Chưa đối ứng* + đường TAT) và bảng số bên dưới, chọn 3 / 6 / 12 tháng.
 
 **Vấn đề:** 6 tháng = 6 lượt chạy lại toàn bộ truy vấn dashboard qua linked server.
-Rất lâu — mà số liệu của **tháng đã đóng thì không đổi nữa**.
+Rất lâu — mà số liệu **tháng đã đóng thì không đổi nữa**.
 
-**Cách làm:** tháng đã đóng được lưu ra `data/thang-snapshot.json`; lần sau đọc thẳng.
-Tháng **hiện tại luôn tính lại** vì còn đang phát sinh. Bảng đánh dấu 💾 ở những tháng
-lấy từ bản lưu, và mô tả ghi rõ *“N tháng lấy từ bản lưu, M tháng vừa hỏi SQL Server”* —
-người xem luôn biết số nào là mới.
+**Cách làm:** tháng đã đóng được lưu vào bảng **`[NQT].[dbo].[TAT_KPI_THANG]`**; lần
+sau đọc thẳng (một câu `SELECT ... IN (...)` cho cả 6 tháng). Tháng **hiện tại luôn
+tính lại** vì còn đang phát sinh. Bảng đánh dấu 💾 và mô tả ghi rõ *“N tháng lấy từ bản
+lưu, M tháng vừa hỏi SQL Server”*.
 
-Không tự chạy khi mở trang: phải bấm **▶ Xem**. Đổi bộ lọc thì bảng quay về trạng thái
-chưa chạy (số cũ không còn đúng nữa).
+Không tự chạy khi mở trang: phải bấm **▶ Xem**. Đổi bộ lọc thì quay về trạng thái chưa
+chạy (số cũ không còn đúng).
 
 ### ⚠️ Ba cái bẫy — đều đã xử lý
 
 1. **Số liệu phụ thuộc BỘ LỌC.** Cùng tháng 2026-05 nhưng lọc HAN và lọc SGN ra hai con
-   số khác nhau. Khóa bản lưu vì thế gồm **cả vân tay bộ lọc** (`vanTayFilter`) —
-   không thì người lọc HAN sẽ đọc phải số của người lọc SGN. Đây là lỗi *sai số liệu
-   im lặng*, nguy hiểm hơn hẳn lỗi chậm.
-2. **Đổi cách tính TAT làm bản lưu cũ thành SAI.** Mỗi bản ghi mang `SNAPSHOT_VERSION`;
-   **tăng số này mỗi khi đổi công thức KPI/TAT**, các bản cũ tự động bị bỏ qua.
+   số khác nhau. Khoá bản lưu vì thế gồm **vân tay bộ lọc** (`van_tay` = MD5 của bộ
+   lọc; cột `bo_loc` giữ bản đọc được để tra cứu). Không có nó thì người lọc HAN đọc
+   phải số của người lọc SGN — **sai số liệu im lặng**, nguy hiểm hơn hẳn lỗi chậm.
+2. **Đổi cách tính TAT làm bản lưu cũ thành SAI.** Mỗi bản ghi mang cột `phien_ban`
+   (`SNAPSHOT_VERSION`); **tăng hằng số này mỗi khi đổi công thức KPI/TAT** — bản cũ tự
+   bị bỏ qua và `donSnapshot()` xoá hẳn.
 3. **Tháng vừa đóng.** Ngày 01 tháng mới mà AMOS còn ghi nốt dữ liệu tháng trước thì
-   bản chụp quá sớm sẽ thiếu. Chỉ chụp tháng đã đóng được ít nhất `SNAPSHOT_CHO_NGAY`
-   (mặc định **3 ngày**).
+   bản chụp quá sớm sẽ thiếu. Chỉ chụp tháng đã đóng ≥ `SNAPSHOT_CHO_NGAY` (3 ngày).
 
-Chế độ DEMO cũng lưu — vừa kiểm thử được cơ chế, vừa làm số demo ổn định thay vì nhảy
-mỗi lần tải.
+Ghi bằng `MERGE` nên chạy lại không đụng khoá chính. Không ghi được thì **chỉ mất tốc
+độ**, số liệu vẫn đúng (tính lại như thường).
 
 | | |
 |---|---|
-| File | `data/thang-snapshot.json` (ghi bằng `saveJsonSafe`, có `.bak`) |
+| Bảng | `[NQT].[dbo].[TAT_KPI_THANG]` — app tự tạo |
 | Xem | `GET /api/admin/snapshot` |
-| Xoá | `POST /api/admin/snapshot/clear` — dùng khi nghi số tháng cũ sai |
-| Giới hạn | `SNAPSHOT_MAX` = 400 bản, bỏ bản cũ nhất trước |
+| Xoá | `POST /api/admin/snapshot/clear` — khi nghi số tháng cũ sai |
+| Giới hạn | `SNAPSHOT_MAX` = 2000 bản, bỏ bản cũ nhất trước |
 
 ### Kiểm tra tự động: `tools/snapcheck.js`
 
 Lỗi ở đây **không làm trang chết** — nó làm trang hiện **số sai một cách im lặng**.
-Mẹo kiểm thử: chạy ở **DEMO_MODE**, nơi dữ liệu mẫu sinh **ngẫu nhiên mỗi lần**. Nếu
-lần 2 trả về **số y hệt** lần 1 thì chắc chắn là lấy từ bản lưu chứ không phải tính
-lại — chứng minh được mà **không cần DB thật**. Tám trường hợp, gồm: tháng hiện tại
-luôn tính lại, và đổi bộ lọc thì không dùng nhầm bản lưu của bộ lọc khác.
+Mẹo: chạy ở **DEMO_MODE**, nơi dữ liệu mẫu sinh **ngẫu nhiên mỗi lần**. Nếu lần 2 trả
+về **số y hệt** lần 1 thì chắc chắn lấy từ bản lưu — chứng minh được **không cần DB
+thật**. Tám trường hợp, gồm *tháng hiện tại luôn tính lại* và *đổi bộ lọc không dùng
+nhầm bản lưu của bộ lọc khác*.
+
+## 7h. Quy tắc: app CHỈ được ghi vào BẢNG CỦA APP
+
+Tài khoản SQL của dashboard nay có quyền **sửa**. Kèm theo đó là một quy tắc bất di
+bất dịch: **app chỉ được tạo và ghi vào bảng của riêng nó** — tuyệt đối không đụng vào
+bảng khác của SQL Server. Làm hỏng dữ liệu AMOS/NQT là hỏng thật, không quay lại được.
+
+Bảng của app: tiền tố **`TAT_`**, cộng thêm **`SIGN_CACHE`** (có từ trước).
+
+| Bảng | Dùng để |
+|---|---|
+| `[NQT].[dbo].[TAT_USER]` | Tài khoản đăng nhập trang LGC (§6f) |
+| `[NQT].[dbo].[TAT_KPI_THANG]` | Bản lưu KPI theo tháng (§7g) |
+| `[NQT].[dbo].[SIGN_CACHE]` | Cache bảng SIGN, có từ trước (§2b) |
+
+**Quy tắc này được canh tự động.** `tools/sqlcheck.js` có luật *“Ghi vào bảng KHÔNG
+phải của app”*: soi mọi câu SQL thật mà server dựng, bắt `INSERT / UPDATE / DELETE /
+TRUNCATE / MERGE / CREATE TABLE / ALTER TABLE / DROP TABLE` trỏ vào bảng không thuộc
+danh sách trên. Bảng tạm (`#…`) và biến bảng (`@…`) không tính.
+
+Đây là luật **làm TRƯỢT**, không phải cảnh báo — một câu `UPDATE` nhầm bảng thật nguy
+hiểm hơn nhiều so với một truy vấn chậm. **Đã kiểm chứng** bằng cách cố tình thêm
+`UPDATE [DWH_DB]..[STG_AMOS].[PICKSLIP_HEADER]`; luật bắt đúng và chặn build.
 
 ## 7. Bảo mật & performance
 
