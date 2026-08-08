@@ -248,6 +248,37 @@
         </div>
       </div>
 
+      <!-- SO SANH NHIEU THANG (chuyen tu trang beta sang).
+           Thang DA DONG duoc luu ra JSON o may chu nen tai rat nhanh; thang
+           hien tai van tinh lai vi con dang phat sinh. Xem README §7g. -->
+      <div class="card mb-5" id="trendCard">
+        <div class="flex items-center justify-between gap-3 flex-wrap mb-3">
+          <div>
+            <h3 class="card-title mb-0">So sánh các tháng <span class="unit">(TAT · số lượng)</span></h3>
+            <p id="trendDesc" class="text-xs text-muted mt-0.5"></p>
+          </div>
+          <div class="flex items-center gap-2">
+            <label class="flabel" style="margin:0">Số tháng</label>
+            <select id="trendMonths" class="finput">
+              <option value="3">3</option>
+              <option value="6" selected>6</option>
+              <option value="12">12</option>
+            </select>
+            <button type="button" id="trendRun" class="btn-accent">▶ Xem</button>
+          </div>
+        </div>
+        <div id="trendIdle" class="text-sm text-secondary">
+          Bấm <b>▶ Xem</b> để so sánh các tháng gần đây. Tháng đã đóng lấy từ bản lưu
+          trên máy chủ nên rất nhanh; chỉ tháng hiện tại mới phải hỏi SQL Server.
+        </div>
+        <div id="trendBody" class="hidden">
+          <div class="chart-box"><canvas id="chartTrend"></canvas></div>
+          <div class="overflow-x-auto mt-3">
+            <table class="bang-thang" id="trendTable"></table>
+          </div>
+        </div>
+      </div>
+
       <!-- Bảng chi tiết TAT -->
       <div class="card">
         <div class="flex items-center justify-between gap-3 flex-wrap mb-3">

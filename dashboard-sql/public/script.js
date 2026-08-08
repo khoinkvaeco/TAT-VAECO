@@ -3068,6 +3068,7 @@ async function init() {
     if (!LGC_ONLY) loadDashboard();
     if (!$('#tab-reports').classList.contains('hidden')) loadReport(state.currentReport);
     resetLgc(); // LGC khong tu chay lai - nguoi dung bam "Chay kiem tra"
+    resetSoSanhThang(); // so sanh thang cung vay: doi bo loc thi so cu sai
   };
   window.__applyFilters = applyFilters; // cho drill-down tu bieu do (chartDrill)
 
@@ -3085,6 +3086,8 @@ async function init() {
   initMultiSelects(applyFilters);   // Station + Store + Trung tam (chon nhieu)
   initPresets(applyFilters);        // Bo loc da luu
   initChipBar(applyFilters);        // Hang dieu kien dang loc
+  $('#trendRun').addEventListener('click', chaySoSanhThang);
+  $('#trendMonths').addEventListener('change', resetSoSanhThang);
   // Checkbox "Bo qua xuat costcenter": loai receiver la so roi tinh lai KPI/bieu do tu server
   $('#ccToggle').addEventListener('change', (e) => { state.excludeCC = e.target.checked; applyFilters(); });
   // Checkbox "Bo qua cac kho CAB": loai han cac kho CAB/CAB-TD/P-THA/P-SAF/P-PAN
@@ -3148,6 +3151,108 @@ async function init() {
   checkHealth();
   await loadFilters(); // nap danh muc roi ve lai nut theo gia tri da khoi phuc
   if (!LGC_ONLY) loadDashboard();
+}
+
+// --------------------------------------------------------------------------
+// 12b. SO SANH CAC THANG (chuyen tu trang beta sang dashboard)
+//      Thang DA DONG duoc may chu luu ra JSON nen tai rat nhanh; thang hien
+//      tai van tinh lai vi con dang phat sinh. KHONG tu chay khi mo trang -
+//      6 thang van la 1 thang phai hoi SQL Server that.
+// --------------------------------------------------------------------------
+let trendChart = null;
+
+/** Cot cua bang so sanh: [khoa, nhan, so chu so thap phan, don vi]. */
+const TREND_COLS = [
+  ['tatTotal', 'TAT tổng', 1, 'ngày'],
+  ['tatInstall', 'TAT install', 1, 'ngày'],
+  ['tatUsReturn', 'TAT US return', 1, 'ngày'],
+  ['tatReturnStore', 'TAT hoàn kho', 1, 'ngày'],
+  ['issued', 'Thiết bị xuất', 0, ''],
+  ['notReconciled', 'Chưa đối ứng', 0, ''],
+  ['reconcileRate', 'Tỷ lệ đối ứng', 1, '%'],
+];
+
+function veBangThang(series) {
+  const so = (v, n) => (v === null || v === undefined || v === '' ? '—' : Number(v).toFixed(n));
+  const head = '<thead><tr><th>Chỉ số</th>'
+    + series.map((x) => `<th class="${x.tuSnapshot ? 'tu-luu' : ''}"`
+      + ` title="${x.tuSnapshot ? 'Lấy từ bản lưu JSON trên máy chủ' : 'Vừa hỏi SQL Server'}">`
+      + `${escapeHtml(x.month)}</th>`).join('')
+    + '</tr></thead>';
+  const body = '<tbody>' + TREND_COLS.map(([k, nhan, n, dv]) =>
+    `<tr><td>${nhan}${dv ? ` <span class="text-muted">(${dv})</span>` : ''}</td>`
+    + series.map((x) => `<td>${so(x[k], n)}</td>`).join('') + '</tr>').join('') + '</tbody>';
+  $('#trendTable').innerHTML = head + body;
+}
+
+function veBieuDoThang(series) {
+  const d = chartDefaults();
+  if (trendChart) trendChart.destroy();
+  trendChart = new Chart($('#chartTrend'), {
+    data: {
+      labels: series.map((x) => x.month),
+      datasets: [
+        { type: 'bar', label: 'Chưa đối ứng', data: series.map((x) => x.notReconciled),
+          yAxisID: 'y1', backgroundColor: cssVar('--series-6') + '99', order: 3, borderRadius: 4 },
+        { type: 'line', label: 'TAT tổng (3 chặng)', data: series.map((x) => x.tatTotal),
+          yAxisID: 'y', borderColor: cssVar('--series-4'), backgroundColor: cssVar('--series-4'),
+          borderWidth: 3, tension: .3, order: 0 },
+        { type: 'line', label: 'TAT install', data: series.map((x) => x.tatInstall),
+          yAxisID: 'y', borderColor: cssVar('--series-1'), backgroundColor: cssVar('--series-1'), tension: .3, order: 1 },
+        { type: 'line', label: 'TAT US return', data: series.map((x) => x.tatUsReturn),
+          yAxisID: 'y', borderColor: cssVar('--series-8'), backgroundColor: cssVar('--series-8'), tension: .3, order: 2 },
+      ],
+    },
+    options: {
+      ...d.common,
+      scales: {
+        x: d.common.scales.x,
+        y: { ...d.common.scales.y, position: 'left', beginAtZero: true,
+             title: { display: true, text: 'TAT (ngày)', color: cssVar('--text-muted') } },
+        y1: { position: 'right', beginAtZero: true, grid: { drawOnChartArea: false },
+              ticks: { color: cssVar('--text-muted') },
+              title: { display: true, text: 'SL chưa đối ứng', color: cssVar('--text-muted') } },
+      },
+    },
+  });
+}
+
+async function chaySoSanhThang() {
+  const nut = $('#trendRun');
+  nut.disabled = true;
+  nut.textContent = '⏳ Đang chạy…';
+  setBusy('#trendCard', true, 'Đang lấy số liệu các tháng…', 0);
+  const tt = moTienTrinh('#trendCard');
+  showError('');
+  try {
+    const months = $('#trendMonths').value;
+    const data = await api(`/api/trend?months=${encodeURIComponent(months)}`, tt.job);
+    const series = data.series || [];
+    $('#trendIdle').classList.add('hidden');
+    $('#trendBody').classList.remove('hidden');
+    veBieuDoThang(series);
+    veBangThang(series);
+    const luu = series.filter((x) => x.tuSnapshot).length;
+    $('#trendDesc').textContent =
+      `${series.length} tháng · ${luu} tháng lấy từ bản lưu 💾 trên máy chủ, `
+      + `${series.length - luu} tháng vừa hỏi SQL Server. `
+      + 'Tháng đã đóng không đổi số nữa nên được lưu lại; tháng hiện tại luôn tính lại.';
+  } catch (err) {
+    showError(err.message, chaySoSanhThang);
+  } finally {
+    tt.dong();
+    setBusy('#trendCard', false);
+    nut.disabled = false;
+    nut.textContent = '▶ Xem';
+  }
+}
+
+/** Doi bo loc -> so lieu cu khong con dung nua; quay ve trang thai chua chay. */
+function resetSoSanhThang() {
+  if (!$('#trendBody')) return;
+  $('#trendBody').classList.add('hidden');
+  $('#trendIdle').classList.remove('hidden');
+  $('#trendDesc').textContent = '';
 }
 
 // --------------------------------------------------------------------------

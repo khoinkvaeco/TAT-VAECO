@@ -5546,6 +5546,26 @@ app.post('/api/lgc/logout', h(async (req, res) => {
   res.json({ ok: true });
 }));
 
+// --- ADMIN: xem / xoa ban luu KPI theo thang (JSON) ---
+app.get('/api/admin/snapshot', h(async (req, res) => {
+  const d = docSnapshot();
+  const ds = Object.entries(d.muc).map(([k, v]) => ({
+    khoa: k, month: v.month, luuLuc: v.luuLuc,
+  })).sort((a, b) => b.month.localeCompare(a.month));
+  res.json({
+    version: d.version, soBan: ds.length, file: SNAPSHOT_FILE,
+    choNgay: SNAPSHOT_CHO_NGAY, toiDa: SNAPSHOT_MAX, ds: ds.slice(0, 100),
+  });
+}));
+
+/** Xoa ban luu - dung khi nghi so lieu thang cu bi sai va muon tinh lai. */
+app.post('/api/admin/snapshot/clear', h(async (req, res) => {
+  const truoc = Object.keys(docSnapshot().muc).length;
+  _snap = { version: SNAPSHOT_VERSION, muc: {} };
+  ghiSnapshot();
+  res.json({ ok: true, daXoa: truoc });
+}));
+
 app.get('/api/whoami', h(async (req, res) => {
   const ip = String(req.socket.remoteAddress || '').replace(/^::ffff:/, '') || 'unknown';
   res.json({ ip, isAdmin: isAdminAllowed(ip) });
@@ -5705,8 +5725,74 @@ app.get(
 
 // --- BETA: XU HUONG theo THANG (N thang gan nhat) cho trang dashboard beta ---
 //     Lap tung thang -> dung lai qDashboardAgg/buildDashboardFromAgg. Cache 5'.
+// ---------------------------------------------------------------------------
+// LUU SNAPSHOT KPI THEO THANG RA JSON (de bang so sanh nhieu thang tai nhanh)
+// ---------------------------------------------------------------------------
+//  VAN DE: bang so sanh 6 thang = 6 luot chay lai toan bo truy van dashboard
+//  qua linked server. Rat lau, ma so lieu cua THANG DA DONG thi khong doi nua.
+//  CACH LAM: thang da dong (< thang hien tai) duoc luu ra JSON; lan sau doc
+//  thang. Thang HIEN TAI luon tinh lai vi con dang phat sinh.
+//
+//  ⚠️ BA CAI BAY, deu da xu ly:
+//   1. SO LIEU PHU THUOC BO LOC. Cung thang 2026-05 nhung loc HAN va loc SGN
+//      ra hai con so khac nhau -> khoa snapshot PHAI gom ca bo loc, khong thi
+//      nguoi loc HAN se doc phai so cua nguoi loc SGN.
+//   2. DOI CACH TINH TAT thi snapshot cu thanh SAI mot cach IM LANG - nguy
+//      hiem hon la cham. -> moi ban ghi mang SNAPSHOT_VERSION; doi cach tinh
+//      thi TANG so nay, cac ban cu tu dong bi bo qua.
+//   3. THANG VUA DONG. Ngay 01 thang moi ma AMOS con ghi not du lieu thang
+//      truoc thi snapshot chup qua som se thieu. -> chi chup thang da dong
+//      duoc it nhat SNAPSHOT_CHO_NGAY ngay.
+// ---------------------------------------------------------------------------
+const SNAPSHOT_VERSION = 1;          // TANG khi doi cach tinh KPI/TAT
+const SNAPSHOT_CHO_NGAY = 3;         // cho N ngay sau khi thang ket thuc moi chup
+const SNAPSHOT_MAX = 400;            // chan file phinh vo han
+const SNAPSHOT_FILE = path.join(CONFIG.dataDir, 'thang-snapshot.json');
+let _snap = null;
+
+function docSnapshot() {
+  if (_snap) return _snap;
+  try {
+    const d = JSON.parse(fs.readFileSync(SNAPSHOT_FILE, 'utf8'));
+    _snap = (d && d.version === SNAPSHOT_VERSION && d.muc) ? d : { version: SNAPSHOT_VERSION, muc: {} };
+  } catch (_) {
+    _snap = { version: SNAPSHOT_VERSION, muc: {} };
+  }
+  return _snap;
+}
+
+function ghiSnapshot() {
+  const d = docSnapshot();
+  const khoa = Object.keys(d.muc);
+  if (khoa.length > SNAPSHOT_MAX) {
+    // Bo cac ban chup CU NHAT (theo luc chup)
+    khoa.sort((a, b) => (d.muc[a].luuLuc || '').localeCompare(d.muc[b].luuLuc || ''))
+      .slice(0, khoa.length - SNAPSHOT_MAX)
+      .forEach((k) => delete d.muc[k]);
+  }
+  try { saveJsonSafe(SNAPSHOT_FILE, d); }
+  catch (e) { console.warn('[SNAPSHOT] Khong luu duoc:', e.message); }
+}
+
+/** Van tay cua bo loc: so lieu phu thuoc bo loc nen khoa phai gom ca no. */
+function vanTayFilter(f) {
+  return JSON.stringify([
+    [...(f.station || [])].sort(), [...(f.store || [])].sort(),
+    [...(f.department || [])].sort(), !!f.excludeCC, !!f.excludeCab,
+  ]);
+}
+
+/** Thang `YYYY-MM` da DONG va du lau de chup chua? */
+function thangDaDong(mstr) {
+  const [y, m] = mstr.split('-').map(Number);
+  const hetThang = new Date(Date.UTC(y, m, 1));            // 00:00 ngay 1 thang sau
+  return Date.now() >= hetThang.getTime() + SNAPSHOT_CHO_NGAY * 86400000;
+}
+
 app.get(
-  '/api/beta/trend',
+  // /api/trend la ten CHINH (dashboard dung); /api/beta/trend giu lai de trang
+  // beta cu khong chet.
+  ['/api/trend', '/api/beta/trend'],
   cached(TTL_NANG, async (req, res) => {
     const months = Math.min(12, Math.max(2, parseInt(req.query.months || '6', 10)));
     const f = readFilters(req.query);
@@ -5719,22 +5805,41 @@ app.get(
       const d = new Date(ay, am - 1 - i, 1);
       monthStrs.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
     }
+    const ghi = moNhatKy(req.query.job);
+    const vt = vanTayFilter(f);
+    const snap = docSnapshot();
+    let tuSnapshot = 0;
+
     // Chay SONG SONG cac thang (pool max 10 chiu duoc) -> nhanh gap ~N lan
     // so voi cho tung thang noi duoi nhau nhu truoc.
+    // THANG DA DONG thi lay tu JSON, khoi hoi AMOS lai - xem docSnapshot().
     const series = await Promise.all(monthStrs.map(async (mstr) => {
+      const khoa = `${mstr}|${vt}`;
+      const cu = snap.muc[khoa];
+      if (cu && thangDaDong(mstr)) { tuSnapshot += 1; return { ...cu.kpi, month: mstr, tuSnapshot: true }; }
+
       const range = { ...monthRange(mstr), label: 'Thang' };
       const dash = CONFIG.demoMode
         ? DEMO.dashboard(range, f)
         : buildDashboardFromAgg(range, await qDashboardAgg(range, f), f);
       const k = dash.kpis;
-      return {
-        month: mstr,
+      const kpi = {
         tatTotal: k.tatTotalAvg, tatInstall: k.tatInstallAvg, tatUsReturn: k.tatUsReturnAvg, tatReturnStore: k.tatReturnStoreAvg,
         issued: k.countIssued, notReconciled: k.countNotReconciled, reconcileRate: k.reconcileRate,
         cntReci: k.cntReci, cntDel: k.cntDel,
       };
+      // Chi chup THANG DA DONG (thang hien tai con phat sinh, chup la sai).
+      // Che do DEMO cung chup: vua kiem thu duoc co che, vua lam so demo on
+      // dinh thay vi nhay lung tung moi lan tai (demo sinh so ngau nhien).
+      if (thangDaDong(mstr)) {
+        snap.muc[khoa] = { month: mstr, luuLuc: new Date().toISOString(), kpi };
+      }
+      return { ...kpi, month: mstr, tuSnapshot: false };
     }));
-    res.json({ series, months });
+    ghiSnapshot();
+    ghi(`✔ Xong — ${tuSnapshot}/${monthStrs.length} tháng lấy từ bản lưu JSON `
+      + `(chỉ ${monthStrs.length - tuSnapshot} tháng phải hỏi SQL Server)`, true);
+    res.json({ series, months, tuSnapshot });
   })
 );
 

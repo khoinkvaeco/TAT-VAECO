@@ -759,6 +759,53 @@ hàm **rỗng**, nên chỗ gọi không phải kiểm tra gì.
 Bộ nhớ: mỗi việc tự hết hạn sau 5 phút, tối đa 200 việc, mỗi việc giữ tối đa 200 dòng.
 Nhịp tim 15 giây/lần để proxy không cắt kết nối “im lặng”.
 
+## 7g. Bảng so sánh các tháng + bản lưu KPI ra JSON
+
+Bảng **So sánh các tháng** (trước ở trang beta) nay nằm trên **Dashboard**: biểu đồ
+kết hợp (cột *Chưa đối ứng* + đường TAT) và một bảng số bên dưới, chọn được 3 / 6 / 12
+tháng.
+
+**Vấn đề:** 6 tháng = 6 lượt chạy lại toàn bộ truy vấn dashboard qua linked server.
+Rất lâu — mà số liệu của **tháng đã đóng thì không đổi nữa**.
+
+**Cách làm:** tháng đã đóng được lưu ra `data/thang-snapshot.json`; lần sau đọc thẳng.
+Tháng **hiện tại luôn tính lại** vì còn đang phát sinh. Bảng đánh dấu 💾 ở những tháng
+lấy từ bản lưu, và mô tả ghi rõ *“N tháng lấy từ bản lưu, M tháng vừa hỏi SQL Server”* —
+người xem luôn biết số nào là mới.
+
+Không tự chạy khi mở trang: phải bấm **▶ Xem**. Đổi bộ lọc thì bảng quay về trạng thái
+chưa chạy (số cũ không còn đúng nữa).
+
+### ⚠️ Ba cái bẫy — đều đã xử lý
+
+1. **Số liệu phụ thuộc BỘ LỌC.** Cùng tháng 2026-05 nhưng lọc HAN và lọc SGN ra hai con
+   số khác nhau. Khóa bản lưu vì thế gồm **cả vân tay bộ lọc** (`vanTayFilter`) —
+   không thì người lọc HAN sẽ đọc phải số của người lọc SGN. Đây là lỗi *sai số liệu
+   im lặng*, nguy hiểm hơn hẳn lỗi chậm.
+2. **Đổi cách tính TAT làm bản lưu cũ thành SAI.** Mỗi bản ghi mang `SNAPSHOT_VERSION`;
+   **tăng số này mỗi khi đổi công thức KPI/TAT**, các bản cũ tự động bị bỏ qua.
+3. **Tháng vừa đóng.** Ngày 01 tháng mới mà AMOS còn ghi nốt dữ liệu tháng trước thì
+   bản chụp quá sớm sẽ thiếu. Chỉ chụp tháng đã đóng được ít nhất `SNAPSHOT_CHO_NGAY`
+   (mặc định **3 ngày**).
+
+Chế độ DEMO cũng lưu — vừa kiểm thử được cơ chế, vừa làm số demo ổn định thay vì nhảy
+mỗi lần tải.
+
+| | |
+|---|---|
+| File | `data/thang-snapshot.json` (ghi bằng `saveJsonSafe`, có `.bak`) |
+| Xem | `GET /api/admin/snapshot` |
+| Xoá | `POST /api/admin/snapshot/clear` — dùng khi nghi số tháng cũ sai |
+| Giới hạn | `SNAPSHOT_MAX` = 400 bản, bỏ bản cũ nhất trước |
+
+### Kiểm tra tự động: `tools/snapcheck.js`
+
+Lỗi ở đây **không làm trang chết** — nó làm trang hiện **số sai một cách im lặng**.
+Mẹo kiểm thử: chạy ở **DEMO_MODE**, nơi dữ liệu mẫu sinh **ngẫu nhiên mỗi lần**. Nếu
+lần 2 trả về **số y hệt** lần 1 thì chắc chắn là lấy từ bản lưu chứ không phải tính
+lại — chứng minh được mà **không cần DB thật**. Tám trường hợp, gồm: tháng hiện tại
+luôn tính lại, và đổi bộ lọc thì không dùng nhầm bản lưu của bộ lọc khác.
+
 ## 7. Bảo mật & performance
 
 - Mật khẩu chỉ nằm trong `.env` (không hardcode, không commit).

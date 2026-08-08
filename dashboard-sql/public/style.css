@@ -261,6 +261,20 @@ body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
   color: var(--text-muted); font-size: 13px; text-align: center;
 }
 
+/* Bang so sanh cac thang (dashboard) */
+.bang-thang { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.bang-thang th, .bang-thang td {
+  padding: 6px 10px; border-bottom: 1px solid var(--hair); white-space: nowrap;
+  text-align: right; font-variant-numeric: tabular-nums;
+}
+.bang-thang th { color: var(--text-muted); font-weight: 600; text-align: right; }
+.bang-thang th:first-child, .bang-thang td:first-child { text-align: left; font-weight: 600; }
+.bang-thang tbody tr:hover { background: var(--hover); }
+/* Thang lay tu ban luu JSON - danh dau de biet so nay khong vua hoi SQL Server */
+.bang-thang .tu-luu::after {
+  content: ' 💾'; font-size: 10px;
+}
+
 .tat-badge { padding: 1px 8px; border-radius: 999px; font-variant-numeric: tabular-nums; font-weight: 700; }
 
 /* ===================== CHATBOX (tro ly noi bo) ===================== */
