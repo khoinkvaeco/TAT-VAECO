@@ -5045,6 +5045,17 @@ function cacheKeyKhongJob(req) {
   return req.path + (qs ? '?' + qs : '');
 }
 
+// --- GOP CAC REQUEST TRUNG NHAU DANG CHAY (in-flight coalescing) ---
+//  VI SAO CAN KHI MO CHO CA CONG TY: truy van LGC di qua linked server, co cau
+//  mat ~30 giay. Sang thu Hai 8h00 co 20 nguoi cung mo dashboard cung ky bao
+//  cao -> truoc day la 20 LUOT truy van y HET NHAU danh vao AMOS, trong khi
+//  connection pool chi co 10 -> xep hang, timeout day chuyen, va AMOS lanh du
+//  tai vo ich. Cache TTL khong cuu duoc vi ca 20 nguoi den TRUOC khi luot dau
+//  tien kip tra ve (cache chi co sau khi xong).
+//  Nay: luot dau tao mot "phieu cho", 19 luot sau CHO CHUNG ket qua do - AMOS
+//  chi nhan DUNG MOT cau. Day la thay doi quan trong nhat de mo cho ca cong ty.
+const dangChay = new Map();   // khoa cache -> Promise<{data}|{loi}>
+
 function cached(ttlMs, fn) {
   return h(async (req, res) => {
     if (CONFIG.demoMode) return fn(req, res); // demo: khong cache
@@ -5058,6 +5069,25 @@ function cached(ttlMs, fn) {
       dongNhatKy(req.query.job, '✔ Lấy lại kết quả trong bộ nhớ đệm (không phải hỏi SQL Server)');
       return res.json(hit.data);
     }
+
+    // Da co nguoi khac dang chay DUNG truy van nay -> cho chung, khong hoi lai.
+    const cho = dangChay.get(key);
+    if (cho) {
+      res.set('X-Cache', 'COALESCED');
+      const ghi = moNhatKy(req.query.job);
+      ghi('⏳ Một người khác đang chạy đúng truy vấn này — chờ dùng chung kết quả '
+        + '(không hỏi SQL Server lần nữa)…');
+      const kq = await cho;
+      if (kq.loi) throw kq.loi;                 // loi thi bao y het nguoi chay dau
+      ghi('✔ Xong — dùng chung kết quả vừa chạy', true);
+      return res.json(kq.data);
+    }
+
+    // Luot DAU TIEN: chay that, va giu "phieu cho" cho cac luot den sau.
+    let xong;
+    let daTraLoi = false;
+    dangChay.set(key, new Promise((r) => { xong = r; }));
+
     // Chan res.json de luu ket qua vao cache truoc khi tra ve
     const origJson = res.json.bind(res);
     res.json = (data) => {
@@ -5073,9 +5103,24 @@ function cached(ttlMs, fn) {
           cacheTotalBytes += bytes;
         }
       }
+      daTraLoi = true;
+      dangChay.delete(key);
+      xong({ data });
       return origJson(data);
     };
-    return fn(req, res);
+    try {
+      const kq = await fn(req, res);
+      // An toan: route nao ket thuc ma KHONG goi res.json (vd res.send/res.end)
+      // thi van phai go phieu cho, neu khong nguoi den sau treo vinh vien.
+      if (!daTraLoi) { dangChay.delete(key); xong({ loi: new Error('Khong co du lieu tra ve') }); }
+      return kq;
+    } catch (e) {
+      // PHAI go phieu cho ke ca khi loi, neu khong moi nguoi den sau se treo
+      // vinh vien cho mot truy van da chet.
+      dangChay.delete(key);
+      xong({ loi: e });
+      throw e;
+    }
   });
 }
 

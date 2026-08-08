@@ -563,6 +563,39 @@ chạy `npm run build:assets`. (Đã kiểm chứng bằng cách cố tình thê
 > dựng sẵn tôi đặt `tailwind.css` lên trước và **khung chat mở sẵn ngay khi vào
 > trang**; đảo lại thứ tự là đúng như cũ.
 
+## 7e. Gộp các request trùng nhau đang chạy (bắt buộc khi mở cho cả công ty)
+
+Truy vấn LGC đi qua linked server, có câu mất **~30 giây**. Sáng thứ Hai 8h00 có 20
+người cùng mở dashboard cùng kỳ báo cáo thì trước đây là **20 lượt truy vấn y hệt
+nhau** đánh vào AMOS, trong khi connection pool chỉ có **10** → xếp hàng, timeout dây
+chuyền, và AMOS lãnh đủ tải vô ích.
+
+**Cache TTL không cứu được chuyện này**: cache chỉ có *sau khi* lượt đầu tiên xong,
+mà cả 20 người đều đến *trước* thời điểm đó.
+
+Nay lượt đầu tạo một “phiếu chờ” (`dangChay`, khóa = khóa cache); các lượt sau **chờ
+chung** kết quả đó và nhận `X-Cache: COALESCED`. AMOS chỉ nhận **đúng một** câu.
+Người chờ chung cũng thấy dòng nhật ký *“Một người khác đang chạy đúng truy vấn này…”*
+nên không tưởng là máy treo.
+
+Hai chỗ dễ sai, đã xử lý:
+
+- **Lỗi cũng phải gỡ phiếu chờ.** Nếu không, mọi người đến sau treo vĩnh viễn chờ một
+  truy vấn đã chết. Lỗi được ném lại y hệt cho người chờ chung.
+- **Route kết thúc mà không gọi `res.json`** (dùng `res.send`/`res.end`) cũng phải gỡ
+  phiếu chờ — có cờ `daTraLoi` canh việc này.
+
+**Đã đo thật** (`tools/` + `mssql` giả, 20 request đồng thời cùng bộ lọc):
+
+| | Lượt chạy thật | Câu SQL vào AMOS |
+|---|---|---|
+| Tắt gộp request | 8 | 10 |
+| Bật gộp request | **1** | **3** |
+
+> Con số thật ngoài đời còn chênh nhiều hơn: trong phép đo này `mssql` giả trả lời sau
+> ~1 ms nên cache kịp lấp cho 12 request cuối. Với truy vấn 30 giây thật thì **không ai
+> kịp trúng cache**, tức là **cả 20 đều chạy thật** nếu không gộp.
+
 ## 7d. Nhật ký tiến trình thời gian thực (giống log của bản Python)
 
 Truy vấn LGC đi qua linked server, có câu mất hàng chục giây. Trước đây người dùng
