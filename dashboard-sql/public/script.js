@@ -2085,20 +2085,26 @@ const COLS_PICKSLIP = [
       return v;
     },
   },
+  // MOT cot thoi gian cho CA Cancel lan Return: hai loai ban chat gan giong
+  // nhau (hang quay nguoc ve kho) va cot "Loai" da phan biet roi, nen khong
+  // bay ba cot rieng (Sua cuoi dong huy / Ngay tra kho / Gio tra kho) nua.
   {
-    title: 'Sửa cuối (dòng hủy)', field: 'cancel_time_vn', formatter: fmtDateCell, width: 155,
-    headerTooltip: 'Lần sửa cuối của dòng Cancel — mốc gần nhất có thể coi là lúc hủy, '
-      + 'nhưng AMOS không có cột riêng cho giờ hủy nên KHÔNG chắc chắn.',
-  },
-  // GIONG cot "Gio xuat kho": MOT cot lo het ngay + gio, thieu gio thi lui ve
-  // NGAY tra kho va ghi ro. Cot "Ngay tra kho" rieng da bo.
-  {
-    title: 'Giờ trả kho', field: 'return_shown', width: 165,
+    title: 'Giờ hủy / trả', field: 'huytra_shown', width: 185,
     headerFilter: 'input', headerFilterFunc: dateFilterFunc,
-    headerTooltip: 'HISTORY.MUTATION + MUTATION_TIME → giờ VN (+7). Bảng HISTORY là bảng SỰ KIỆN '
-      + 'nên MUTATION chính là thời điểm trả kho. Môi trường nào thiếu MUTATION_TIME thì '
-      + 'chỉ có NGÀY — khi đó hiện ngày kèm ghi chú “chỉ có ngày”.',
-    formatter: fmtNgayGioGop('return_exact'),
+    headerTooltip: 'Dòng Return: giờ hàng về kho (HISTORY.MUTATION + MUTATION_TIME → giờ VN +7); '
+      + 'thiếu MUTATION_TIME thì hiện NGÀY kèm “chỉ có ngày”. '
+      + 'Dòng Cancel / Hủy-trả khác: AMOS KHÔNG có cột riêng cho giờ hủy — đây là lần SỬA CUỐI '
+      + 'của dòng, mốc gần nhất có thể coi là lúc hủy nhưng KHÔNG chắc chắn, nên ghi rõ “(sửa cuối)”.',
+    formatter: (cell) => {
+      const r = cell.getRow().getData();
+      const s = fmtDateTime(cell.getValue());
+      if (!s) return '';
+      if (r.huytra_kieu === 'CANCEL') {
+        return '<span style="color:var(--text-muted)" title="AMOS không có cột giờ hủy — đây là lần sửa cuối của dòng, KHÔNG chắc là lúc hủy">'
+          + `${escapeHtml(s)} <span style="font-size:11px">(sửa cuối)</span></span>`;
+      }
+      return fmtNgayGioGop('huytra_exact')(cell);
+    },
   },
   {
     title: 'TAT hoàn kho (giờ)', field: 'tat_gio', hozAlign: 'right', sorter: 'number', width: 150,
@@ -2410,6 +2416,12 @@ function buSoLieuNgayGio(rows) {
     if (r.return_shown == null) {
       r.return_shown = r.return_time_vn || r.return_date || null;
       r.return_exact = r.return_time_vn ? 1 : 0;
+    }
+    if (r.huytra_shown == null) {
+      const laTra = r.loai === 'RETURN';
+      r.huytra_shown = laTra ? r.return_shown : (r.cancel_time_vn || null);
+      r.huytra_kieu = r.huytra_shown ? (laTra ? 'RETURN' : 'CANCEL') : '';
+      r.huytra_exact = laTra ? r.return_exact : 0;
     }
   });
 }
@@ -2812,6 +2824,16 @@ async function init() {
     if (urlQ.has('department')) state.department = normList(urlQ.get('department'));
     state.excludeCC = urlQ.get('excludeCC') === '1';
     state.excludeCab = urlQ.get('excludeCab') === '1';
+  }
+  // TRANG LGC: vao la LAY HET Station / Store / Trung tam.
+  // Trang LGC dung CHUNG localStorage voi dashboard, nen bo loc chon ben
+  // dashboard (vd station=HAN) van con khi sang LGC - nhan vien kho mo len
+  // thay so lieu thieu ma khong hieu vi sao. Nay mo /lgc la ba o ve "Tat ca".
+  // NGOAI TRU khi link co san tham so loc: do la y muon ro rang cua nguoi gui.
+  if (LGC_ONLY && !['station', 'store', 'department'].some((k) => urlQ.has(k))) {
+    state.station = [];
+    state.store = [];
+    state.department = [];
   }
   $('#ccToggle').checked = state.excludeCC;
   $('#cabToggle').checked = state.excludeCab;

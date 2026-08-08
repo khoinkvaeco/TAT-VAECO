@@ -693,7 +693,8 @@ function pickslip(range, f) {
     // Cot hien tren bang: khong co gio that thi lui ve NGAY phieu (giong server)
     r.issue_shown = r.issue_time_vn || r.pickslip_date;
     r.issue_exact = r.issue_time_vn ? 1 : 0;
-    r.cancel_time_vn = r.loai === 'CANCEL'
+    // Ke ca nhom 'KHAC' - van la dong da huy/tra (giong server)
+    r.cancel_time_vn = (r.loai === 'CANCEL' || r.loai === 'KHAC')
       ? new Date(Date.parse(r.booked_time_vn) + rndInt(1, 72) * 3600000).toISOString() : null;
     r.return_no = '';
     r.return_date = null;
@@ -703,6 +704,10 @@ function pickslip(range, f) {
     r.tat_return = null;
     r.tat_gio = null;
     r.return_scan = '';
+    // MOT cot "Gio huy / tra" cho ca hai loai (giong server)
+    r.huytra_shown = r.cancel_time_vn || null;
+    r.huytra_kieu = r.cancel_time_vn ? 'CANCEL' : '';
+    r.huytra_exact = 0;
     if (r.loai !== 'RETURN') return;
     if (rndInt(0, 9) === 0) { r.return_no = 'NOT FOUND'; return; }
     const tat = rndInt(0, 40);
@@ -719,6 +724,9 @@ function pickslip(range, f) {
       : null;
     r.return_shown = r.return_time_vn || r.return_date;
     r.return_exact = r.return_time_vn ? 1 : 0;
+    r.huytra_shown = r.return_shown;
+    r.huytra_kieu = 'RETURN';
+    r.huytra_exact = r.return_exact;
     r.tat_gio = Math.round((tat * 24 + (r.issue_time_vn ? gioLe : 0)) * 10) / 10;
     r.tat_chinh_xac = !!r.issue_time_vn;
     r.return_scan = rndInt(0, 9) < 6 ? 'SCANNED' : 'CHUA_SCAN';

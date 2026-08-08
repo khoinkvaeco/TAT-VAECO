@@ -2601,12 +2601,14 @@ async function pickslipTemp(range, f) {
   //   STORE ket thuc bang 'main' hoac 'vna'.
   // (STATUS NULL cung bi loai - giong pandas: NA <> 1 ra NA nen dong do rot.)
   // CHAY TAI CHO tren #raw, KHONG gui xuong AMOS - xem giai thich o tren.
+  // KHONG con rang buoc cung "STORE ket thuc main/vna" (AMOS_GUI co, da BO theo
+  // yeu cau nghiep vu): trang LGC nay da co o loc Store chon nhieu kho nen de
+  // NGUOI DUNG quyet dinh lay kho nao. ⚠️ Bo dieu kien nay lam MOI con so KPI
+  // cua LGC TANG LEN so voi truoc - dung, vi truoc day dang bo sot cac kho khac.
   const bizFilter = `
       AND TRY_CONVERT(float, r.[QTY_BOOKED]) <> 0
       AND r.[STATUS] <> 1 AND r.[STATUS] <> 11
-      AND LOWER(RTRIM(ISNULL(r.[LOCATION_FROM], ''))) NOT LIKE '%u/s%'
-      AND (LOWER(RTRIM(ISNULL(r.[STORE], ''))) LIKE '%main'
-        OR LOWER(RTRIM(ISNULL(r.[STORE], ''))) LIKE '%vna')`;
+      AND LOWER(RTRIM(ISNULL(r.[LOCATION_FROM], ''))) NOT LIKE '%u/s%'`;
 
   const pull = `
     IF OBJECT_ID('tempdb..#raw') IS NOT NULL DROP TABLE #raw;
@@ -2658,7 +2660,9 @@ async function pickslipTemp(range, f) {
       -- Lan sua cuoi cua DONG: voi dong da huy thi day la moc gan nhat co the
       -- coi la luc huy, nhung KHONG chac (ban ghi con co the bi sua vi ly do
       -- khac) -> giao dien goi dung ten "Sua cuoi (dong)".
-      CASE WHEN ${loai} = 'CANCEL' THEN ${bookedVN} END AS cancel_time_vn,
+      -- Ke ca nhom 'KHAC' (QTY_CANCELED <> 0 nhung PICKSLIP_TEXT khong co tu
+      -- khoa): van la dong da huy/tra nen cung can moc thoi gian.
+      CASE WHEN ${loai} IN ('CANCEL', 'KHAC') THEN ${bookedVN} END AS cancel_time_vn,
       RTRIM(r.[MECH_SIGN])     AS mech_sign,
       RTRIM(r.[BOOKING_SIGN])  AS booking_sign,
       RTRIM(r.[RECEIVER])      AS receiver,
@@ -2898,9 +2902,27 @@ async function enrichPickslipRows(rows, allPicking = [], allReturns = []) {
     r.return_shown = null;   // xem chu thich o duoi (giong cap issue_shown)
     r.return_exact = 0;
     r.tat_return = null;
+    // MOT cot thoi gian cho CA hai loai huy/tra - xem ghi chu o cuoi vong lap
+    r.huytra_shown = null;
+    r.huytra_kieu = '';      // '' | 'RETURN' | 'CANCEL'
+    r.huytra_exact = 0;
     r.tat_gio = null;
     r.tat_chinh_xac = false;
     r.return_scan = '';
+
+    // MOT cot "Gio huy / tra" cho CA hai loai - cancel va return ban chat gan
+    // giong nhau (deu la hang quay nguoc ve kho), cot "Loai" da phan biet roi
+    // nen khong can bay hai cot thoi gian rieng.
+    //   CANCEL / KHAC -> moc duy nhat AMOS co la lan SUA CUOI cua dong
+    //                    (AMOS KHONG co cot rieng cho gio huy) -> huytra_exact=0
+    //                    va giao dien ghi ro "(sua cuoi)".
+    //   RETURN        -> gio tra kho that neu biet, khong thi lui ve NGAY tra.
+    // RIENG viec doi chieu file scan phieu tra CHI ap cho dong RETURN.
+    if (r.loai === 'CANCEL' || r.loai === 'KHAC') {
+      r.huytra_shown = r.cancel_time_vn || null;
+      r.huytra_kieu = 'CANCEL';
+      r.huytra_exact = 0;
+    }
     if (r.loai !== 'RETURN') continue;
 
     const h = hist.get(idStr(r.seqno));
@@ -2914,6 +2936,9 @@ async function enrichPickslipRows(rows, allPicking = [], allReturns = []) {
     // nho vay bo duoc cot "Ngay tra kho" rieng ma khong dong nao mat ngay.
     r.return_shown = r.return_time_vn || r.return_date || null;
     r.return_exact = r.return_time_vn ? 1 : 0;
+    r.huytra_shown = r.return_shown;
+    r.huytra_kieu = 'RETURN';
+    r.huytra_exact = r.return_exact;
     r.return_scan = scanStateTheoStation(index, r.station, base);
     r.tat_return = dayDiff(r.pickslip_date, h.return_date);
     // TAT den GIO. Thieu gio that o dau nao thi lui ve NGAY o dau do;
@@ -3139,10 +3164,10 @@ async function qReceiving(range, f) {
   // -> khong can noi sang bang SIGN nua, bot mot phep noi o moi cau.
 
   // Bo loc nghiep vu (nguyen van tu AMOS_GUI). STATION dung CONTAINS.
+  // Da BO rang buoc cung ve STORE (AMOS_GUI bat STORE ket thuc main/vna va loai
+  // rieng STORE='MAIN' o SHOPLOC/LG5) - xem giai thich o pickslipTemp().
   let w = `
-      AND LOWER(ISNULL(x.tinh_trang, '')) NOT LIKE '%us%'
-      AND (LOWER(x.store) LIKE '%main' OR LOWER(x.store) LIKE '%vna')
-      AND NOT (LOWER(x.store) = 'main' AND LOWER(x.location) IN ('shoploc', 'lg5'))`;
+      AND LOWER(ISNULL(x.tinh_trang, '')) NOT LIKE '%us%'`;
   if (f.station && f.station.length) {
     // Cot STATION khop theo CHUA chuoi (giong AMOS_GUI cho phieu nhap)
     const ve = f.station.map((v, i) => {
@@ -6059,7 +6084,10 @@ app.get('/api/admin/diag/linkserver', h(async (req, res) => {
   };
 
   const ngay = `h.[PICKSLIP_DATE] >= ${d.fromDayX} AND h.[PICKSLIP_DATE] < ${d.toDayX}`;
-  // Bo loc nghiep vu - CHINH LA thu lam cham (do duoc gap ~21 lan)
+  // Bo loc nghiep vu - CHINH LA thu lam cham (do duoc gap ~21 lan).
+  // GIU NGUYEN ca hai dieu kien STORE o day du truy van THAT da bo chung: day
+  // la phep DO tac hai cua "ham trong WHERE", cang nhieu ham cang do ro. KHONG
+  // phai bo loc dang chay - dung sua theo pickslipTemp().
   const bizAmos = `
        AND TRY_CONVERT(float, p.[QTY_BOOKED]) <> 0
        AND p.[STATUS] <> 1 AND p.[STATUS] <> 11
