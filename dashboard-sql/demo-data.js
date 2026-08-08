@@ -25,6 +25,13 @@ function rndDate(from, to) {
   const t = f + Math.random() * (t2 - f);
   return new Date(t);
 }
+
+/** Cat phan gio, chi giu NGAY (00:00) - dung cho cac cot AMOS chi luu ngay. */
+function ngayTron(d) {
+  const x = new Date(d);
+  x.setUTCHours(0, 0, 0, 0);
+  return x.toISOString();
+}
 function pad(n) {
   return String(n).padStart(3, '0');
 }
@@ -659,7 +666,9 @@ function pickslip(range, f) {
       is_cancel: huy ? 1 : 0,
       owner: rnd(['VNA', 'VAECO', '']),
       created_by: d.staff,
-      pickslip_date: rndDate(range.from, range.to).toISOString(),
+      // AMOS chi luu NGAY (PICKSLIP_DATE la so ngay, khong co gio) -> demo phai
+      // ve 00:00 giong that, neu khong se khong lo ra loi hien gio rac.
+      pickslip_date: ngayTron(rndDate(range.from, range.to)),
       mech_sign: d.staff,
       booking_sign: 'VAE' + rndInt(10000, 99999),
       department: rnd(DEPARTMENTS),
@@ -681,6 +690,9 @@ function pickslip(range, f) {
     r.header_time_vn = r.booked_time_vn;
     // ~70% dong biet duoc GIO xuat kho that (MUTATION roi dung ngay phieu)
     r.issue_time_vn = rndInt(0, 9) < 7 ? r.booked_time_vn : null;
+    // Cot hien tren bang: khong co gio that thi lui ve NGAY phieu (giong server)
+    r.issue_shown = r.issue_time_vn || r.pickslip_date;
+    r.issue_exact = r.issue_time_vn ? 1 : 0;
     r.cancel_time_vn = r.loai === 'CANCEL'
       ? new Date(Date.parse(r.booked_time_vn) + rndInt(1, 72) * 3600000).toISOString() : null;
     r.return_no = '';

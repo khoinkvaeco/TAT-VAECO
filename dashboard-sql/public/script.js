@@ -2007,20 +2007,39 @@ const COLS_PICKSLIP = [
       },
     },
   },
-  { title: 'Ngày phiếu', field: 'pickslip_date', formatter: fmtDateCell },
+  // MOT cot thoi gian xuat kho duy nhat: co gio that thi hien ngay + gio, khong
+  // co thi lui ve NGAY phieu va ghi ro "chỉ có ngày". Truoc day phai bay ba cot
+  // (Ngay phieu / Gio xuat kho / Sua cuoi) vi gio hay trong; nay server tra kem
+  // issue_shown + issue_exact nen mot cot la du, khong dong nao mat ngay.
   {
-    title: 'Giờ xuất kho', field: 'issue_time_vn', formatter: fmtDateCell, width: 145,
-    headerTooltip: 'Chỉ điền khi MUTATION của phiếu RƠI ĐÚNG vào ngày phiếu (PICKSLIP_DATE) — '
-      + 'khi đó MUTATION_TIME mới đúng là giờ lập phiếu. Trống = AMOS chỉ cho biết NGÀY.',
-  },
-  {
-    title: 'Sửa cuối (dòng)', field: 'booked_time_vn', formatter: fmtDateCell, width: 145,
-    headerTooltip: 'PICKSLIP_BOOKED.MUTATION + MUTATION_TIME = lần sửa CUỐI của dòng, '
-      + 'KHÔNG phải giờ xuất kho (đã đo được có dòng lệch tới 8 tháng). Chỉ để đối chiếu.',
+    title: 'Giờ xuất kho', field: 'issue_shown', width: 165,
+    headerFilter: 'input', headerFilterFunc: dateFilterFunc,
+    headerTooltip: 'Giờ chỉ có khi MUTATION của phiếu RƠI ĐÚNG vào ngày phiếu (PICKSLIP_DATE) — '
+      + 'khi đó MUTATION_TIME mới đúng là giờ lập phiếu. Không có giờ thì hiện NGÀY phiếu '
+      + 'và ghi rõ “chỉ có ngày” (không bao giờ trình bày 00:00 như thể đó là giờ thật).',
+    formatter: (cell) => {
+      const r = cell.getRow().getData();
+      const s = fmtDateTime(cell.getValue());
+      if (!s) return '';
+      if (r.issue_exact) return s;
+      // AMOS chi cho biet NGAY -> bo HAN phan gio di (khong cat chuoi "00:00"
+      // ma lay 10 ky tu dau "dd/mm/yyyy": du lieu co the mang gio rac, hien ra
+      // la nguoi doc tuong do la gio xuat kho that).
+      return `<span style="color:var(--text-muted)" title="AMOS chỉ cho biết NGÀY lập phiếu, không có giờ">`
+        + `${escapeHtml(s.slice(0, 10))}`
+        + ` <span style="font-size:11px">(chỉ có ngày)</span></span>`;
+    },
   },
   { title: 'Pickslip', field: 'pickslipno', headerFilter: 'input' },
-  { title: 'Seq', field: 'seqno', formatter: fmtIntCell, hozAlign: 'right', width: 70 },
-  { title: 'Picking list', field: 'picking_listno', formatter: fmtIntCell, hozAlign: 'right', headerFilter: 'input' },
+  {
+    title: 'Event (WO)', field: 'seqno', formatter: fmtIntCell, hozAlign: 'right', width: 125,
+    headerTooltip: 'PICKSLIPSEQNO_I — số Event/WO của dòng xuất kho, dùng để khớp với phiếu trả về kho.',
+  },
+  {
+    title: 'Phiếu xuất', field: 'picking_listno', formatter: fmtIntCell, hozAlign: 'right',
+    headerFilter: 'input',
+    headerTooltip: 'PICKING_LISTNO_I — số phiếu xuất, cũng là tên file scan cần tìm.',
+  },
   {
     title: 'Scan', field: 'scan', hozAlign: 'center', width: 105, ...SCAN_HEADER_FILTER,
     headerTooltip: 'Có file <PICKING_LISTNO_I>-….pdf trong thư mục scan hay chưa. “—” = không đọc được thư mục.',
@@ -2367,6 +2386,7 @@ async function loadPickslip() {
       'PICKSLIP_BOOKED × PICKSLIP_HEADER. Kỳ theo PICKSLIP_DATE (ngày AMOS); đơn vị đếm là SỐ DÒNG. '
       + 'Cancel / Return phân biệt bằng ĐUÔI của PICKSLIP_TEXT (…cancel · …cancel booking · …return) kèm QTY_CANCELED ≠ 0. '
       + 'Đã áp bộ lọc nghiệp vụ: QTY_BOOKED ≠ 0, STATUS ∉ {1, 11}, LOCATION_FROM không chứa “U/S”, STORE thuộc MAIN/VNA. '
+      + 'Cột “Giờ xuất kho” hiện giờ thật khi AMOS có; không có thì hiện NGÀY phiếu kèm ghi chú “chỉ có ngày”. '
       + 'Cột Scan đối chiếu file PDF trong thư mục scan; TAT return = số ngày từ ngày xuất kho đến ngày trả về kho (HISTORY, VM ∈ EA/TC). '
       + '⚠ Thẻ KPI “Đã scan / Chưa scan” đếm theo PHIẾU (một picking list nhiều dòng chỉ cần một file) và tính trên TOÀN KỲ; '
       + 'bảng chi tiết bên dưới đếm theo DÒNG và bị cắt ở MAX_ROWS, nên hai con số không nhất thiết bằng nhau.';

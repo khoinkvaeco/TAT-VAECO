@@ -172,9 +172,18 @@ Nhờ vậy *TAT hoàn kho* tính được **theo giờ** thay vì ngày tròn: 
 (`diag/mutation-time`): trên `PICKSLIP_BOOKED` có dòng `MUTATION = 19943` (07/08/2026) trong khi
 `CREATED_DATE = 19701` (08/12/2025) — **lệch 8 tháng**. Vì vậy:
 
-- **Giờ xuất kho** chỉ điền khi `PICKSLIP_HEADER.MUTATION` **rơi đúng vào** `PICKSLIP_DATE` —
-  khi đó `MUTATION_TIME` mới đúng là giờ lập phiếu. Không trùng thì **để trống** (chỉ biết ngày),
-  và dòng đó **không** được đưa vào TAT trung bình theo giờ.
+- **Giờ xuất kho** chỉ có GIỜ khi `PICKSLIP_HEADER.MUTATION` **rơi đúng vào** `PICKSLIP_DATE` —
+  khi đó `MUTATION_TIME` mới đúng là giờ lập phiếu. Dòng đó **không** được đưa vào TAT trung bình
+  theo giờ nếu không có giờ thật.
+  Bảng chi tiết chỉ còn **MỘT cột thời gian xuất kho**: có giờ thật thì hiện `dd/mm/yyyy hh:mm`,
+  không có thì lùi về **NGÀY phiếu** và ghi rõ **“(chỉ có ngày)”** kèm chữ mờ. Server trả kèm
+  `issue_shown` (= `ISNULL(giờ thật, ngày phiếu)`, luôn có giá trị → sắp xếp và xuất Excel đều đúng)
+  và `issue_exact` (0/1 → giao diện biết có nên làm mờ không).
+  ⚠️ Khi không có giờ thật, giao diện **cắt hẳn phần giờ** (`slice(0, 10)`) chứ **không** cắt chuỗi
+  `"00:00"`: nếu dữ liệu lỡ mang giờ rác thì hiện ra người đọc sẽ tưởng đó là giờ xuất kho thật.
+  *(Trước đây bảng phải bày ba cột — `Ngày phiếu`, `Giờ xuất kho`, `Sửa cuối (dòng)` — vì cột giờ hay
+  trống. Hai cột đầu và cột `Sửa cuối (dòng)` đã bỏ; bỏ `Ngày phiếu` mà không có `issue_shown` thì
+  các dòng thiếu giờ sẽ **mất hẳn ngày**.)*
 - **TAT hoàn kho (giờ)**: thiếu giờ thật ở đầu nào thì **lùi về NGÀY** ở đầu đó (sai số tối đa 1 ngày) — khác hẳn việc dùng `MUTATION` của dòng booked (lệch tới 8 tháng). KPI *“Chính xác đến giờ”* cho biết bao nhiêu dòng có giờ thật ở **cả hai** đầu. *(Trước đây bắt buộc cả hai đầu phải có giờ thật nên biểu đồ **TAT hoàn kho theo Trung tâm** gần như không bao giờ có dữ liệu — hiện ra trống trơn.)*
 - **Giờ trả kho** lấy từ `HISTORY.MUTATION + MUTATION_TIME` — `HISTORY` là bảng **sự kiện**
   (mỗi dòng một lần dịch chuyển) nên `MUTATION` chính là thời điểm sự kiện; đo được `MUTATION`
@@ -203,6 +212,7 @@ kèm **5 dòng thật đã giải mã** để đối chiếu mắt thường. **
   - **Dùng được hoàn toàn bằng bàn phím** (người nhập liệu nhiều sẽ nhanh hơn hẳn chuột): khi đang focus vào nút, **↓ / Enter / Space** mở menu; trong menu **↑ ↓** di chuyển dòng sáng (chạy vòng qua đầu/cuối), **Home / End** về đầu / về cuối, **Space** tích–bỏ tích dòng đang sáng, **Enter** tích dòng đang sáng — hoặc nếu chưa chọn dòng nào mà sau khi gõ tìm chỉ còn **đúng một** mục thì tích luôn mục đó (gõ `dad` + Enter là xong), **Esc** hoặc **Tab** đóng menu. Dòng đang sáng được tô nền + viền và **tự cuộn vào tầm nhìn**.
   - CSS của menu **không phụ thuộc Tailwind**: `#stationWrap/#storeWrap/#deptWrap/#presetWrap { position: relative }` và `.multi-menu.hidden { display: none }` được khai báo thẳng trong `style.css`. Nếu để Tailwind lo hai class đó mà file Tailwind không nạp được thì **cả ba menu sẽ luôn mở và đè lên nhau** — đã gặp thật khi chạy kiểm thử giao diện trong môi trường chặn CDN.
   - Ô nằm gần rìa phải màn hình thì menu **tự neo sang phải** (`chinhViTriMenu()` đo xem có tràn khỏi khung nhìn không) để không bị cắt mất.
+- **Tên cột bảng “Chi tiết dòng xuất kho”** dùng đúng từ nghiệp vụ: `Seq` → **`Event (WO)`** (`PICKSLIPSEQNO_I`, số Event/WO dùng để khớp với phiếu trả về kho) · `Picking list` → **`Phiếu xuất`** (`PICKING_LISTNO_I`, cũng là tên file scan cần tìm). Cột `Ngày phiếu` và `Sửa cuối (dòng)` đã **bỏ** — xem §5b, cột *Giờ xuất kho* nay tự mang đủ ngày + giờ.
 - **Bộ lọc đã lưu (⭐).** Tổ hợp Station/Store/Trung tâm + 2 ô tích hay dùng thì đặt tên rồi gọi lại bằng **một cú bấm**, thay vì mở ba menu tích lại từ đầu mỗi sáng. Nút hiện **tên bộ lọc đang dùng** nếu bộ lọc trên màn hình trùng khớp một cái đã lưu, nên nhìn một cái là biết mình đang ở đâu; trong menu, dòng đó cũng được đánh dấu ✓.
   - **KỲ BÁO CÁO KHÔNG nằm trong bộ lọc đã lưu — có chủ ý.** Nếu lưu cả “tháng 2026-08” thì sang tháng bộ lọc đó thành **sai mà người dùng không biết**; còn lưu kiểu “tháng này” thì lại thêm một khái niệm nữa phải giải thích. Kỳ báo cáo có sẵn 4 nút ngay cạnh đó, chọn lại mất một giây. Bấm một bộ lọc đã lưu **giữ nguyên** kỳ đang xem.
   - Lưu ở **localStorage của từng máy** (`tat-presets-v1`, tối đa 20 bộ): đây là thói quen cá nhân của từng người, không phải cấu hình chung của công ty, nên **không** đưa lên server và **không** dính tới quy tắc phân quyền theo IP ở §6b.

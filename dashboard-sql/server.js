@@ -2646,6 +2646,13 @@ async function pickslipTemp(range, f) {
       RTRIM(r.[CREATED_BY])    AS created_by,
       ${dateVN}                AS pickslip_date,
       ${issueVN}               AS issue_time_vn,
+      -- COT DE HIEN TREN BANG: luon co gia tri. Co gio that thi lay gio, khong
+      -- thi lui ve NGAY phieu. Nho vay bang chi can MOT cot thoi gian xuat kho
+      -- (da bo cot "Ngay phieu" rieng) ma khong dong nao bi mat ngay.
+      -- issue_exact = 0 -> giao dien lam mo va ghi ro "chi co ngay", khong
+      -- bao gio trinh bay 00:00 nhu the do la gio xuat kho that.
+      ISNULL(${issueVN}, ${dateVN})                          AS issue_shown,
+      CASE WHEN ${issueVN} IS NULL THEN 0 ELSE 1 END         AS issue_exact,
       ${headerVN}              AS header_time_vn,
       ${bookedVN}              AS booked_time_vn,
       -- Lan sua cuoi cua DONG: voi dong da huy thi day la moc gan nhat co the
@@ -2974,7 +2981,8 @@ async function qPickslip(range, f) {
       x.station, x.store, x.location_from, x.picking_listno, x.pickslipno, x.seqno,
       x.partno, x.serialno, x.qty_booked, x.qty_canceled, x.loai, x.is_cancel,
       x.owner, x.created_by, x.pickslip_date,
-      x.issue_time_vn, x.booked_time_vn, x.header_time_vn, x.cancel_time_vn,
+      x.issue_time_vn, x.issue_shown, x.issue_exact,
+      x.booked_time_vn, x.header_time_vn, x.cancel_time_vn,
       x.mech_sign, x.booking_sign,
       ${dept} AS department,
       x.receiver, x.remarks, x.pickslip_text
