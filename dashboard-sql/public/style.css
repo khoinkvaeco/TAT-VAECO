@@ -104,6 +104,21 @@ body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
 }
 .lgc-thoat:hover { background: rgba(255,255,255,.3); }
 
+/* Nhan "So lieu luc HH:MM" + nut Tai lai (nam tren thanh loc mau dam) */
+#dataAge {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11.5px; color: rgba(234,245,246,.85);
+  padding: 2px 3px 2px 9px; border-radius: 999px;
+  background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.18);
+}
+/* So lieu qua 90 giay -> doi mau de nguoi dung tu biet ma bam Tai lai */
+#dataAge.cu { color: #ffe9b8; border-color: rgba(255,215,120,.45); background: rgba(255,200,80,.14); }
+#dataReload {
+  font-size: 11px; padding: 2px 8px; border-radius: 999px; cursor: pointer;
+  background: rgba(255,255,255,.16); color: inherit; border: 1px solid rgba(255,255,255,.22);
+}
+#dataReload:hover { background: rgba(255,255,255,.3); }
+
 .badge-mode {
   font-size: 11px; font-weight: 700; letter-spacing: .04em;
   padding: 3px 9px; border-radius: 999px;
@@ -231,6 +246,20 @@ body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
 .tabulator .tabulator-footer .tabulator-page { background: var(--surface-1); color: var(--text-secondary); border-color: var(--hair); }
 .tabulator .tabulator-footer .tabulator-page.active { color: #fff; background: var(--brand-2); }
 .tabulator .tabulator-col-content .tabulator-col-title { white-space: normal; }
+
+/* Nut "Thu lai" trong hop bao loi */
+.err-retry {
+  margin-left: auto; flex: none; font-size: 12px; font-weight: 600;
+  padding: 4px 12px; border-radius: 999px; cursor: pointer;
+  background: var(--surface-1); color: var(--critical);
+  border: 1px solid color-mix(in srgb, var(--critical) 45%, transparent);
+}
+.err-retry:hover { background: color-mix(in srgb, var(--critical) 12%, var(--surface-1)); }
+/* Chu "bang rong" co the dai 2 dong -> cho xuong dong tu te */
+.tabulator-placeholder-contents {
+  max-width: 560px; white-space: normal; line-height: 1.5;
+  color: var(--text-muted); font-size: 13px; text-align: center;
+}
 
 .tat-badge { padding: 1px 8px; border-radius: 999px; font-variant-numeric: tabular-nums; font-weight: 700; }
 

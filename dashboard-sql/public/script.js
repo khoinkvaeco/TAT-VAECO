@@ -131,14 +131,43 @@ function buildQuery() {
  *                       Server BO tham so nay khi tinh khoa cache.
  */
 async function api(path, job) {
-  const qs = buildQuery() + (job ? `&job=${encodeURIComponent(job)}` : '');
+  const qs = buildQuery()
+    + (job ? `&job=${encodeURIComponent(job)}` : '')
+    + (boQuaCacheLanToi ? '&nocache=1' : '');
   const url = path.includes('?') ? `${path}&${qs}` : `${path}?${qs}`;
   const res = await fetch(url);
   const data = await res.json();
   if (!res.ok || data.error) {
-    throw new Error(data.message || `Loi ${res.status}`);
+    const e = new Error(data.message || `Lỗi ${res.status}`);
+    e.status = res.status;
+    e.code = data.code;
+    throw e;
   }
+  // Server bao thoi diem SO LIEU duoc tinh (khong phai luc tai trang): du lieu
+  // co the den tu bo nho dem nen hai thu KHAC nhau.
+  ghiNhanGioSoLieu(res.headers.get('X-Data-Time'), res.headers.get('X-Cache'));
   return data;
+}
+
+// --- "So lieu luc HH:MM" ---------------------------------------------------
+// Cache cua truy van nang nay song vai phut (xem API_CACHE_MINUTES). Khong noi
+// ro thi hai nguoi mo cung mot man hinh o hai thoi diem se thay so KHAC nhau
+// va tuong la phan mem sai. Nhan nay + nut Tai lai giai quyet chuyen do.
+let boQuaCacheLanToi = false;   // nut "Tai lai" bat co nay cho DUNG mot luot
+
+function ghiNhanGioSoLieu(iso, cache) {
+  const el = $('#dataAge');
+  if (!el) return;
+  const d = iso ? new Date(iso) : null;
+  if (!d || isNaN(d)) { el.classList.add('hidden'); return; }
+  el.classList.remove('hidden');
+  const gio = d.toLocaleTimeString('vi', { hour: '2-digit', minute: '2-digit', hour12: false });
+  const cu = Date.now() - d.getTime() > 90 * 1000;
+  el.querySelector('.dataAge-text').textContent = `Số liệu lúc ${gio}`;
+  el.classList.toggle('cu', cu);
+  el.title = cache === 'HIT'
+    ? `Lấy từ bộ nhớ đệm của máy chủ (tính lúc ${d.toLocaleString('vi')}). Bấm Tải lại để hỏi SQL Server.`
+    : `Vừa hỏi SQL Server lúc ${d.toLocaleString('vi')}.`;
 }
 
 function showLoading(on) {
@@ -271,13 +300,53 @@ function setTabLoading(selector, name, on) {
     b.classList.toggle('loading', on && mine);
   });
 }
-function showError(msg) {
-  if (!msg) {
-    $('#errorBox').classList.add('hidden');
-    return;
-  }
+/**
+ * Hien loi kem NUT THU LAI.
+ * Loi hay gap nhat o day la linked server cham/nghen nhat thoi - thu lai la
+ * duoc. Truoc day nguoi dung phai F5 ca trang, tai lai het moi thu tu dau.
+ * @param {string} msg
+ * @param {Function} [thuLai] ham chay lai dung viec vua that bai
+ */
+function showError(msg, thuLai) {
+  const box = $('#errorBox');
+  const nut = $('#errorRetry');
+  if (!msg) { box.classList.add('hidden'); return; }
   $('#errorMsg').textContent = msg;
-  $('#errorBox').classList.remove('hidden');
+  box.classList.remove('hidden');
+  if (!nut) return;
+  nut.classList.toggle('hidden', typeof thuLai !== 'function');
+  nut.onclick = typeof thuLai === 'function'
+    ? () => { showError(''); thuLai(); }
+    : null;
+}
+
+/**
+ * Chu hien trong bang khi KHONG co dong nao.
+ * "Khong co du lieu" khong giup gi: nguoi dung khong biet la ky nay that su
+ * khong co, hay minh loc nham. Neu dang co bo loc thi noi thang ra.
+ */
+function chuBangRong() {
+  const dk = [];
+  if (state.station.length) dk.push(`Station: ${state.station.join(', ')}`);
+  if (state.store.length) dk.push(`Kho: ${state.store.join(', ')}`);
+  if (state.department.length) dk.push(`Trung tâm: ${state.department.join(', ')}`);
+  if (state.excludeCC) dk.push('bỏ xuất costcenter');
+  if (state.excludeCab) dk.push('bỏ các kho CAB');
+  if (!dk.length) return 'Kỳ báo cáo này không có dữ liệu.';
+  return `Không có dòng nào khớp bộ lọc (${dk.join(' · ')}).`
+    + ' Thử bỏ bớt điều kiện ở thanh lọc phía trên.';
+}
+
+/**
+ * Cap nhat chu "bang rong" cho MOI bang dang hien.
+ * Tabulator chi tao the placeholder khi bang KHONG co dong nao, nen cu quet ca
+ * trang: bang nao dang rong thi co the do, bang nao co du lieu thi khong.
+ */
+function veChuBangRong() {
+  const chu = chuBangRong();
+  document.querySelectorAll('.tabulator-placeholder-contents').forEach((el) => {
+    el.textContent = chu;
+  });
 }
 
 // --------------------------------------------------------------------------
@@ -1113,7 +1182,7 @@ async function loadDashboard() {
         columns: withHeaderFilters(COLS_TAT_DEPT),
         layout: 'fitDataFill',
         pagination: false,     // hien HET cac dong (cuon doc, render ao)
-        placeholder: 'Không có dữ liệu',
+        placeholder: 'Không có dữ liệu',   // duoc thay bang chuBangRong() sau moi lan tai
         height: '600px',
       });
       // Khi tim kiem/loc cot: hien "X/Y dong" de biet so luong cu the
@@ -1129,9 +1198,10 @@ async function loadDashboard() {
       mainTable.replaceData(rows);
     }
   } catch (err) {
-    showError(err.message);
+    showError(err.message, loadDashboard);
   } finally {
     showLoading(false);
+    setTimeout(veChuBangRong, 0);
     if (seq === dashLoadSeq) {
       setBusy('#dashPane', false);
       setTabLoading('.mainTab', 'dashboard', false);
@@ -1332,7 +1402,7 @@ async function loadReport(name, hostKey = 'report') {
         columns: withHeaderFilters(def.columns),
         layout: 'fitDataFill',
         pagination: false,     // hien HET cac dong (cuon doc, render ao)
-        placeholder: 'Không có dữ liệu',
+        placeholder: 'Không có dữ liệu',   // duoc thay bang chuBangRong() sau moi lan tai
         height: '600px',
       });
       // Khi tim kiem/loc cot: hien "X/Y dong"
@@ -1349,10 +1419,11 @@ async function loadReport(name, hostKey = 'report') {
       reportTables[hostKey].redraw(true); // ve lai day du sau khi tab vua duoc hien thi
     }
   } catch (err) {
-    showError(err.message);
+    showError(err.message, () => loadReport(name, hostKey));
   } finally {
     tt.dong();
     showLoading(false);
+    setTimeout(veChuBangRong, 0);   // the placeholder chi co sau khi Tabulator ve xong
     if (seq === reportSeqs[hostKey]) {
       setBusy(H.pane, false);
       if (H.tabSel) setTabLoading(H.tabSel, name, false);
@@ -2576,7 +2647,7 @@ async function loadPickslip() {
         columns: withHeaderFilters(COLS_PICKSLIP),
         layout: 'fitDataFill',
         pagination: false,
-        placeholder: 'Không có dữ liệu',
+        placeholder: 'Không có dữ liệu',   // duoc thay bang chuBangRong() sau moi lan tai
         height: '600px',
       });
       pickTable.on('dataFiltered', (filters, rowsFiltered) => {
@@ -2591,10 +2662,11 @@ async function loadPickslip() {
     }
     pickTable.setFilter(pickCancelFilter);
   } catch (err) {
-    showError(err.message);
+    showError(err.message, loadPickslip);
   } finally {
     tt.dong();
     showLoading(false);
+    setTimeout(veChuBangRong, 0);   // the placeholder chi co sau khi Tabulator ve xong
     if (seq === pickLoadSeq) {
       setBusy('#pickPane', false);
       setTabLoading('.mainTab', 'pickslip', false);
@@ -2770,7 +2842,7 @@ async function loadReceiving() {
         columns: withHeaderFilters(COLS_RECEIVING),
         layout: 'fitDataFill',
         pagination: false,
-        placeholder: 'Không có dữ liệu',
+        placeholder: 'Không có dữ liệu',   // duoc thay bang chuBangRong() sau moi lan tai
         height: '600px',
       });
       recvTable.on('dataFiltered', (filters, rowsFiltered) => {
@@ -2785,10 +2857,11 @@ async function loadReceiving() {
     }
     recvTable.setFilter(recvFilter);
   } catch (err) {
-    showError(err.message);
+    showError(err.message, loadReceiving);
   } finally {
     tt.dong();
     showLoading(false);
+    setTimeout(veChuBangRong, 0);   // the placeholder chi co sau khi Tabulator ve xong
     if (seq === recvLoadSeq) {
       setBusy('#recvPane', false);
       setTabLoading('.mainTab', 'receiving', false);
@@ -3003,6 +3076,12 @@ async function init() {
   $('#weekInput').addEventListener('change', (e) => { state.week = e.target.value; applyFilters(); });
   $('#quarterInput').addEventListener('change', (e) => { state.quarter = e.target.value; applyFilters(); });
   $('#yearInput').addEventListener('change', (e) => { state.year = e.target.value; applyFilters(); });
+  // Nut "Tai lai": bo qua bo nho dem cua may chu, hoi lai SQL Server MOT luot
+  $('#dataReload').addEventListener('click', () => {
+    boQuaCacheLanToi = true;
+    try { applyFilters(); } finally { setTimeout(() => { boQuaCacheLanToi = false; }, 3000); }
+  });
+
   initMultiSelects(applyFilters);   // Station + Store + Trung tam (chon nhieu)
   initPresets(applyFilters);        // Bo loc da luu
   initChipBar(applyFilters);        // Hang dieu kien dang loc

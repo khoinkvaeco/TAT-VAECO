@@ -607,6 +607,68 @@ chạy `npm run build:assets`. (Đã kiểm chứng bằng cách cố tình thê
 > dựng sẵn tôi đặt `tailwind.css` lên trước và **khung chat mở sẵn ngay khi vào
 > trang**; đảo lại thứ tự là đúng như cũ.
 
+## 7f. Hàng đợi truy vấn nặng, nhãn giờ số liệu, header bảo mật
+
+**Hàng đợi (`HEAVY_MAX`, mặc định 4).** Gộp request (§7e) chỉ cứu được khi mọi người
+dùng **cùng** bộ lọc. Mỗi người một bộ lọc khác nhau thì vẫn là N truy vấn 30 giây trên
+pool 10 kết nối — một người mở 10 tab đủ làm nghẽn cả hệ thống. Nay chỉ `HEAVY_MAX`
+truy vấn nặng chạy cùng lúc; người đến sau xếp hàng và **thấy mình đang xếp hàng**
+(*“Bạn đứng thứ 3 trong hàng đợi…”* qua nhật ký tiến trình §7d), chứ không ngồi nhìn
+vòng xoay không biết chuyện gì.
+
+`/api/filters` và `/api/part-onoff` được đánh dấu `{ nang: false }` — truy vấn nhẹ,
+không chiếm suất, nên không bị kẹt sau hàng dài.
+
+> ⚠️ `traSuat()` **phải** nằm trong `finally`. Thiếu dòng đó thì mỗi truy vấn lỗi ăn
+> mất một suất vĩnh viễn, đến khi hết suất là cả hệ thống dừng hẳn. Có bài kiểm tra
+> riêng cho đúng tình huống này.
+
+**Nhãn “Số liệu lúc HH:MM” + nút ↻ Tải lại.** TTL cache cho truy vấn nặng nay là
+`API_CACHE_MINUTES` (mặc định **5 phút**, trước là 60 giây) — càng đông người dùng thì
+càng nên để lâu. Nhưng cache lâu mà không nói ra thì hai người mở cùng một màn hình ở
+hai thời điểm sẽ thấy **số khác nhau** và tưởng phần mềm sai. Nên server gửi kèm header
+`X-Data-Time` (thời điểm số liệu **được tính**, không phải lúc tải trang) và giao diện
+hiện nhãn; quá 90 giây thì nhãn **đổi màu**. Nút *Tải lại* gửi `?nocache=1` để bỏ qua
+bộ nhớ đệm và hỏi lại SQL Server đúng một lượt.
+
+**Trạng thái rỗng và lỗi.** Bảng rỗng nay nói rõ lý do — *“Không có dòng nào khớp bộ lọc
+(Station: HAN · Kho: MAIN). Thử bỏ bớt điều kiện…”* — thay vì “Không có dữ liệu” khiến
+người dùng không biết là kỳ này thật sự trống hay mình lọc nhầm. Hộp lỗi có thêm nút
+**↻ Thử lại** chạy lại đúng việc vừa hỏng, thay vì phải F5 tải lại cả trang.
+
+**Header bảo mật.** `X-Content-Type-Options: nosniff`, `X-Frame-Options: SAMEORIGIN`,
+`Referrer-Policy: same-origin`, và tắt `X-Powered-By`.
+
+**Khoá dòng tiêu đề bảng: KHÔNG cần làm gì.** Đã kiểm tra thật — mọi bảng đều đặt
+`height: 600px` nên Tabulator tự cuộn trong khung của nó và tiêu đề đã cố định sẵn
+(đo được `y` không đổi trước/sau khi cuộn 800px).
+
+### Theo dõi tải: `GET /api/health` → `tai`
+
+```json
+"tai": { "dangChayNang": 2, "hangDoi": 7, "toiDa": 4,
+         "gopRequest": 3, "cacheEntry": 41, "cacheMB": 12.4 }
+```
+
+Trường này **vẫn trả về khi mất kết nối SQL Server** (HTTP 503, `status: "db_down"`) —
+đó chính là lúc người trực cần nhìn số liệu tải nhất. Trước đây lỗi DB làm cả
+`/api/health` trả 500 và mất sạch thông tin; `tools/loadcheck.js` đã lộ ra chỗ này.
+
+### Kiểm tra tự động: `tools/loadcheck.js`
+
+Chạy server LIVE với `mssql` giả + **`SQLSPY_DELAY_MS`** để giả làm truy vấn chậm —
+cần thiết vì với DB giả trả lời trong ~1 ms thì cơn bão kết thúc trước khi kịp đo bất
+cứ thứ gì (phép đo đầu tiên cho ra “đỉnh cao 0”, vô nghĩa). Sáu trường hợp:
+
+| Trường hợp | Kết quả đo |
+|---|---|
+| 20 người **cùng** bộ lọc | 1 chạy thật, 19 `COALESCED` |
+| 30 request **khác** bộ lọc | tất cả được phục vụ |
+| Đỉnh cao chạy cùng lúc | **2** (đúng bằng `HEAVY_MAX`), hàng đợi dài nhất 28 |
+| Hàng đợi có thật sự hoạt động | 28 > 0 |
+| Sau cơn bão | `dangChay=0, hangDoi=0` |
+| **10 truy vấn LỖI** | vẫn trả lại hết suất |
+
 ## 7e. Gộp các request trùng nhau đang chạy (bắt buộc khi mở cho cả công ty)
 
 Truy vấn LGC đi qua linked server, có câu mất **~30 giây**. Sáng thứ Hai 8h00 có 20

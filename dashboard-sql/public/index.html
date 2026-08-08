@@ -178,6 +178,13 @@
         <span class="spinner"></span> Đang tải dữ liệu…
       </div>
       <span id="rangeLabel" class="text-xs text-muted ml-auto"></span>
+      <!-- SO LIEU LUC MAY GIO: cache cua truy van nang song vai phut, khong noi
+           ro thi hai nguoi xem cung man hinh o hai thoi diem se thay so khac
+           nhau va tuong phan mem sai. -->
+      <span id="dataAge" class="hidden">
+        <span class="dataAge-text"></span>
+        <button type="button" id="dataReload" title="Bỏ qua bộ nhớ đệm, hỏi lại SQL Server">↻ Tải lại</button>
+      </span>
     </div>
 
     <!-- HÀNG ĐIỀU KIỆN ĐANG LỌC: liệt kê thẳng ra những gì đang lọc, mỗi điều
@@ -195,7 +202,13 @@
 
   <!-- Thông báo lỗi -->
   <div id="errorBox" class="hidden max-w-[1600px] mx-auto mt-3 px-5">
-    <div class="err-box"><span>⚠️</span><span id="errorMsg"></span></div>
+    <div class="err-box">
+      <span>⚠️</span>
+      <span id="errorMsg"></span>
+      <!-- Nut Thu lai: loi hay gap nhat la mang/linked server cham nhat thoi.
+           Truoc day nguoi dung phai F5 ca trang (tai lai het moi thu). -->
+      <button type="button" id="errorRetry" class="err-retry hidden">↻ Thử lại</button>
+    </div>
   </div>
 
   <!-- ===================== TAB NAV ===================== -->

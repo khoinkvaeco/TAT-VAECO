@@ -25,8 +25,14 @@ const fake = {
         query(text) {
           current = text;
           fs.appendFileSync(OUT, JSON.stringify({ sql: String(text) }) + '\n');
+          // SQLSPY_DELAY_MS: gia lam truy van CHAM. Can cho cac phep do ve TAI
+          // (hang doi, gop request): voi DB gia tra loi trong ~1ms thi con bao
+          // ket thuc truoc khi kip do bat cu thu gi.
+          const cho = Number(process.env.SQLSPY_DELAY_MS || 0);
+          const kq = { recordset: [], recordsets: [] };
+          if (cho > 0) return new Promise((r) => setTimeout(() => r(kq), cho));
           // Tra ve RONG (khong nem loi) de ham goi chay tiep cac buoc sau
-          return Promise.resolve({ recordset: [], recordsets: [] });
+          return Promise.resolve(kq);
         },
       };
     }

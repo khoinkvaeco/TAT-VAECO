@@ -81,6 +81,14 @@ const CONFIG = {
   // --- CONG VAO TRANG LGC: hoi ma nhan vien, chi cho nguoi thuoc CUVT ---
   // Dat LGC_GATE=false de tat (vd khi chua cong bo cho ca cong ty).
   lgcGate: String(process.env.LGC_GATE || 'true').toLowerCase() !== 'false',
+  // --- Mo cho CA CONG TY: chan qua tai va giu so lieu doc duoc ---
+  // So truy van NANG duoc chay CUNG LUC. Pool SQL co 10 ket noi; de 4 la con
+  // cho cho cac truy van nhe (filters, whoami...) khong bi ket sau hang dai.
+  heavyMax: Math.max(1, parseInt(process.env.HEAVY_MAX || '4', 10)),
+  // Thoi gian song cua cache cho cac truy van NANG (phut). Cang dong nguoi
+  // dung thi cang nen de lau; giao dien co nhan "So lieu luc HH:MM" + nut tai
+  // lai nen khong ai bi nham la so lieu tuc thoi.
+  cacheMinutes: Math.max(0, parseFloat(process.env.API_CACHE_MINUTES || '5')),
   signCacheMinutes: parseInt(process.env.SIGN_CACHE_MINUTES || '360', 10), // mac dinh 6h
   // --- Bao cao dinh ky day len Teams / SharePoint (phuong an 3) - MAC DINH TAT ---
   // URL webhook cua Teams Workflows ("Post to a channel when a webhook request
@@ -5072,6 +5080,16 @@ function lgcGuard(req, res, next) {
   return res.sendFile(path.join(__dirname, 'public', 'lgc-login.html'));
 }
 
+// --- HEADER BAO MAT co ban (mo cho ca cong ty thi nen co) ---
+//  Khong dung helmet de khoi them phu thuoc; bon dong nay la phan co ich nhat.
+app.disable('x-powered-by');            // khong khoe "Express" cho ai do do phien ban
+app.use((req, res, next) => {
+  res.set('X-Content-Type-Options', 'nosniff');   // trinh duyet khong tu doan kieu file
+  res.set('X-Frame-Options', 'SAMEORIGIN');       // khong cho nhung trang nay vao iframe la
+  res.set('Referrer-Policy', 'same-origin');      // khong ro ri duong dan noi bo ra ngoai
+  next();
+});
+
 app.use(adminGuard);   // chan truy cap admin tu IP la (truoc static de chan /admin.html)
 app.use(lgcGuard);     // chan trang LGC neu chua nhap ma nhan vien thuoc CUVT
 app.use(express.static(path.join(__dirname, 'public')));
@@ -5104,6 +5122,8 @@ function h(fn) {
 //     Muc dich: doi tab / bam Ap dung lai / nhieu nguoi cung xem -> khong query lai DB.
 //     Chi cache o che do LIVE; du lieu demo re nen khong can.
 const apiCache = new Map(); // url -> { t: timestamp, data, bytes }
+/** TTL cho cac truy van NANG (doc AMOS qua linked server). Xem CONFIG.cacheMinutes. */
+const TTL_NANG = Math.round(CONFIG.cacheMinutes * 60 * 1000);
 const CACHE_MAX_ENTRIES = 300;
 // GIOI HAN THEO DUNG LUONG: /api/dashboard ky NAM co the tra 10-20MB/entry
 // (kem rows) -> chi dem so entry se phinh RAM den chet service. Tong ngan sach
@@ -5133,6 +5153,50 @@ function cacheKeyKhongJob(req) {
   return req.path + (qs ? '?' + qs : '');
 }
 
+// --- HANG DOI CHO TRUY VAN NANG ---
+//  Gop request trung nhau chi cuu duoc khi moi nguoi dung CUNG bo loc. Moi
+//  nguoi mot bo loc khac nhau thi van la N truy van 30 giay tren pool 10 ket
+//  noi -> SQL Server va AMOS deu ngheo. Mot nguoi mo 10 tab cung du lam nghen
+//  ca he thong.
+//  Nay chi cho CONFIG.heavyMax truy van nang chay cung luc; nguoi den sau XEP
+//  HANG va THAY MINH DANG XEP HANG (bao qua nhat ky tien trinh) chu khong ngoi
+//  nhin vong xoay khong biet chuyen gi.
+let dangChayNang = 0;
+const hangDoi = [];              // [{ chay, ghi }]
+
+function xepHangDaiBaoNhieu() { return hangDoi.length; }
+
+/** Goi khi mot suat vua duoc tra lai -> danh thuc nguoi dau hang. */
+function goiNguoiTiepTheo() {
+  if (!hangDoi.length || dangChayNang >= CONFIG.heavyMax) return;
+  const { chay } = hangDoi.shift();
+  dangChayNang += 1;
+  chay();
+  // Cap nhat vi tri cho nhung nguoi con lai
+  hangDoi.forEach((n, i) => n.ghi(`⏳ Đang xếp hàng — còn ${i + 1} lượt trước bạn…`));
+}
+
+/**
+ * Xin mot suat chay truy van nang. Tra ve ham `tra()` PHAI goi khi xong
+ * (dat trong finally), neu khong suat do mat vinh vien va he thong tu khoa.
+ */
+function xinSuatNang(ghi) {
+  if (dangChayNang < CONFIG.heavyMax) {
+    dangChayNang += 1;
+    return Promise.resolve(traSuatNang);
+  }
+  ghi(`⏳ Hệ thống đang chạy ${dangChayNang} truy vấn nặng (tối đa ${CONFIG.heavyMax}). `
+    + `Bạn đứng thứ ${hangDoi.length + 1} trong hàng đợi…`);
+  return new Promise((resolve) => {
+    hangDoi.push({ chay: () => resolve(traSuatNang), ghi });
+  });
+}
+
+function traSuatNang() {
+  dangChayNang = Math.max(0, dangChayNang - 1);
+  goiNguoiTiepTheo();
+}
+
 // --- GOP CAC REQUEST TRUNG NHAU DANG CHAY (in-flight coalescing) ---
 //  VI SAO CAN KHI MO CHO CA CONG TY: truy van LGC di qua linked server, co cau
 //  mat ~30 giay. Sang thu Hai 8h00 co 20 nguoi cung mo dashboard cung ky bao
@@ -5144,16 +5208,25 @@ function cacheKeyKhongJob(req) {
 //  chi nhan DUNG MOT cau. Day la thay doi quan trong nhat de mo cho ca cong ty.
 const dangChay = new Map();   // khoa cache -> Promise<{data}|{loi}>
 
-function cached(ttlMs, fn) {
+function cached(ttlMs, fn, opts = {}) {
+  const nang = opts.nang !== false;      // mac dinh coi la truy van NANG
   return h(async (req, res) => {
-    if (CONFIG.demoMode) return fn(req, res); // demo: khong cache
+    if (CONFIG.demoMode) {
+      // Demo khong cache, nhung VAN gui gio so lieu: neu khong thi nhan
+      // "So lieu luc HH:MM" bien mat o che do demo va khong ai kiem thu duoc.
+      res.set('X-Data-Time', new Date().toISOString());
+      return fn(req, res);
+    }
     // BO tham so `job` khoi khoa cache: no la ma NGAU NHIEN cho moi lan bam,
     // de nguyen thi moi request deu la mot khoa moi -> cache khong bao gio trung
     // va van chay lai truy van nang.
     const key = cacheKeyKhongJob(req);
-    const hit = apiCache.get(key);
+    // Nut "Tai lai" tren giao dien gui ?nocache=1 -> bo qua cache, hoi lai that.
+    const boQuaCache = ['1', 'true'].includes(String(req.query.nocache || '').toLowerCase());
+    const hit = boQuaCache ? null : apiCache.get(key);
     if (hit && Date.now() - hit.t < ttlMs) {
       res.set('X-Cache', 'HIT');
+      res.set('X-Data-Time', new Date(hit.t).toISOString());   // de hien "So lieu luc HH:MM"
       dongNhatKy(req.query.job, '✔ Lấy lại kết quả trong bộ nhớ đệm (không phải hỏi SQL Server)');
       return res.json(hit.data);
     }
@@ -5167,6 +5240,7 @@ function cached(ttlMs, fn) {
         + '(không hỏi SQL Server lần nữa)…');
       const kq = await cho;
       if (kq.loi) throw kq.loi;                 // loi thi bao y het nguoi chay dau
+      res.set('X-Data-Time', new Date().toISOString());
       ghi('✔ Xong — dùng chung kết quả vừa chạy', true);
       return res.json(kq.data);
     }
@@ -5175,6 +5249,19 @@ function cached(ttlMs, fn) {
     let xong;
     let daTraLoi = false;
     dangChay.set(key, new Promise((r) => { xong = r; }));
+
+    // XEP HANG neu dang co qua nhieu truy van nang chay cung luc.
+    // Xin suat SAU khi da dat "phieu cho": nguoi trung truy van van duoc gop
+    // ngay, khong phai xep hang oan.
+    const ghiHang = moNhatKy(req.query.job);
+    let traSuat = () => {};
+    if (nang) {
+      try {
+        traSuat = await xinSuatNang(ghiHang);
+      } catch (e) {
+        dangChay.delete(key); xong({ loi: e }); throw e;
+      }
+    }
 
     // Chan res.json de luu ket qua vao cache truoc khi tra ve
     const origJson = res.json.bind(res);
@@ -5194,6 +5281,7 @@ function cached(ttlMs, fn) {
       daTraLoi = true;
       dangChay.delete(key);
       xong({ data });
+      res.set('X-Data-Time', new Date().toISOString());
       return origJson(data);
     };
     try {
@@ -5208,6 +5296,10 @@ function cached(ttlMs, fn) {
       dangChay.delete(key);
       xong({ loi: e });
       throw e;
+    } finally {
+      // PHAI tra suat trong finally: thieu dong nay thi moi truy van loi se an
+      // mat mot suat vinh vien, den khi het suat la ca he thong dung han.
+      traSuat();
     }
   });
 }
@@ -5257,13 +5349,34 @@ app.get(
     const base = {
       status: 'ok',
       ...BUILD_INFO,
+      // TAI HIEN TAI - de theo doi khi mo cho ca cong ty (va de kiem thu duoc
+      // hang doi: tu ngoai khong the biet co bao nhieu truy van dang chay).
+      tai: {
+        dangChayNang,
+        hangDoi: xepHangDaiBaoNhieu(),
+        toiDa: CONFIG.heavyMax,
+        gopRequest: dangChay.size,
+        cacheEntry: apiCache.size,
+        cacheMB: Math.round((cacheTotalBytes / 1048576) * 10) / 10,
+      },
       // Liet ke cac route chan doan de biet ban dang chay da co chua
       diagRoutes: ['/api/admin/diag/dept', '/api/admin/diag/higher', '/api/admin/diag/pairing', '/api/admin/diag/rbi'],
     };
     if (CONFIG.demoMode) {
       return res.json({ ...base, mode: 'demo', message: 'Dang chay DEMO_MODE (du lieu mau).' });
     }
-    await query('SELECT 1 AS ok');
+    // MAT KET NOI DB VAN PHAI TRA VE `tai`: day chinh la luc nguoi truc can
+    // nhin so lieu tai nhat (co phai dang nghen khong?). Truoc day loi DB lam
+    // ca /api/health tra 500 va mat sach thong tin - da lo ra khi chay
+    // tools/loadcheck.js.
+    try {
+      await query('SELECT 1 AS ok');
+    } catch (e) {
+      return res.status(503).json({
+        ...base, status: 'db_down', mode: 'live',
+        message: 'Khong ket noi duoc SQL Server: ' + e.message,
+      });
+    }
     res.json({ ...base, mode: 'live', message: 'Ket noi SQL Server OK.' });
   })
 );
@@ -5472,7 +5585,7 @@ app.get(
       stores: stores.map((r) => r.v),
       departments: departments.map((r) => r.v),
     });
-  })
+  }, { nang: false })
 );
 
 // --- DEBUG: khao sat du lieu that de kiem tra logic/dinh dang cot ---
@@ -5564,7 +5677,7 @@ app.get(
 //     /api/tat/departments (tranh chay lai query nang 2 lan). Cache 60s.
 app.get(
   '/api/dashboard',
-  cached(60 * 1000, async (req, res) => {
+  cached(TTL_NANG, async (req, res) => {
     const range = resolveRange(req.query);
     const prevRange = resolveRange(prevPeriodQuery(req.query));
     const f = readFilters(req.query);
@@ -5594,7 +5707,7 @@ app.get(
 //     Lap tung thang -> dung lai qDashboardAgg/buildDashboardFromAgg. Cache 5'.
 app.get(
   '/api/beta/trend',
-  cached(5 * 60 * 1000, async (req, res) => {
+  cached(TTL_NANG, async (req, res) => {
     const months = Math.min(12, Math.max(2, parseInt(req.query.months || '6', 10)));
     const f = readFilters(req.query);
     const anchor = /^\d{4}-\d{2}$/.test(req.query.month || '')
@@ -5628,7 +5741,7 @@ app.get(
 // --- QUAN LY XUAT KHO (pickslip): KPI + bieu do + bang chi tiet ---
 app.get(
   '/api/pickslip',
-  cached(60 * 1000, async (req, res) => {
+  cached(TTL_NANG, async (req, res) => {
     const range = resolveRange(req.query);
     const f = readFilters(req.query);
     if (CONFIG.demoMode) return res.json(DEMO.pickslip(range, f));
@@ -5647,7 +5760,7 @@ app.get(
 // --- RECEIVING (nhap kho): KPI + bieu do + bang chi tiet + doi chieu file scan ---
 app.get(
   '/api/receiving',
-  cached(60 * 1000, async (req, res) => {
+  cached(TTL_NANG, async (req, res) => {
     const range = resolveRange(req.query);
     const f = readFilters(req.query);
     if (CONFIG.demoMode) return res.json(DEMO.receiving(range, f));
@@ -5724,7 +5837,7 @@ app.post('/api/admin/scan-config', h(async (req, res) => {
 // --- Bang du lieu chi tiet TAT theo don vi (van giu endpoint rieng) ---
 app.get(
   '/api/tat/departments',
-  cached(60 * 1000, async (req, res) => {
+  cached(TTL_NANG, async (req, res) => {
     const range = resolveRange(req.query);
     const f = readFilters(req.query);
     const data = CONFIG.demoMode ? DEMO.tatDepartments(range, f) : await qTatDepartments(range, f);
@@ -5734,7 +5847,7 @@ app.get(
 
 app.get(
   '/api/tat/cuvt',
-  cached(60 * 1000, async (req, res) => {
+  cached(TTL_NANG, async (req, res) => {
     const range = resolveRange(req.query);
     const f = readFilters(req.query);
     const data = CONFIG.demoMode ? DEMO.tatCuvt(range, f) : await qTatCuvt(range, f);
@@ -5759,7 +5872,7 @@ const REPORTS = {
 
 app.get(
   '/api/reports/:name',
-  cached(60 * 1000, async (req, res) => {
+  cached(TTL_NANG, async (req, res) => {
     const def = REPORTS[req.params.name];
     if (!def) return res.status(404).json({ error: true, message: 'Bao cao khong ton tai.' });
     const range = resolveRange(req.query);
@@ -5786,7 +5899,7 @@ app.get(
 //     Khong dien o nao -> tra rong (khong quet ca bang linked server).
 app.get(
   '/api/part-onoff',
-  cached(60 * 1000, async (req, res) => {
+  cached(TTL_NANG, async (req, res) => {
     const g = (k) => String(req.query[k] || '').trim();
     const crit = {
       event: g('event'), partno: g('partno'), serialno: g('serialno'),
@@ -5795,7 +5908,7 @@ app.get(
     if (!Object.values(crit).some(Boolean)) return res.json({ rows: [], count: 0 });
     const rows = CONFIG.demoMode ? DEMO.partOnOff(crit) : await qPartOnOff(crit);
     res.json({ rows, count: rows.length, truncated: rows.length >= CONFIG.maxRows });
-  })
+  }, { nang: false })
 );
 
 // --- ADMIN: gop log cau hoi chatbot CHUA HIEU de review + bo sung KB ---
