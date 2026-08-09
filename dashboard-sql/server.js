@@ -7145,20 +7145,41 @@ const wpVal = require('./wp-validator')({
   query, demoMode: CONFIG.demoMode, docDemo: docDemoWp,
 });
 
-// Danh sach WP de go y o o nhap (nhe - khong tinh la truy van nang).
-app.get('/api/wp/list', cached(10 * 60 * 1000, async (req, res) => {
-  const kq = await wpVal.danhSachWp(String(req.query.q || ''), req.query.limit);
-  res.json(kq);
+// Danh sach station co Work Package (doi rat it -> cache 6 gio).
+app.get('/api/wp/stations', cached(6 * 60 * 60 * 1000, async (req, res) => {
+  res.json(await wpVal.danhSachStation());
 }, { nang: false }));
+
+// Tim Work Package theo station + tinh trang (+ ngay bat dau, cho WP da dong).
+app.get('/api/wp/tim', cached(10 * 60 * 1000, async (req, res) => {
+  const ghi = moNhatKy(req.query.job);
+  try {
+    const kq = await wpVal.timWorkPackage({
+      station: req.query.station,
+      wpStatus: req.query.wpStatus,
+      tuNgay: req.query.tuNgay,
+      gioiHan: req.query.limit,
+    }, ghi);
+    if (kq.loi) {
+      dongNhatKy(req.query.job, `✘ ${kq.loi}`);
+      return res.status(400).json({ error: true, message: kq.loi });
+    }
+    res.json(kq);
+  } catch (e) {
+    dongNhatKy(req.query.job, `✘ Lỗi: ${e.message}`);
+    throw e;
+  }
+}));
 
 // Lay du lieu MOT Work Package. Day la truy van NANG -> co xep hang + gop
 // request trung nhau + nhat ky tien trinh (?job=...) giong cac trang khac.
+// Nhan `wp` la WPNO_I (so, danh sach o tren tra ve) hoac WPNO (ten).
 app.get('/api/wp', cached(15 * 60 * 1000, async (req, res) => {
   const ghi = moNhatKy(req.query.job);
-  const wpno = String(req.query.wpno || '').trim();
+  const wpno = String(req.query.wp || req.query.wpno || '').trim();
   if (!wpno && !CONFIG.demoMode) {
-    dongNhatKy(req.query.job, '✘ Chưa nhập số Work Package');
-    return res.status(400).json({ error: true, message: 'Thiếu tham số wpno (số/tên Work Package).' });
+    dongNhatKy(req.query.job, '✘ Chưa chọn Work Package');
+    return res.status(400).json({ error: true, message: 'Thiếu tham số wp (WPNO_I hoặc tên Work Package).' });
   }
   if (wpno.length > 80) {
     dongNhatKy(req.query.job, '✘ Số Work Package quá dài');
@@ -7172,10 +7193,13 @@ app.get('/api/wp', cached(15 * 60 * 1000, async (req, res) => {
       return res.status(404).json({
         error: true,
         message: `Không tìm thấy Work Package "${wpno}" trong AMOS.`,
-        daThu: kq.daThu, chiTiet: kq.loi,
+        chiTiet: kq.loi,
       });
     }
-    res.json({ wp: kq.wp || wpno, demo: !!kq.demo, ms: Date.now() - t0, rows: kq.rows });
+    res.json({
+      wp: kq.wp || wpno, thongTin: kq.thongTin || null,
+      demo: !!kq.demo, ms: Date.now() - t0, rows: kq.rows,
+    });
   } catch (e) {
     dongNhatKy(req.query.job, `✘ Lỗi: ${e.message}`);
     throw e;

@@ -36,8 +36,10 @@ const ENDPOINTS = [
   '/api/pickslip',
   '/api/receiving',
   // Ra soat ho so bao duong (tach truy van tung bang AMOS)
-  '/api/wp?wpno=SMOKE-TEST-WP',
-  '/api/wp/list?q=SMOKE',
+  '/api/wp?wp=SMOKE-TEST-WP',
+  '/api/wp/stations',
+  '/api/wp/tim?station=SGN&wpStatus=112',
+  '/api/wp/tim?station=SGN&wpStatus=-2&tuNgay=2026-01-01',
   // Cac endpoint chan doan (chi IP quan tri - chay tu localhost nen qua duoc)
   '/api/admin/diag/dept',
   '/api/admin/diag/higher',

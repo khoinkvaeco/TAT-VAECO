@@ -433,10 +433,18 @@ function stepDetail(d, mode) {
     if (bad.has(x.ws)) { cls = 'bad'; note = '<span class="badge r">sai thứ tự</span>'; }
     if (mode === 'hov' && d.lastWs && x.ws === d.lastWs) { cls = 'last'; note = '<span class="badge b">bước cuối</span>' + note; }
     const body = contentHtml(x.txt, x.html, mode === 'ref');
+    // Chi tiet cham cong (TIME_CAPTURED): ai, bo phan gi, bao nhieu gio.
+    // Chi co khi lay tu AMOS; du lieu mau cu khong co thi bo qua.
+    const cong = (x.cong || []).filter((c) => c.nguoi || c.gio);
+    const congHtml = cong.length
+      ? '<div class="cong">' + cong.map((c) => `<span>${esc(c.nguoi)}`
+        + `${c.bp ? ` · ${esc(c.bp)}` : ''}${c.viec ? ` · ${esc(c.viec)}` : ''}`
+        + ` · ${(c.gio || 0).toFixed(2)}h</span>`).join('') + '</div>'
+      : '';
     h += `<tr class="${cls}"><td class="mono">${esc(x.ws)}</td><td>${esc(x.hdr || '')}</td>
         <td class="mono">${fdt(x.dt) || '—'}</td><td class="mono">${esc(x.sg || '')}</td>
         <td class="mono">${(x.mh || 0).toFixed(2)}</td>
-        <td class="txtc">${body}</td><td>${note || ''}</td></tr>`;
+        <td class="txtc">${body}${congHtml}</td><td>${note || ''}</td></tr>`;
   });
   h += `<tfoot><tr style="font-weight:600"><td colspan="4" style="text-align:right">Tổng MH:</td>
       <td class="mono" style="color:var(--green)">${totalMH.toFixed(2)}</td><td></td><td></td></tr></tfoot>`;
@@ -595,6 +603,8 @@ function xongLog(coLoi) {
   $('logBox').classList.add('xong');
   $('logTitle').textContent = coLoi ? 'Dừng vì lỗi' : 'Đã lấy xong dữ liệu';
 }
+/** Xa cac dong log den truoc khi khung log kip hien. */
+function xaLogCho() { const c = _choLog; _choLog = []; c.forEach(themLog); }
 
 /**
  * Mo kenh nhat ky (SSE) cho mot lan tai. Trinh duyet cu khong co EventSource
@@ -626,27 +636,130 @@ function baoLoi(msg, thuLai) {
 }
 const anLoi = () => $('errBox').classList.add('hidden');
 
+/* ---------- Chon Work Package: station -> tình trạng (-> ngày) -> WP ---------- */
+const TEN_TT = { '-2': 'CLOSED', 112: 'IN PROGRESS', 11: 'PRELOAD' };
+let dsWp = [];        // ket qua tim, dung cho o chon WP
+
+/** WP đã đóng thì rất nhiều -> BẮT BUỘC có mốc ngày. Ô ngày chỉ hiện khi CLOSED. */
+function capNhatOTuNgay() {
+  const closed = $('fStatus').value === '-2';
+  $('grpTuNgay').classList.toggle('hidden', !closed);
+  if (closed && !$('fTuNgay').value) {
+    // Mac dinh 90 ngay gan day - du de xem lai ma khong quet ca lich su AMOS
+    const d = new Date(Date.now() - 90 * 86400000);
+    $('fTuNgay').value = d.toISOString().slice(0, 10);
+  }
+  doThanhLoc();
+}
+
+async function napStation() {
+  try {
+    const res = await fetch('/api/wp/stations');
+    const js = await res.json();
+    const ds = js.ds || [];
+    const nho = localStorage.getItem('wpStation');
+    $('fStation').innerHTML = ds.length
+      ? ds.map((s) => `<option value="${esc(s)}">${esc(s)}</option>`).join('')
+      : '<option value="">(không có station nào)</option>';
+    if (nho && ds.includes(nho)) $('fStation').value = nho;
+  } catch (_) {
+    $('fStation').innerHTML = '<option value="">(không tải được)</option>';
+  }
+  doThanhLoc();
+}
+
+let dangTim = false;
+async function timWp(boQuaCache) {
+  if (dangTim) return;
+  const station = $('fStation').value;
+  const st = $('fStatus').value;
+  const tuNgay = st === '-2' ? $('fTuNgay').value : '';
+  if (!station) { $('fileStatus').textContent = '⚠️ Chưa chọn station.'; return; }
+  if (st === '-2' && !tuNgay) {
+    $('fTuNgay').focus();
+    $('fileStatus').textContent = '⚠️ WP đã đóng phải có “Bắt đầu từ ngày”.';
+    return;
+  }
+  localStorage.setItem('wpStation', station);
+  dangTim = true; anLoi();
+  $('btnTim').disabled = true; $('btnTimLai').disabled = true;
+  $('fileStatus').textContent = 'Đang tìm Work Package…';
+  moLog(`Đang tìm WP ${TEN_TT[st]} ở ${station}${tuNgay ? ` từ ${tuNgay}` : ''}…`);
+  setTimeout(xaLogCho, 30);
+  const tp = moTienTrinh();
+  try {
+    const u = `/api/wp/tim?station=${encodeURIComponent(station)}&wpStatus=${encodeURIComponent(st)}`
+      + (tuNgay ? `&tuNgay=${tuNgay}` : '') + `&job=${tp.job}${boQuaCache ? '&nocache=1' : ''}`;
+    const res = await fetch(u);
+    const js = await res.json().catch(() => ({ error: true, message: `Máy chủ trả về mã ${res.status}.` }));
+    if (!res.ok || js.error) throw new Error(js.message || `Máy chủ trả về mã ${res.status}.`);
+    dsWp = js.ds || [];
+    const sel = $('wpChon');
+    sel.innerHTML = dsWp.length
+      ? dsWp.map((w, i) => `<option value="${i}">${esc(w.wp)}${w.startDate ? ` — ${esc(w.startDate)}` : ''}`
+        + `${w.hangar ? ` — ${esc(w.hangar)}` : ''}</option>`).join('')
+      : '<option value="">— không có WP nào —</option>';
+    sel.disabled = !dsWp.length;
+    $('btnLoad').disabled = !dsWp.length;
+    $('btnReload').disabled = !dsWp.length;
+    $('fileStatus').textContent = dsWp.length
+      ? `✅ Tìm thấy ${dsWp.length} Work Package${js.chamTran ? ' (đã chạm giới hạn — thu hẹp lại mốc ngày)' : ''}`
+        + `${js.demo ? ' (dữ liệu mẫu — DEMO_MODE)' : ''} — chọn một WP rồi bấm “Lấy dữ liệu”.`
+      : `Không có Work Package ${TEN_TT[st]} nào ở ${station}${tuNgay ? ` bắt đầu từ ${tuNgay}` : ''}.`;
+    xongLog(false);
+    $('logTitle').textContent = 'Đã tìm xong';
+  } catch (e) {
+    $('fileStatus').textContent = '❌ ' + e.message;
+    xongLog(true);
+    baoLoi(e.message, () => timWp(boQuaCache));
+  } finally {
+    setTimeout(tp.dong, 1500);
+    dangTim = false;
+    $('btnTim').disabled = false; $('btnTimLai').disabled = false;
+    doThanhLoc();
+  }
+}
+
+/** Thẻ thông tin đầu WP đang xem. */
+function veThongTinWp(tt) {
+  const el = $('wpInfo');
+  if (!tt) { el.classList.add('hidden'); return; }
+  const o = (k, v, mono) => (v ? `<div class="o"><span class="k">${k}</span>`
+    + `<span class="v${mono ? ' mono' : ''}">${esc(v)}</span></div>` : '');
+  el.innerHTML = o('Work Package', tt.wp) + o('Station', tt.station)
+    + o('Tình trạng', tt.tinhTrang) + o('Bắt đầu', tt.startDate, 1) + o('Kết thúc', tt.endDate, 1)
+    + o('Hãng khai thác', tt.acOperator) + o('Loại tàu', tt.acModel) + o('Số tàu', tt.acReg)
+    + o('Project', tt.projectNo) + o('Hangar', tt.hangar);
+  el.classList.toggle('hidden', !el.innerHTML);
+  doThanhLoc();
+}
+
 let dangTai = false;
 async function taiWp(boQuaCache) {
   if (dangTai) return;
-  const wpno = $('wpno').value.trim();
-  if (!wpno) { $('wpno').focus(); $('fileStatus').textContent = '⚠️ Hãy nhập số Work Package.'; return; }
+  const i = $('wpChon').value;
+  const chon = dsWp[Number(i)];
+  if (!chon) { $('fileStatus').textContent = '⚠️ Hãy tìm rồi chọn một Work Package.'; return; }
+  // Uu tien WPNO_I (khoa that cua AMOS), khong co thi dung ten
+  const ma = chon.wpnoI || chon.wp;
   dangTai = true; anLoi();
   $('btnLoad').disabled = true; $('btnReload').disabled = true;
   $('fileStatus').textContent = 'Đang lấy dữ liệu…';
-  moLog(`Đang lấy Work Package ${wpno} từ AMOS…`);
-  setTimeout(() => { const c = _choLog; _choLog = []; c.forEach(themLog); }, 30);
+  moLog(`Đang lấy Work Package ${chon.wp} từ AMOS…`);
+  setTimeout(xaLogCho, 30);
   const tp = moTienTrinh();
   const t0 = Date.now();
   try {
-    const u = `/api/wp?wpno=${encodeURIComponent(wpno)}&job=${tp.job}${boQuaCache ? '&nocache=1' : ''}`;
+    const u = `/api/wp?wp=${encodeURIComponent(ma)}&job=${tp.job}${boQuaCache ? '&nocache=1' : ''}`;
     const res = await fetch(u);
     const js = await res.json().catch(() => ({ error: true, message: `Máy chủ trả về mã ${res.status}.` }));
     if (!res.ok || js.error) throw new Error(js.message || `Máy chủ trả về mã ${res.status}.`);
     WO = Array.isArray(js.rows) ? js.rows : [];
+    // Hangar chi co o buoc TIM (qua RM_CALENDAR_ENTRY) nen ghep lai vao day
+    veThongTinWp(Object.assign({ hangar: chon.hangar }, js.thongTin || chon));
     refreshAll();
     const giay = ((Date.now() - t0) / 1000).toFixed(1);
-    $('fileStatus').textContent = `✅ Đã nạp ${WO.length} WO của ${js.wp || wpno}`
+    $('fileStatus').textContent = `✅ Đã nạp ${WO.length} WO của ${js.wp || chon.wp}`
       + (js.demo ? ' (dữ liệu mẫu — DEMO_MODE)' : '') + ` · ${giay}s`;
     xongLog(false);
   } catch (e) {
@@ -662,16 +775,6 @@ async function taiWp(boQuaCache) {
     dangTai = false;
     $('btnLoad').disabled = false; $('btnReload').disabled = false;
   }
-}
-
-/** Goi y danh sach WP cho o nhap (datalist). Loi thi im lang - chi la goi y. */
-async function goiYWp() {
-  try {
-    const res = await fetch('/api/wp/list?q=' + encodeURIComponent($('wpno').value.trim()));
-    if (!res.ok) return;
-    const js = await res.json();
-    $('wpGoiY').innerHTML = (js.ds || []).map((w) => `<option value="${esc(w)}">`).join('');
-  } catch (_) { /* khong co goi y cung khong sao */ }
 }
 
 /* ---------- TABS & SU KIEN ---------- */
@@ -696,10 +799,14 @@ document.querySelectorAll('#hovTable th[data-k]').forEach((th) => { th.onclick =
 document.querySelectorAll('#ascTable th[data-k]').forEach((th) => { th.onclick = () => { const k = th.dataset.k; aSort.asc = (aSort.k === k) ? !aSort.asc : false; aSort.k = k; renderAsc(); }; });
 document.querySelectorAll('#refTable th[data-k]').forEach((th) => { th.onclick = () => { const k = th.dataset.k; rSort.asc = (rSort.k === k) ? !rSort.asc : false; rSort.k = k; renderRef(); }; });
 
+$('btnTim').onclick = () => timWp(false);
+$('btnTimLai').onclick = () => timWp(true);
+$('fStatus').addEventListener('change', capNhatOTuNgay);
 $('btnLoad').onclick = () => taiWp(false);
 $('btnReload').onclick = () => taiWp(true);
-$('wpno').addEventListener('keydown', (e) => { if (e.key === 'Enter') taiWp(false); });
-$('wpno').addEventListener('input', () => { clearTimeout(goiYWp._t); goiYWp._t = setTimeout(goiYWp, 350); });
+// Chon WP khac trong danh sach = doi hoan toan du lieu dang xem -> tai luon,
+// khong bat nguoi dung bam them mot nut nua.
+$('wpChon').addEventListener('change', () => taiWp(false));
 $('logHide').onclick = () => $('logBox').classList.add('hidden');
 $('btnApplyCfg').onclick = applyCfg;
 $('btnExportCfg').onclick = exportCfg;
@@ -808,9 +915,17 @@ new ResizeObserver(doThanhLoc).observe(document.querySelector('.topbar'));
 /* ---------- KHOI DONG ---------- */
 doThanhLoc();
 napCfgLuu(); fillCfg(); compileRules();
-refreshAll(); initChips(); greet(); goiYWp();
-// Cho phep mo thang mot WP bang duong dan: /wp?wpno=A509-...
+refreshAll(); initChips(); greet();
+capNhatOTuNgay();
+napStation();
+// Mo thang mot WP bang duong dan: /wp?wp=<WPNO_I hoac ten WP>
 (() => {
-  const w = new URLSearchParams(location.search).get('wpno');
-  if (w) { $('wpno').value = w; taiWp(false); }
+  const p = new URLSearchParams(location.search);
+  const w = p.get('wp') || p.get('wpno');
+  if (!w) return;
+  dsWp = [{ wpnoI: /^\d+$/.test(w) ? w : '', wp: w }];
+  const sel = $('wpChon');
+  sel.innerHTML = `<option value="0">${esc(w)}</option>`;
+  sel.disabled = false; $('btnLoad').disabled = false; $('btnReload').disabled = false;
+  taiWp(false);
 })();

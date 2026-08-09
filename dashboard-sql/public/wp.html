@@ -14,20 +14,33 @@
 </div>
 
 <div class="topbar">
+  <div class="grp"><label for="fStation">Station</label>
+    <select id="fStation" style="min-width:110px"><option value="">Đang tải…</option></select></div>
+  <div class="grp"><label for="fStatus">Tình trạng WP</label>
+    <select id="fStatus" style="min-width:150px">
+      <option value="112">IN PROGRESS (đang thực hiện)</option>
+      <option value="11">PRELOAD (chuẩn bị)</option>
+      <option value="-2">CLOSED (đã đóng)</option>
+    </select></div>
+  <div class="grp hidden" id="grpTuNgay"><label for="fTuNgay">Bắt đầu từ ngày</label>
+    <input type="date" id="fTuNgay" style="width:150px"></div>
   <div class="grp">
-    <label for="wpno">Work Package</label>
-    <input id="wpno" list="wpGoiY" style="width:270px" placeholder="VD: A509-310326-BASE-MCC-STO"
-           autocomplete="off" spellcheck="false">
-    <datalist id="wpGoiY"></datalist>
-    <button class="primary" id="btnLoad">🔎 Lấy dữ liệu</button>
-    <button id="btnReload" title="Bỏ qua bộ nhớ đệm, hỏi lại AMOS">↻ Tải lại</button>
+    <button class="primary" id="btnTim">🔎 Tìm Work Package</button>
+    <button id="btnTimLai" title="Bỏ qua bộ nhớ đệm, hỏi lại AMOS">↻ Tìm lại</button>
   </div>
+  <div class="grp"><label for="wpChon">Work Package</label>
+    <select id="wpChon" style="min-width:270px" disabled><option value="">— chưa tìm —</option></select>
+    <button class="primary" id="btnLoad" disabled>📥 Lấy dữ liệu</button>
+    <button id="btnReload" disabled title="Bỏ qua bộ nhớ đệm, hỏi lại AMOS">↻</button></div>
   <div class="grp"><label for="thr">Ngưỡng ca (giờ)</label>
     <input type="number" id="thr" value="8" min="1" max="72" style="width:66px"></div>
   <div class="grp"><label><input type="checkbox" id="incClosed" style="width:auto;vertical-align:-1px"> Kiểm tra cả WO đã đóng</label></div>
   <div class="grp"><label for="fWP">Lọc WP</label><select id="fWP"><option value="">Tất cả</option></select></div>
-  <span id="fileStatus">Chưa có dữ liệu — nhập số Work Package rồi bấm “Lấy dữ liệu”.</span>
+  <span id="fileStatus">Chọn station và tình trạng WP rồi bấm “Tìm Work Package”.</span>
 </div>
+
+<!-- Thong tin dau Work Package dang xem -->
+<div class="wpinfo hidden" id="wpInfo"></div>
 
 <!-- Nhat ky tien trinh: truy van AMOS mat hang chuc giay den vai phut, phai
      cho nguoi dung thay dang lam gi thay vi mot vong xoay cam -->
