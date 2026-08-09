@@ -7123,6 +7123,76 @@ app.post('/api/admin/llm-test', h(async (req, res) => {
   }
 }));
 
+// ---------------------------------------------------------------------------
+// 8d. RA SOAT HO SO BAO DUONG (AMOS Documentation Validator)
+//     Doc mot Work Package tu AMOS roi cham 3 phep kiem tra ngay tren trinh
+//     duyet: Handover Check - Action Step Control - Reference Validation.
+//
+//     VI SAO TACH TRUY VAN TUNG BANG (xem them wp-validator.js va README §7j):
+//     cau SQL goc noi 7 bang AMOS trong MOT lenh; do that tren SSMS chay
+//     1 gio 09 phut van chua ra dong nao. Ca 7 bang deu o linked server nen
+//     SQL Server khong day duoc phep noi xuong AMOS. Nay lay tung bang, truyen
+//     danh sach ID sang bang ke tiep, ghep lai o Node.
+// ---------------------------------------------------------------------------
+let demoWpCache = null;
+function docDemoWp() {
+  if (!demoWpCache) {
+    demoWpCache = JSON.parse(fs.readFileSync(path.join(__dirname, 'demo-wp.json'), 'utf8'));
+  }
+  return demoWpCache;
+}
+const wpVal = require('./wp-validator')({
+  query, demoMode: CONFIG.demoMode, docDemo: docDemoWp,
+});
+
+// Danh sach WP de go y o o nhap (nhe - khong tinh la truy van nang).
+app.get('/api/wp/list', cached(10 * 60 * 1000, async (req, res) => {
+  const kq = await wpVal.danhSachWp(String(req.query.q || ''), req.query.limit);
+  res.json(kq);
+}, { nang: false }));
+
+// Lay du lieu MOT Work Package. Day la truy van NANG -> co xep hang + gop
+// request trung nhau + nhat ky tien trinh (?job=...) giong cac trang khac.
+app.get('/api/wp', cached(15 * 60 * 1000, async (req, res) => {
+  const ghi = moNhatKy(req.query.job);
+  const wpno = String(req.query.wpno || '').trim();
+  if (!wpno && !CONFIG.demoMode) {
+    dongNhatKy(req.query.job, '✘ Chưa nhập số Work Package');
+    return res.status(400).json({ error: true, message: 'Thiếu tham số wpno (số/tên Work Package).' });
+  }
+  if (wpno.length > 80) {
+    dongNhatKy(req.query.job, '✘ Số Work Package quá dài');
+    return res.status(400).json({ error: true, message: 'Số Work Package quá dài.' });
+  }
+  const t0 = Date.now();
+  try {
+    const kq = await wpVal.layWorkPackage(wpno, ghi);
+    if (kq.khongThay) {
+      dongNhatKy(req.query.job, `✘ Không tìm thấy Work Package ${wpno}`);
+      return res.status(404).json({
+        error: true,
+        message: `Không tìm thấy Work Package "${wpno}" trong AMOS.`,
+        daThu: kq.daThu, chiTiet: kq.loi,
+      });
+    }
+    res.json({ wp: kq.wp || wpno, demo: !!kq.demo, ms: Date.now() - t0, rows: kq.rows });
+  } catch (e) {
+    dongNhatKy(req.query.job, `✘ Lỗi: ${e.message}`);
+    throw e;
+  }
+}));
+
+// CHAN DOAN (chi may quan tri): cot THAT co cua 7 bang AMOS lien quan.
+// Dung de doi chieu bang anh xa COT_ALIAS voi AMOS that thay vi doan ten cot.
+app.get('/api/admin/diag/wp-columns', h(async (req, res) => {
+  if (CONFIG.demoMode) return res.json({ note: 'Dang o DEMO_MODE, khong co du lieu that.' });
+  res.json(await wpVal.soiCot());
+}));
+
+// Route tien: /wp -> trang ra soat ho so bao duong
+app.get(['/wp', '/wp.html', '/rasoat'], (req, res) =>
+  res.sendFile(path.join(__dirname, 'public', 'wp.html')));
+
 // Route tien: /admin -> trang admin review log cau hoi chua hieu
 app.get('/admin', (req, res) => res.sendFile(path.join(__dirname, 'public', 'admin.html')));
 

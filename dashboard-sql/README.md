@@ -245,6 +245,7 @@ kèm **5 dòng thật đã giải mã** để đối chiếu mắt thường. **
 - **Tab LGC đang THỬ NGHIỆM — ẩn khỏi thanh tab.** Ở trang `/` không thấy mục *🏬 LGC*; muốn vào phải **gõ thêm `/lgc`** trên thanh địa chỉ. Gỡ ẩn khi hết thử nghiệm = bỏ `hidden` ở nút `data-tab="lgc"` trong `index.html`.
 - **LGC KHÔNG tự chạy truy vấn.** Các truy vấn của LGC đọc AMOS qua linked server nên **chậm**. Mở tab (hoặc đổi tab con) chỉ hiện thẻ *⏸ Chưa chạy truy vấn*; chọn kỳ báo cáo / Station / Store / Trung tâm xong bấm **▶ Chạy kiểm tra** thì mới gọi API. **Đổi bộ lọc cũng KHÔNG tự chạy lại** — mọi tab con quay về trạng thái *chưa chạy* để không ai đọc nhầm số liệu của bộ lọc cũ. Trạng thái *đã chạy* nhớ theo từng tab con, nên chuyển qua lại giữa 3 tab con không phải chạy lại. Nút đổi thành *⏳ Đang chạy…* và khoá lại trong lúc truy vấn.
 - **Trang riêng cho LGC — `/lgc`** (`/lgc.html`; **`/kho`, `/kho.html` là địa chỉ cũ, vẫn chạy** để link đã gửi đi không chết): **cùng một `index.html`, cùng `script.js`, cùng service** — chỉ khác điểm vào. Frontend thấy đường dẫn này thì mở thẳng nhóm *LGC*, ẩn các tab TAT, đổi tiêu đề trang thành *VAECO · LGC*, và **không chạy truy vấn dashboard** (nặng, mà tab đó đang ẩn). Có link *“Xem dashboard TAT đầy đủ →”* để quay lại. ⚠️ Đây là **đơn giản hóa giao diện, KHÔNG phải phân quyền** — ai gõ `/` vẫn xem được đầy đủ, đúng như hiện nay (mọi đơn vị đều được xem). Muốn **chặn** thật thì phải chặn ở server như `adminGuard`.
+- **Trang riêng: Rà soát hồ sơ bảo dưỡng — `/wp`** (xem §7j). Bản web của công cụ Excel ở TTBD Nội trường HCM: nhập số Work Package → lấy thẳng từ AMOS → chấm 3 phép kiểm tra *Handover Check* · *Action Step Control* · *Reference Validation*, kèm tab hỏi đáp và tab tùy chỉnh quy tắc. Trang này **độc lập** với dashboard TAT (CSS riêng, không dùng Tailwind, không dùng `script.js`).
 - **Dashboard:** 9 KPI cards (kèm chip **▲▼ % so với kỳ liền trước** — TAT giảm hiện xanh, tăng hiện đỏ), 4 biểu đồ, bảng chi tiết + tìm kiếm + filter theo cột.
 - **TAT tổng (3 chặng) = TAT install + TAT US return + TAT CUVT** — ba chặng **liên tiếp** của cùng một vòng đời khí tài: (1) xuất kho → lắp lên tàu; (2) tháo khỏi tàu → trả unservice; (3) trả unservice → CUVT nhận. Biểu đồ theo Trung tâm vẽ **cột xếp chồng** nên chiều cao cả cột chính là TAT tổng của trung tâm đó (rê chuột thấy dòng *TAT tổng*); các trung tâm xếp theo tổng giảm dần.
 - **Số lượng xuất kho theo Trung tâm** — cột **xếp chồng**: **Đã trả** (xanh, `--good`) + **Chưa trả** (vàng, `--warning`) = tổng thiết bị xuất kho của trung tâm đó. Số lượng hiện **ở giữa từng đoạn** (đoạn thấp dưới 16px thì bỏ qua để chữ không chồng nhau), **tổng hiện trên đỉnh cột**; màu chữ tự chọn trắng/đen theo độ sáng nền nên đọc được ở cả theme sáng và tối. *Đã trả* = đã đối ứng (`deptAgg`) **cộng** các cặp đối ứng thủ công của trung tâm đó; *Chưa trả* = `notRecAgg`. Tổng tất cả các cột luôn **khớp KPI “Thiết bị xuất kho”**.
@@ -891,6 +892,89 @@ lần đầu chỉ **60%** đúng, lộ ra 6 chủ đề còn thiếu. Bổ sung
 Mọi câu ngoài phạm vi trong danh sách đều **từng lọt cổng một lần** trong lúc làm — giữ
 lại hết để không tái phát.
 
+## 7j. Trang *Rà soát hồ sơ bảo dưỡng* (`/wp`) — tách truy vấn 7 bảng AMOS
+
+Địa chỉ: **`/wp`** (hoặc `/rasoat`). Bản web của công cụ Excel đang dùng ở TTBD Nội
+trường HCM, giữ **nguyên logic chấm điểm**, chỉ đổi **nguồn dữ liệu**: không còn chọn
+file `.xlsx` trong thư mục mạng mà hỏi thẳng AMOS.
+
+Ba phép kiểm tra (đúng theo tài liệu quy trình):
+
+| | Nội dung |
+|---|---|
+| **3.2 Reference Validation** | SEQ 7.x/9.x bắt buộc có tài liệu tham chiếu (AMM/SRM/CMM…) **và** số revision; SEQ 4.x/5.x/6.x chỉ cần đúng cú pháp thực hiện; còn lại bỏ qua |
+| **3.3 Handover Check** | Quá ngưỡng ca (mặc định 8h) mà việc còn dở → WO_REMARKS phải có dòng `DD/MM/YYYY - VAExxxxx - [Nội dung]` **đúng ngày** của bước cuối |
+| **3.4 Action Step Control** | Workstep sau không được có thời gian sớm hơn workstep trước |
+
+### Vì sao phải tách truy vấn từng bảng
+
+Câu SQL nghiệp vụ nối **bảy bảng** trong một lệnh:
+
+```
+WP_HEADER × WP_SEQUENCE × WORKSTEP_LINK × WO_TEXT_DESCRIPTION
+          × WO_TEXT_ACTION × TIME_CAPTURED_ADDITIONAL × TIME_CAPTURED
+```
+
+Đo thật trên SSMS: chạy **1 giờ 09 phút vẫn chưa ra dòng nào**. Cả bảy bảng đều nằm trên
+linked server; SQL Server không đẩy được phép nối xuống AMOS nên nó kéo về từng phần rồi
+nối tại chỗ theo cách tệ nhất có thể.
+
+> ⚠️ Đây là **ngoại lệ** của §7b. Ở §7b kết luận “JOIN không chậm, hàm trong `WHERE` mới
+> chậm” — đúng với **2–3 bảng**. Với chuỗi **7 bảng** thì chính phép nối là thủ phạm.
+
+`wp-validator.js` lấy **từng bảng một**, truyền danh sách ID sang bảng kế tiếp, ghép lại
+ở Node:
+
+| Bước | Câu lệnh | Lấy ra |
+|---|---|---|
+| 1 | `WP_HEADER WHERE [<cột tên WP>] = '…'` | `WPNO_I` |
+| 2 | `WP_SEQUENCE WHERE WPNO_I = …` | `EVENT_PERFNO_I` |
+| 3 | `WORKSTEP_LINK WHERE EVENT_PERFNO_I IN (…)` | `WORKSTEP_LINKNO_I`, `DESCNO_I` |
+| 4 ∥ 5 | `WO_TEXT_DESCRIPTION WHERE DESCNO_I IN (…)` ∥ `WO_TEXT_ACTION WHERE WORKSTEP_LINKNO_I IN (…)` | `ACTIONNO_I` |
+| 6 | `TIME_CAPTURED_ADDITIONAL WHERE ITEMNO_I IN (…)` | `BOOKINGNO_I` |
+| 7 | `TIME_CAPTURED WHERE BOOKINGNO_I IN (…)` | người ký, ngày giờ, số công |
+
+Bước 4 và 5 là hai nhánh độc lập nên chạy **song song**. Danh sách ID chia lô **300 giá
+trị** mỗi mệnh đề `IN (...)`, đặt **trực tiếp** vào câu lệnh — dùng `@tham_số` sẽ chặn
+việc đẩy điều kiện xuống AMOS (§7b).
+
+### Không đoán tên cột nguồn
+
+Ảnh chụp câu SQL gốc **thiếu danh sách `SELECT`** nên tên cột nghiệp vụ (`WP`, `AC`,
+`SEQ`, `ST`, `DES`, `SIGN_PERFORMED`…) chưa xác nhận được. Thay vì đoán rồi chạy sai âm
+thầm:
+
+- mỗi bước lấy `SELECT *` cho đúng các ID cần, ánh xạ sang tên nghiệp vụ bằng bảng
+  `COT_ALIAS` **ở Node** (không phân biệt hoa/thường);
+- bước 1 **thử lần lượt** các cột ứng viên (`WPNO`, `WP`, `WPNO_C`…): cột không tồn tại
+  → SQL Server báo *Invalid column name* → bỏ qua, thử cột kế tiếp;
+- **chỉ** lỗi “không có cột đó” mới được bỏ qua. Mọi lỗi khác (mất kết nối, hết hạn đăng
+  nhập) **ném ra ngoài** — nếu nuốt hết thì lúc SQL Server sập người dùng sẽ nhận
+  *“Không tìm thấy Work Package”*, sai hoàn toàn và rất khó đoán. Cái bẫy này được chốt
+  bằng bài kiểm tra: cố tình bỏ dòng chặn đi thì `npm run smoke` **trượt ngay**;
+- `GET /api/admin/diag/wp-columns` liệt kê **cột thật** của cả 7 bảng + những trường
+  `COT_ALIAS` không khớp được ở đâu cả → đối chiếu rồi sửa bảng ánh xạ.
+
+### Tab *Quy tắc* — sửa quy trình không cần sửa code
+
+Ngưỡng ca, State bỏ qua, định dạng ngày, phân nhóm SEQ và **toàn bộ mẫu regex** đều chỉnh
+được ngay trên trang. Bấm *Áp dụng & tính lại* là chấm lại **tại trình duyệt** — không
+hỏi AMOS lần nữa. Cấu hình được ghi nhớ trong `localStorage` **của máy đó**, và xuất /
+nhập được ra file `.json` để chia sẻ.
+
+### Một lỗi của bản Excel đã sửa khi chuyển sang web
+
+Bản Excel gộp kết quả ba module bằng `{...h, ...a, ...r}` mà **cả `checkHov` lẫn
+`checkAsc` đều trả về trường tên `note`** → ghi chú của Action Step Control **đè** ghi chú
+Handover. Hệ quả: cột *Chi tiết* của tab Handover hiển thị diễn giải của module khác, còn
+phần *Action Step Control* trong ô hỏi đáp luôn trống (mã nguồn có đọc `note2` nhưng chưa
+ai gán). Bản web đặt tên riêng `note` / `note2` nên mỗi tab hiện đúng diễn giải của mình.
+
+### Chế độ DEMO
+
+`demo-wp.json` (53 WO / 5 WP) cho phép chạy thử toàn bộ trang không cần SQL Server. Gõ
+sai số WP thì demo cũng báo *“Không tìm thấy”* y như chạy thật.
+
 ## 7. Bảo mật & performance
 
 - Mật khẩu chỉ nằm trong `.env` (không hardcode, không commit).
@@ -949,6 +1033,9 @@ CREATE INDEX IX_SIGN_user ON [DWH_DB].[STG_AMOS].[SIGN] ([USER_SIGN]) INCLUDE ([
 | `GET /api/scan-config` | Đường dẫn 2 thư mục file scan + **trạng thái thật** (đọc được bao nhiêu file PDF / lỗi gì) + `canEdit`. **Mọi máy xem được.** |
 | `POST /api/admin/scan-config` | Đổi đường dẫn thư mục file scan (body `{ picking, receiving }`, để trống = dùng mặc định). Lưu vào `data/scan-folders.json` trên máy backend. **Chỉ IP quản trị.** |
 | `GET /api/part-onoff` | Tra cứu Part On/Off (`WO_PART_ON_OFF`, linked server DWH_DB). 6 tham số riêng, khớp **chính xác**, kết hợp AND (bỏ trống = bỏ qua): `event`, `labelno` (số) · `partno`, `serialno`, `partnoOff`, `serialnoOff` (chữ). Giờ VN = ghép `MUTATION` (số ngày AMOS) + `MUTATION_TIME` (ms từ 0h) + 7h thành 1 cột; `CREATED_DATE` cũng là số ngày AMOS → chỉ có ngày (không giờ). |
+| `GET /api/wp?wpno=…` | Trang *Rà soát hồ sơ bảo dưỡng* (`/wp`): lấy một Work Package từ AMOS bằng cách **tách truy vấn 7 bảng** (xem §7j), trả `{ wp, rows[], ms }` với mỗi dòng là 1 WO kèm danh sách workstep. Truy vấn **nặng** → có xếp hàng, gộp request trùng, nhật ký tiến trình (`&job=…`), cache 15 phút (`&nocache=1` để hỏi lại). |
+| `GET /api/wp/list?q=…` | Gợi ý danh sách Work Package cho ô nhập (tìm gần đúng theo tên). |
+| `GET /api/admin/diag/wp-columns` | Liệt kê **cột thật** của 7 bảng AMOS mà trang `/wp` dùng + những trường trong bảng ánh xạ `COT_ALIAS` không khớp được ở bảng nào — để đối chiếu thay vì đoán tên cột. **Chỉ đọc. Chỉ IP quản trị.** |
 | `POST /api/chat` | Trợ lý TAT. Body JSON `{ message, ...filter }` → `{ reply, intent }`. Số liệu/tra cứu tính bằng SQL nội bộ; câu chưa hiểu mới (tùy chọn) chuyển AI theo `LLM_PROVIDER`. |
 | `POST /api/chat/flag` | Người dùng **👎 Báo sai** một câu trả lời. Body `{ message }` → nhờ AI (nếu bật) trả lời lại + lưu kinh nghiệm; nếu AI tắt thì ghi nhận để admin review. |
 | `GET /api/admin/chat-unknown` | Gộp log câu hỏi chatbot chưa hiểu (gom theo nội dung, đếm số lần). Query `days` (0 = tất cả). Trang xem: `/admin` hoặc `/admin.html`. **Chỉ IP quản trị.** |

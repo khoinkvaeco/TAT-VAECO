@@ -34,6 +34,7 @@ const ENDPOINTS = [
   '/api/reports/manual-pair', '/api/reports/removed-before-installed',
   '/api/reports/other', '/api/reports/return-store-tat', '/api/reports/repair-admin',
   '/api/pickslip', '/api/receiving',
+  '/api/wp?wpno=SQLCHECK-WP', '/api/wp/list?q=SQLCHECK',
 ];
 
 /** Tim vi tri dau ')' dong lai cho '(' o vi tri `open`. */

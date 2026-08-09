@@ -10,9 +10,14 @@
  *
  * `content` phai liet ke CA public/*.js: script.js sinh ra HTML co class Tailwind
  * (vi du 'hidden', 'flex'), neu bo sot thi cac class do bi cat khoi file CSS.
+ *
+ * LOAI TRU wp.* : trang "Ra soat ho so bao duong" KHONG dung Tailwind, no co
+ * bo CSS rieng (wp.css) voi he mau toi khac han dashboard. De no trong danh
+ * sach quet thi cac ten class rieng cua no lam file tailwind.css phinh len va
+ * doi vo ich moi lan sua trang do.
  */
 module.exports = {
-  content: ['./public/*.html', './public/*.js'],
+  content: ['./public/*.html', './public/*.js', '!./public/wp.html', '!./public/wp.js'],
   // An toan: mot so class chi xuat hien khi ghep chuoi trong JS nen Tailwind
   // khong "nhin thay" bang cach quet van ban. Giu lai bang tay.
   safelist: ['hidden', 'flex', 'items-center', 'gap-2'],

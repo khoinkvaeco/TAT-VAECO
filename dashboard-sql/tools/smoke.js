@@ -35,6 +35,9 @@ const ENDPOINTS = [
   '/api/reports/repair-admin',
   '/api/pickslip',
   '/api/receiving',
+  // Ra soat ho so bao duong (tach truy van tung bang AMOS)
+  '/api/wp?wpno=SMOKE-TEST-WP',
+  '/api/wp/list?q=SMOKE',
   // Cac endpoint chan doan (chi IP quan tri - chay tu localhost nen qua duoc)
   '/api/admin/diag/dept',
   '/api/admin/diag/higher',
@@ -44,6 +47,7 @@ const ENDPOINTS = [
   '/api/admin/diag/remark',
   '/api/admin/diag/linkserver',
   '/api/admin/diag/mutation-time',
+  '/api/admin/diag/wp-columns',
 ];
 
 /** Loi NAY la binh thuong: khong co DB that de ket noi. */

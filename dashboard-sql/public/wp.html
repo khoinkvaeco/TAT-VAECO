@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Rà soát hồ sơ bảo dưỡng (AMOS) — VAECO</title>
+<link rel="stylesheet" href="wp.css">
+</head>
+<body>
+<h1>Rà soát hồ sơ bảo dưỡng <span class="tag">AMOS Documentation Validator</span></h1>
+<div class="sub">
+  Kiểm tra: Reference Validation · Handover Check · Action Step Control ·
+  Thời điểm chạy: <b id="nowLbl"></b> · <a href="/">← Dashboard TAT</a>
+</div>
+
+<div class="topbar">
+  <div class="grp">
+    <label for="wpno">Work Package</label>
+    <input id="wpno" list="wpGoiY" style="width:270px" placeholder="VD: A509-310326-BASE-MCC-STO"
+           autocomplete="off" spellcheck="false">
+    <datalist id="wpGoiY"></datalist>
+    <button class="primary" id="btnLoad">🔎 Lấy dữ liệu</button>
+    <button id="btnReload" title="Bỏ qua bộ nhớ đệm, hỏi lại AMOS">↻ Tải lại</button>
+  </div>
+  <div class="grp"><label for="thr">Ngưỡng ca (giờ)</label>
+    <input type="number" id="thr" value="8" min="1" max="72" style="width:66px"></div>
+  <div class="grp"><label><input type="checkbox" id="incClosed" style="width:auto;vertical-align:-1px"> Kiểm tra cả WO đã đóng</label></div>
+  <div class="grp"><label for="fWP">Lọc WP</label><select id="fWP"><option value="">Tất cả</option></select></div>
+  <span id="fileStatus">Chưa có dữ liệu — nhập số Work Package rồi bấm “Lấy dữ liệu”.</span>
+</div>
+
+<!-- Nhat ky tien trinh: truy van AMOS mat hang chuc giay den vai phut, phai
+     cho nguoi dung thay dang lam gi thay vi mot vong xoay cam -->
+<div class="logbox hidden" id="logBox">
+  <div class="loghead"><span class="spin"></span> <b id="logTitle">Đang lấy dữ liệu từ AMOS…</b>
+    <span class="small" id="logMs"></span>
+    <button id="logHide" class="mini">Ẩn</button></div>
+  <div class="loglines" id="logLines"></div>
+</div>
+
+<div class="errbox hidden" id="errBox"></div>
+
+<div class="kpis" id="kpis"></div>
+
+<div class="tabs">
+  <div class="tab on" data-t="wp">Tổng quan theo WP</div>
+  <div class="tab" data-t="hov">Handover Check</div>
+  <div class="tab" data-t="asc">Action Step Control</div>
+  <div class="tab" data-t="ref">Reference Validation</div>
+  <div class="tab" data-t="chat">Hỏi đáp</div>
+  <div class="tab" data-t="rule">Quy tắc</div>
+</div>
+
+<!-- WP -->
+<div class="section" id="s-wp">
+<h2>Tổng quan theo WP</h2>
+<div class="hint">HOV NG = Missing remark + Wrong format + Wrong date. Tỷ lệ đạt tính trên các WO thực sự cần bàn giao (bỏ nhóm N/A).</div>
+<table id="wpTable"><thead><tr>
+<th data-k="wp">WP</th><th data-k="ac">A/C</th><th data-k="st">Trạm</th><th data-k="total">WO</th>
+<th data-k="need">Cần HOV</th><th data-k="ok">HOV đạt</th><th data-k="ng">HOV NG</th>
+<th data-k="asc">ASC lỗi</th><th data-k="ref">Ref NG</th>
+<th data-k="rate">Tỷ lệ HOV</th><th>Tiến độ</th>
+</tr></thead><tbody></tbody></table>
+<div class="trong hidden" id="wpTrong"></div>
+</div>
+
+<!-- HOV -->
+<div class="section hidden" id="s-hov">
+<h2>Kiểm tra bàn giao ca (Handover Check)</h2>
+<div class="guide">
+<b>Quy trình 5 bước (theo mục 3.3):</b>
+<ol>
+<li>WO đã đóng (State <code>C</code>) → <b>N/A</b>, không cần kiểm tra. WO State <code>V</code> (không thực hiện) → <b>N/A</b>, luôn bỏ qua.</li>
+<li>WO chỉ có 1 workstep → <b>N/A</b>, không có gì để bàn giao.
+  <br><span style="color:var(--amber)">Ngoại lệ: nếu WO 1 bước <b>vẫn còn mở</b> (chưa đóng) và ngày thực hiện
+  <b>trước hôm nay</b> thì công việc đang dở dang qua ngày → <b>vẫn bắt buộc có bàn giao</b>.</span></li>
+<li>Tìm bước được thực hiện <b>gần nhất</b> (có ngày giờ ghi nhận).</li>
+<li>Hiện tại − thời điểm bước cuối &lt; <b id="thrLbl">8</b> giờ → còn trong ca → <b>N/A</b>; nếu vượt ngưỡng → phải có bàn giao.</li>
+<li>Đọc WO_REMARKS, kiểm tra cú pháp <code>DD/MM/YYYY - VAExxxxx - [Nội dung]</code> và <b>ngày phải khớp</b> ngày thực hiện bước cuối.</li>
+</ol>
+WO_REMARKS là ghi chú chung cho cả WO — kỹ sư chỉ cần ghi một lần, không ghi riêng từng bước.
+<br><br><b>Tùy chọn “Kiểm tra cả WO đã đóng”</b> (ngoài phạm vi Bước 1 của tài liệu): khi bật, WO đã đóng cũng được rà.
+Với WO đã làm hết các bước, mốc “hiện tại trừ bước cuối” không còn ý nghĩa nên chương trình chuyển sang xét
+<b>khoảng cách giữa hai bước liên tiếp</b> — mỗi khoảng vượt ngưỡng được tính là một lần chuyển ca và phải có
+dòng bàn giao ghi đúng ngày của bước trước khoảng cách đó.
+</div>
+<div class="controls">
+<select id="hWP"><option value="">Tất cả WP</option></select>
+<select id="hSeqG"><option value="">Tất cả SEQ</option></select>
+<input id="hSeq" style="width:110px" placeholder="SEQ (vd 4.12)">
+<select id="hStatus"><option value="">Tất cả trạng thái</option></select>
+<select id="hState"><option value="">Tất cả State</option><option value="C">Closed</option><option value="O">Open</option></select>
+<label class="small"><input type="checkbox" id="hHideNA" checked style="width:auto"> Ẩn nhóm N/A</label>
+<input class="search" id="hSearch" placeholder="Tìm WO / SEQ / nội dung...">
+</div>
+<table id="hovTable"><thead><tr>
+<th data-k="WP">WP</th><th data-k="WO">WO</th><th data-k="SEQ">SEQ</th><th data-k="ST">State</th>
+<th data-k="lastStr">Bước cuối thực hiện</th><th data-k="hrs">Trễ (giờ)</th><th data-k="ngap">Lần chuyển ca</th>
+<th data-k="signers">Người ký</th><th data-k="totalMH">Tổng MH</th>
+<th data-k="hov">Trạng thái HOV</th><th>Chi tiết</th>
+</tr></thead><tbody></tbody></table>
+<div class="trong hidden" id="hovTrong"></div>
+<div class="small" style="margin-top:9px">Bấm vào một dòng để xem chi tiết từng workstep · hiển thị tối đa 400 WO.</div>
+</div>
+
+<!-- ASC -->
+<div class="section hidden" id="s-asc">
+<h2>Kiểm tra thứ tự thực hiện (Action Step Control)</h2>
+<div class="guide">
+Sắp xếp workstep theo số thứ tự (1, 2, 3…) rồi so sánh ngày giờ: nếu một bước có thời gian thực hiện <b>sớm hơn</b> bước đứng trước nó → lỗi thứ tự. Bước không có ngày giờ → <b>chưa thực hiện</b>. Chỉ áp dụng cho WO có nhiều workstep.
+</div>
+<div class="controls">
+<select id="aWP"><option value="">Tất cả WP</option></select>
+<select id="aSeqG"><option value="">Tất cả SEQ</option></select>
+<input id="aSeq" style="width:110px" placeholder="SEQ (vd 4.12)">
+<select id="aKind"><option value="">Tất cả</option><option value="ORDER">Sai thứ tự</option><option value="MISS">Có bước chưa thực hiện</option><option value="OK">Bình thường</option></select>
+<input class="search" id="aSearch" placeholder="Tìm WO...">
+</div>
+<table id="ascTable"><thead><tr>
+<th data-k="WP">WP</th><th data-k="WO">WO</th><th data-k="SEQ">SEQ</th><th data-k="ST">State</th>
+<th data-k="nstep">Số bước</th><th data-k="signers">Người ký</th><th data-k="totalMH">Tổng MH</th>
+<th data-k="ascKind">Kết quả</th><th>Diễn giải</th>
+</tr></thead><tbody></tbody></table>
+<div class="trong hidden" id="ascTrong"></div>
+<div class="small" style="margin-top:9px">Bấm vào một dòng để xem chi tiết từng workstep · hiển thị tối đa 400 WO.</div>
+</div>
+
+<!-- REF -->
+<div class="section hidden" id="s-ref">
+<h2>Kiểm tra tài liệu tham chiếu (Reference Validation)</h2>
+<div class="guide">
+<b>Phân nhóm theo SEQ (mục 3.2):</b><br>
+<span class="badge b">BYPASS</span> SEQ 1.x, 2.x, 3.x, 8.x, 10.x — bỏ qua kiểm tra logic.<br>
+<span class="badge a">EXECUTION_ONLY</span> SEQ 4.x, 5.x, 6.x — chỉ cần đúng cú pháp thực hiện (PERFORMED ALL STEPS, PERFORMED STEP x, N/A…).<br>
+<span class="badge r">STRICT_REF</span> SEQ 7.x, 9.x — bắt buộc có <b>tài liệu tham chiếu</b> (AMM/SRM/CMM/IPC/TSM/NEF…) <b>và số revision</b>.<br>
+Nếu WP có Job Card 10.x nội dung “CHECK THE AVAILABILITY AND REVISION STATUS” thì tự động bỏ qua bước kiểm tra revision.<br>WO State <code>V</code> (không thực hiện) được bỏ qua ở cả ba module.
+</div>
+<div class="controls">
+<select id="rWP"><option value="">Tất cả WP</option></select>
+<select id="rGroup"><option value="">Tất cả nhóm SEQ</option><option value="BYPASS">BYPASS</option><option value="EXEC">EXECUTION_ONLY</option><option value="STRICT">STRICT_REF</option></select>
+<select id="rSeqG"><option value="">Tất cả SEQ</option></select>
+<input id="rSeq" style="width:110px" placeholder="SEQ (vd 7.3)">
+<select id="rStatus"><option value="">Tất cả kết quả</option></select>
+<input class="search" id="rSearch" placeholder="Tìm WO / nội dung...">
+</div>
+<table id="refTable"><thead><tr>
+<th data-k="WP">WP</th><th data-k="WO">WO</th><th data-k="SEQ">SEQ</th><th data-k="grp">Nhóm</th>
+<th data-k="totalMH">Tổng MH</th>
+<th data-k="ref">Kết quả</th><th>Nội dung TEXT</th>
+</tr></thead><tbody></tbody></table>
+<div class="trong hidden" id="refTrong"></div>
+<div class="small" style="margin-top:9px">Bấm vào một dòng để xem chi tiết từng workstep · hiển thị tối đa 400 WO.</div>
+</div>
+
+<!-- CHAT -->
+<div class="section hidden" id="s-chat">
+<h2>Hỏi đáp dữ liệu <span class="count">(chạy ngay trên máy bạn — không gửi dữ liệu đi đâu)</span></h2>
+<div class="chips" id="chips"></div>
+<div class="chatwrap"><div class="chatlog" id="chatlog"></div>
+<div class="chatin"><input id="chatq" placeholder="VD: WO nào thiếu bàn giao / sai thứ tự / thiếu revision / tra WO 8617499">
+<button class="primary" id="btnAsk">Gửi</button><button id="btnClearChat">Xóa</button></div></div>
+</div>
+
+<!-- RULES -->
+<div class="section hidden" id="s-rule">
+<h2>Tùy chỉnh quy trình kiểm soát <span class="count">(tương đương nút Update Conditions)</span></h2>
+
+<div class="guide" style="border-left-color:var(--purple)">
+<b>Hướng dẫn sử dụng</b> — Toàn bộ quy tắc kiểm tra hồ sơ bảo dưỡng đều chỉnh được ở đây, không cần sửa code. Quy trình 3 bước:
+<ol>
+<li><b>Sửa</b> thông số / mẫu quy tắc trong các ô bên dưới.</li>
+<li>Bấm <b style="color:var(--accent)">Áp dụng &amp; tính lại</b> — trang chạy lại toàn bộ ngay lập tức với quy tắc mới (không phải hỏi AMOS lần nữa).</li>
+<li>Cấu hình được <b>ghi nhớ ngay trên máy bạn</b>; ngoài ra có thể <b>Xuất cấu hình</b> ra <code>.json</code> để chia sẻ cho đồng nghiệp.</li>
+</ol>
+Khi cần <b>khôi phục</b> về quy trình gốc theo tài liệu, bấm <b>Khôi phục mặc định</b>. <span id="ruleStatus" class="small"></span>
+</div>
+
+<div class="controls" style="margin-bottom:18px">
+<button class="primary" id="btnApplyCfg">✔ Áp dụng &amp; tính lại</button>
+<button id="btnExportCfg">⬇ Xuất cấu hình (.json)</button>
+<input type="file" id="cfgFile" accept=".json" class="hidden">
+<button id="btnImportCfg">⬆ Nhập cấu hình</button>
+<button id="btnResetCfg">↺ Khôi phục mặc định</button>
+</div>
+
+<!-- A. Tham so chung -->
+<div class="cfgbox">
+<h3>A. Tham số kiểm soát bàn giao (Handover)</h3>
+<div class="small" style="margin-bottom:12px;line-height:1.6">Điều chỉnh cách xác định một WO có cần bàn giao hay không.</div>
+<div class="grid2">
+  <div>
+    <label class="small" for="cThr">Ngưỡng chuyển ca (giờ) — quá mốc này mà công việc còn dở thì bắt buộc có bàn giao</label>
+    <input type="number" id="cThr" min="1" max="72" style="width:100%;margin-top:4px">
+  </div>
+  <div>
+    <label class="small" for="cSkip">Trạng thái WO bỏ qua hoàn toàn (cách nhau dấu phẩy) — mặc định V = không thực hiện</label>
+    <input type="text" id="cSkip" style="width:100%;margin-top:4px" placeholder="V">
+  </div>
+  <div>
+    <label class="small" for="cDateFmt">Định dạng ngày trong ACTION_DAT của dữ liệu nguồn</label>
+    <select id="cDateFmt" style="width:100%;margin-top:4px">
+      <option value="DMY">DD/MM/YYYY (mặc định VN, vd 25/05/2026 = 25 tháng 5)</option>
+      <option value="MDY">MM/DD/YYYY (kiểu Mỹ, vd 05/25/2026 = 25 tháng 5)</option>
+    </select>
+  </div>
+</div>
+<div class="small" style="margin-top:8px;line-height:1.6;color:var(--amber)">
+⚠ Nếu chọn sai định dạng: ngày có phần đầu &gt;12 sẽ bị bỏ qua (ô “Thực hiện” trống, dễ phát hiện), nhưng ngày có phần đầu ≤12 sẽ bị <b>đảo ngày/tháng âm thầm</b> mà không báo lỗi. Nếu thấy nhiều dòng trống bất thường, hãy đổi lựa chọn này rồi Áp dụng.
+</div>
+<div style="margin-top:12px;display:flex;gap:24px;flex-wrap:wrap">
+  <label class="small"><input type="checkbox" id="cClosed" style="width:auto"> Mặc định kiểm tra cả WO đã đóng (State C)</label>
+  <label class="small"><input type="checkbox" id="cOpenOne" style="width:auto"> WO 1 workstep còn mở &amp; thực hiện trước hôm nay vẫn phải bàn giao</label>
+</div>
+</div>
+
+<!-- B. Phan nhom SEQ -->
+<div class="cfgbox">
+<h3>B. Phân nhóm SEQ cho kiểm tra tài liệu (Reference)</h3>
+<div class="small" style="margin-bottom:12px;line-height:1.6">Nhập các <b>tiền tố SEQ</b> (phần trước dấu chấm) cho mỗi nhóm, cách nhau dấu phẩy. WO có SEQ không thuộc nhóm nào sẽ được xếp vào BYPASS.</div>
+<div class="grid3">
+  <div><label class="small"><span class="badge b">BYPASS</span> bỏ qua kiểm tra logic</label><input type="text" id="cBypass" style="width:100%;margin-top:4px"></div>
+  <div><label class="small"><span class="badge a">EXECUTION</span> chỉ cần đúng cú pháp thực hiện</label><input type="text" id="cExec" style="width:100%;margin-top:4px"></div>
+  <div><label class="small"><span class="badge r">STRICT_REF</span> bắt buộc có tài liệu + revision</label><input type="text" id="cStrict" style="width:100%;margin-top:4px"></div>
+</div>
+<div style="margin-top:12px">
+  <label class="small" for="cJC">Từ khóa Job Card 10.x để tự bỏ qua revision cho cả WP (regex)</label>
+  <input type="text" id="cJC" style="width:100%;margin-top:4px">
+</div>
+</div>
+
+<!-- C. Mau regex -->
+<div class="cfgbox rules">
+<h3>C. Mẫu nhận dạng (regex) — mỗi dòng một mẫu</h3>
+<div class="small" style="margin-bottom:12px;line-height:1.6">Mỗi dòng là một biểu thức chính quy JavaScript, không cần dấu <code>/ /</code> hay cờ. Một ô khớp khi <b>bất kỳ</b> dòng nào khớp. Có thể copy trực tiếp cột <code>regex_pattern</code> từ database quy tắc MSSQL dán vào đây.</div>
+<div class="grid2">
+<div><b class="small">Cú pháp dòng bàn giao hợp lệ (HOV)</b><textarea id="rHov"></textarea>
+  <div class="small" style="margin-top:3px">VD chuẩn: <code>DD/MM/YYYY - VAExxxxx - [Nội dung]</code></div></div>
+<div><b class="small">Loại tài liệu tham chiếu (AMM, SRM, CMM…)</b><textarea id="rDoc"></textarea></div>
+<div><b class="small">Mẫu số revision</b><textarea id="rRev"></textarea></div>
+<div><b class="small">Cú pháp thực hiện hợp lệ (nhóm EXECUTION)</b><textarea id="rExec"></textarea></div>
+</div>
+</div>
+
+<!-- D. Huong dan tinh huong -->
+<div class="cfgbox">
+<h3>D. Ví dụ tình huống thường gặp</h3>
+<table class="stt"><thead><tr><th style="width:280px">Khi cần…</th><th>Thao tác</th></tr></thead><tbody>
+<tr><td>Đổi ngưỡng chuyển ca từ 8h sang 12h</td><td>Mục A → <b>Ngưỡng chuyển ca</b> = <code>12</code> → Áp dụng</td></tr>
+<tr><td>Thêm một loại SEQ mới, ví dụ SEQ 11.x cần kiểm tra tài liệu chặt</td><td>Mục B → ô <b>STRICT_REF</b> thêm <code>, 11</code> → Áp dụng</td></tr>
+<tr><td>Chuyển một nhóm SEQ từ kiểm tra chặt sang chỉ cần thực hiện</td><td>Mục B → bỏ số đó khỏi <b>STRICT_REF</b>, thêm vào <b>EXECUTION</b> → Áp dụng</td></tr>
+<tr><td>Bổ sung loại tài liệu bảo dưỡng mới (ví dụ <code>SPM</code>)</td><td>Mục C → ô <b>Loại tài liệu</b> sửa dòng thành <code>\b(AMM|SRM|CMM|...|SPM)\b</code> → Áp dụng</td></tr>
+<tr><td>Chấp nhận thêm một cách ghi ngày trong bàn giao (ví dụ <code>DD-MM-YYYY</code>)</td><td>Mục C → ô <b>Cú pháp bàn giao</b> thêm một dòng mẫu regex mới → Áp dụng</td></tr>
+<tr><td>Coi cả State <code>P</code> (planned) là không thực hiện</td><td>Mục A → <b>Trạng thái bỏ qua</b> = <code>V, P</code> → Áp dụng</td></tr>
+<tr><td>Mặc định luôn rà cả WO đã đóng mỗi lần mở trang</td><td>Mục A → tích <b>Mặc định kiểm tra cả WO đã đóng</b> → Áp dụng</td></tr>
+<tr><td>Dùng đúng bộ regex trong database quy tắc của đơn vị</td><td>Copy cột <code>regex_pattern</code> theo <code>seq_group</code>, dán vào ô tương ứng ở mục C → Áp dụng</td></tr>
+</tbody></table>
+<div class="small" style="margin-top:10px;line-height:1.7">
+<b>Lưu ý:</b> cấu hình được lưu trong trình duyệt của <b>máy bạn</b> (localStorage) nên vẫn còn sau khi đóng trang.
+Muốn chia sẻ cho đồng nghiệp hoặc chuyển sang máy khác thì <b>Xuất cấu hình</b> ra file <code>.json</code> rồi <b>Nhập cấu hình</b> ở máy kia.
+Cấu hình tách rời khỏi dữ liệu — một cấu hình dùng được cho mọi Work Package.
+</div>
+</div>
+</div>
+
+<script src="wp.js"></script>
+</body>
+</html>
