@@ -28,15 +28,29 @@
     <button class="primary" id="btnTim">🔎 Tìm Work Package</button>
     <button id="btnTimLai" title="Bỏ qua bộ nhớ đệm, hỏi lại AMOS">↻ Tìm lại</button>
   </div>
-  <div class="grp"><label for="wpChon">Work Package</label>
-    <select id="wpChon" style="min-width:270px" disabled><option value="">— chưa tìm —</option></select>
-    <button class="primary" id="btnLoad" disabled>📥 Lấy dữ liệu</button>
-    <button id="btnReload" disabled title="Bỏ qua bộ nhớ đệm, hỏi lại AMOS">↻</button></div>
   <div class="grp"><label for="thr">Ngưỡng ca (giờ)</label>
     <input type="number" id="thr" value="8" min="1" max="72" style="width:66px"></div>
   <div class="grp"><label><input type="checkbox" id="incClosed" style="width:auto;vertical-align:-1px"> Kiểm tra cả WO đã đóng</label></div>
   <div class="grp"><label for="fWP">Lọc WP</label><select id="fWP"><option value="">Tất cả</option></select></div>
   <span id="fileStatus">Chọn station và tình trạng WP rồi bấm “Tìm Work Package”.</span>
+</div>
+
+<!-- BUOC 2: chon MOT Work Package roi bam Validate.
+     Tim WP chi doc mot bang WP_HEADER (nhanh); rà soát moi la truy van nang di
+     qua ca chuoi bang AMOS - nen KHONG tu chay, phai bam nut. -->
+<div class="wplist hidden" id="wpListBox">
+  <div class="wplist-head">
+    <b>Chọn 1 Work Package để rà soát</b>
+    <span class="small" id="wpListDem"></span>
+    <button class="primary" id="btnValidate" disabled>✔ Validate WP đã chọn</button>
+    <button id="btnReload" disabled title="Rà soát lại, bỏ qua bộ nhớ đệm">↻ Chạy lại</button>
+  </div>
+  <div class="wplist-body">
+    <table id="dsWpTable"><thead><tr>
+      <th>WP</th><th>Số tàu</th><th>Loại tàu</th><th>Hãng</th>
+      <th>Bắt đầu</th><th>Kết thúc</th><th>Hangar</th><th>Project</th>
+    </tr></thead><tbody></tbody></table>
+  </div>
 </div>
 
 <!-- Thong tin dau Work Package dang xem -->

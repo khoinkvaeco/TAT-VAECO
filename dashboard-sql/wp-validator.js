@@ -52,18 +52,15 @@ const WP_STATUS = {
 const RESOURCE_TYPE_HANGAR = -13;
 
 /**
- * ANH XA COT con phai DOAN.
- * Cau SQL nghiep vu da cho biet gan het ten cot that (dung thang trong ma
- * nguon), chi con hai cho chua chac nen moi giu bang ung vien:
- *   - acReg : so dang ky tau - cau SQL khong chon cot nay
- *   - remark: cot chua NOI DUNG cua WO_REMARKS - cau SQL co JOIN bang do
- *             nhung khong chon cot nao cua no
- * Xem cot that bang GET /api/admin/diag/wp-columns.
+ * TEN COT - tat ca deu do nghiep vu xac nhan, KHONG con cho nao phai doan.
+ * Hai cot duoi day khong nam trong danh sach SELECT cua cau SQL goc nen truoc
+ * do phai do; nghiep vu da chot:
+ *   - WP_HEADER.AC_REGISTR : so dang ky tau
+ *   - WO_REMARKS.TEXT      : noi dung ban giao (handover)
+ * Doi chieu lai bat cu luc nao bang GET /api/admin/diag/wp-columns.
  */
-const COT_ALIAS = {
-  acReg:  ['AC_REGISTR', 'ACREGISTR', 'AC_REG', 'REGISTRATION', 'AC'],
-  remark: ['TEXT', 'REMARKS', 'REMARK', 'WO_REMARKS', 'TEXT_REMARKS', 'DESCRIPTION'],
-};
+const COT_AC_REG = 'AC_REGISTR';
+const COT_REMARK = 'TEXT';
 
 /** Lay gia tri cot theo danh sach ten co the co. Tra '' neu khong co cot nao. */
 function lay(row, tenList) {
@@ -135,17 +132,6 @@ function doiCong(n) {
   const v = Number(n);
   if (!v || Number.isNaN(v)) return 0;
   return Math.round((v / 60) * 1000) / 1000;
-}
-
-/**
- * Loi nay co phai "bang khong co cot do" khong?
- * QUAN TRONG: cho "thu tung cot ung vien" chi duoc bo qua DUNG loai loi nay.
- * Neu bo qua MOI loi thi luc SQL Server sap (mat ket noi, het han dang nhap)
- * nguoi dung se nhan "Khong tim thay Work Package" - sai hoan toan va rat kho
- * doan. Loi khac phai nem ra ngoai de bao dung nguyen nhan.
- */
-function laLoiTenCot(e) {
-  return (e && e.number === 207) || /invalid column name/i.test((e && e.message) || '');
 }
 
 module.exports = function taoWpValidator({ query, demoMode, docDemo }) {
@@ -227,6 +213,7 @@ module.exports = function taoWpValidator({ query, demoMode, docDemo }) {
         startAmos: 19725 + i * 30,
         acOperator: 'VN',
         acModel: 'A321',
+        acReg: wo.AC || '',
         projectNo: 'DEMO-' + (i + 1),
         hangar: i % 2 ? 'HANGAR 2' : 'HANGAR 1',
       };
@@ -303,7 +290,7 @@ module.exports = function taoWpValidator({ query, demoMode, docDemo }) {
       startAmos: Number(lay(r, 'START_DATE')) || 0,
       acOperator: lay(r, 'AC_OPERATOR'),
       acModel: lay(r, 'AC_MODEL'),
-      acReg: lay(r, COT_ALIAS.acReg),
+      acReg: lay(r, COT_AC_REG),
       projectNo: lay(r, 'PROJECTNO'),
       hangar: hangarTheoWp.get(layId(r, 'WPNO_I')) || '',
     }));
@@ -423,7 +410,7 @@ module.exports = function taoWpValidator({ query, demoMode, docDemo }) {
     const addTheoItem = gom(tcAdd, 'ITEMNO_I');
     const tcTheoBooking = gom(tc, 'BOOKINGNO_I');
 
-    const acReg = lay(h0, COT_ALIAS.acReg);
+    const acReg = lay(h0, COT_AC_REG);
     const station = lay(h0, 'STATION');
     const rows = [];
     for (const sq of wpSeq) {
@@ -490,7 +477,7 @@ module.exports = function taoWpValidator({ query, demoMode, docDemo }) {
         ST: stateTheoEvent.get(ev) || '',
         TXT: lay(descDau, 'TEXT').slice(0, 400),
         HTML: lay(descDau, 'TEXT_HTML').slice(0, 1500),
-        REM: tachRemark((remTheoEvent.get(ev) || []).map((r) => lay(r, COT_ALIAS.remark))),
+        REM: tachRemark((remTheoEvent.get(ev) || []).map((r) => lay(r, COT_REMARK))),
         steps,
       });
     }
@@ -511,7 +498,7 @@ module.exports = function taoWpValidator({ query, demoMode, docDemo }) {
       endDate: doiNgay(lay(h0, 'END_DATE')),
       acOperator: lay(h0, 'AC_OPERATOR'),
       acModel: lay(h0, 'AC_MODEL'),
-      acReg: lay(h0, COT_ALIAS.acReg),
+      acReg: lay(h0, COT_AC_REG),
       projectNo: lay(h0, 'PROJECTNO'),
     };
   }
@@ -552,7 +539,7 @@ module.exports = function taoWpValidator({ query, demoMode, docDemo }) {
       WO_TEXT_DESCRIPTION: ['DESCNO_I', 'TEXT', 'TEXT_HTML'],
       WO_TEXT_ACTION: ['WORKSTEP_LINKNO_I', 'ACTIONNO_I', 'HEADER', 'TEXT', 'ACTION_DATE',
         'ACTION_TIME', 'SIGN_PERFORMED'],
-      WO_REMARKS: ['EVENT_PERFNO_I'],
+      WO_REMARKS: ['EVENT_PERFNO_I', COT_REMARK],
       TIME_CAPTURED_ADDITIONAL: ['ITEMNO_I', 'BOOKINGNO_I', 'USER_DEPARTMENT', 'USER_JOB'],
       TIME_CAPTURED: ['BOOKINGNO_I', 'USER_SIGN', 'DURATION', 'EST_MH'],
     };
@@ -571,19 +558,16 @@ module.exports = function taoWpValidator({ query, demoMode, docDemo }) {
         kq[b] = { loi: e.message };
       }
     }
-    // Hai truong con phai doan - cho biet ung vien nao khop
-    const khopAlias = {};
-    for (const [truong, ds] of Object.entries(COT_ALIAS)) {
-      const bangCanTim = truong === 'remark' ? ['WO_REMARKS'] : ['WP_HEADER'];
-      const co = new Set();
-      bangCanTim.forEach((b) => (kq[b] && kq[b].cot ? kq[b].cot : []).forEach((c) => co.add(c.toLowerCase())));
-      khopAlias[truong] = { timTrong: bangCanTim, daThu: ds, khop: ds.filter((c) => co.has(c.toLowerCase())) };
-    }
-    return { bang: kq, phaiDoan: khopAlias, tinhTrangWp: WP_STATUS };
+    // Cot nao ma nguon CAN nhung bang KHONG CO -> liet ke gon o dau ket qua,
+    // khoi phai doc het danh sach cot cua 11 bang moi thay.
+    const thieu = Object.entries(kq)
+      .filter(([, v]) => v.thieu && v.thieu.length)
+      .map(([b, v]) => `${b}: ${v.thieu.join(', ')}`);
+    return { thieuCot: thieu, bang: kq, tinhTrangWp: WP_STATUS };
   }
 
   return {
     layWorkPackage, timWorkPackage, danhSachStation, soiCot,
-    WP_STATUS, tenTinhTrang, COT_ALIAS,
+    WP_STATUS, tenTinhTrang,
   };
 };

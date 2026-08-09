@@ -136,6 +136,22 @@ mark.rev{background:rgba(163,113,247,.25);color:var(--purple)}
 @keyframes xoay{to{transform:rotate(360deg)}}
 .logbox.xong .spin{animation:none;border-top-color:var(--green);border-color:var(--green)}
 
+/* --- Danh sach WP tim duoc: click chon 1 dong roi bam Validate --- */
+.wplist{background:var(--panel);border:1px solid var(--border);border-radius:10px;margin-bottom:16px}
+.wplist-head{display:flex;gap:12px;align-items:center;flex-wrap:wrap;
+             padding:11px 14px;border-bottom:1px solid var(--border)}
+.wplist-head b{font-size:13.5px}
+.wplist-head button{margin-left:auto}
+.wplist-head button + button{margin-left:0}
+.wplist-body{max-height:270px;overflow-y:auto}
+.wplist table{font-size:12.5px}
+.wplist th{position:sticky;top:0;background:var(--panel);z-index:2;cursor:default}
+.wplist tbody tr{cursor:pointer}
+.wplist tbody tr:hover{background:var(--panel2)}
+/* Dong dang chon: vien trai xanh + nen dam, nhin la biet Validate se chay cai nao */
+.wplist tbody tr.chon{background:rgba(88,166,255,.13)}
+.wplist tbody tr.chon td:first-child{box-shadow:inset 3px 0 0 var(--accent);font-weight:600;color:var(--accent)}
+
 /* --- Thong tin dau Work Package --- */
 .wpinfo{background:var(--panel);border:1px solid var(--border);border-radius:10px;
         padding:11px 14px;margin-bottom:16px;display:flex;gap:22px;flex-wrap:wrap;font-size:12.5px}
