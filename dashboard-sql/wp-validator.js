@@ -40,23 +40,20 @@ const T = '[DWH_DB]..[STG_AMOS]';
 const MOC_AMOS = Date.UTC(1971, 11, 31);
 
 /**
- * WP_HEADER.WP_STATUS - ma so do nghiep vu cung cap (da xac nhan lai):
- *     11  = PRELOAD      (WP chuan bi)
- *     112 = IN PROGRESS  (WP dang thuc hien)
+ * WP_HEADER.WP_STATUS - ma so do nghiep vu cung cap (da xac nhan lai lan 2):
+ *     11  = IN PROGRESS  (WP dang thuc hien)
+ *     112 = PRELOAD      (WP chuan bi)
  *     -2  = CLOSED       (WP da dong)
  */
 const WP_STATUS = {
-  PRELOAD: 11,
-  INPROGRESS: 112,
+  INPROGRESS: 11,
+  PRELOAD: 112,
   CLOSED: -2,
 };
 
 /**
  * WP_HEADER.STATUS - cot KHAC WP_STATUS (ban ghi con hieu luc hay khong).
- * ⚠️ Cau SQL nghiep vu chi dung `STATUS = 0` cho nhanh IN PROGRESS; o day no
- * duoc ap cho ca ba tinh trang. Neu voi CLOSED/PRELOAD ma AMOS ghi gia tri
- * khac thi danh sach se ra RONG - nen khi ket qua rong, demStatus0() dem thu
- * "bo dieu kien nay thi duoc bao nhieu" va bao thang ra man hinh.
+ * Nghiep vu xac nhan: LUON bang 0 cho ca ba tinh trang.
  */
 const STATUS_HIEU_LUC = 0;
 
@@ -131,12 +128,45 @@ function ngaySangAmos(s) {
 /**
  * ACTION_TIME cua AMOS tinh bang PHUT ke tu 0h (cau goc: INTERVAL '1 MINUTE' *
  * ACTION_TIME) -> 'HH:MM:00'. Khac voi MUTATION_TIME o cac bang kho (mili giay).
+ * Dung cho GIO THO cua AMOS (chua doi mui gio).
  */
 function doiGio(n) {
   const v = Number(n);
   if (Number.isNaN(v) || n === '' || n === null || n === undefined) return '';
   const p = Math.max(0, Math.round(v));
   return `${hai(Math.floor(p / 60) % 24)}:${hai(p % 60)}:00`;
+}
+
+/**
+ * GHEP ngay + gio AMOS roi doi sang gio VN.
+ * ---------------------------------------------------------------------------
+ * ⚠️ PHAI ghep RUI DOI, khong duoc cong 7 gio vao rieng cot gio:
+ * mot hanh dong luc 20:15 ngay 30/06 ma chi cong gio se thanh 03:15 ngay 30/06
+ * - dung gio nhung SAI MOT NGAY. Module Handover so ngay cua dong ban giao voi
+ * ngay cua buoc cuoi, nen lech mot ngay la cham sai toan bo.
+ * @param {number|string} ngayAmos  so ngay ke tu 31/12/1971 (ACTION_DATE)
+ * @param {number|string} phutAmos  so phut ke tu 0h        (ACTION_TIME)
+ * @param {number} lech             so gio cong them (AMOS -> VN, thuong la 7)
+ * @returns {{dat:string, tim:string, datGoc:string, timGoc:string}}
+ *          dat/tim = gio VN ('DD/MM/YYYY', 'HH:MM:00');
+ *          datGoc/timGoc = gio THO cua AMOS, giu lai de doi chieu tren giao dien
+ */
+function ngayGioVN(ngayAmos, phutAmos, lech) {
+  const d = Number(ngayAmos);
+  const datGoc = doiNgay(d);
+  const timGoc = doiGio(phutAmos);
+  if (!d || Number.isNaN(d)) return { dat: '', tim: '', datGoc: '', timGoc: '' };
+  const phut = Number(phutAmos);
+  const coGio = !Number.isNaN(phut) && phutAmos !== '' && phutAmos !== null && phutAmos !== undefined;
+  const ms = MOC_AMOS + d * 86400000 + (coGio ? Math.max(0, Math.round(phut)) * 60000 : 0)
+    + (lech || 0) * 3600000;
+  const v = new Date(ms);
+  return {
+    dat: `${hai(v.getUTCDate())}/${hai(v.getUTCMonth() + 1)}/${v.getUTCFullYear()}`,
+    tim: coGio ? `${hai(v.getUTCHours())}:${hai(v.getUTCMinutes())}:00` : '',
+    datGoc,
+    timGoc,
+  };
 }
 
 /** DURATION / EST_MH tinh bang PHUT -> gio (3 chu so thap phan). */
@@ -146,7 +176,9 @@ function doiCong(n) {
   return Math.round((v / 60) * 1000) / 1000;
 }
 
-module.exports = function taoWpValidator({ query, demoMode, docDemo }) {
+module.exports = function taoWpValidator({ query, demoMode, docDemo, tzOffset = 7 }) {
+  const LECH_GIO = Number(tzOffset) || 0;   // AMOS -> gio VN
+
   /**
    * Lay TAT CA dong cua mot bang AMOS theo danh sach ID - chia lo, chay tuan tu.
    * @param {string} bang    ten bang (khong ke tien to linked server)
@@ -256,20 +288,36 @@ module.exports = function taoWpValidator({ query, demoMode, docDemo }) {
       `[STATION] = ${q(station)}`,
     ];
     if (tuAmos !== null) dk.push(`[START_DATE] >= ${tuAmos}`);
-    ghi(`▶ WP_HEADER: station ${station}, tình trạng ${tenTinhTrang(wpStatus)} (WP_STATUS = ${wpStatus})`
-      + (tuAmos !== null ? `, bắt đầu từ ${loc.tuNgay}` : '') + '…');
-    let t = Date.now();
+    // Ghi HAN dieu kien ra nhat ky: nguoi dung doc duoc dung cau da chay,
+    // khong phai tin lo mo rang giao dien gui cai gi xuong.
+    const dieuKien = dk.join(' AND ');
+    ghi(`▶ WP_HEADER WHERE ${dieuKien}`
+      + (tuAmos !== null ? `   (${loc.tuNgay} = ngày AMOS ${tuAmos})` : ''));
+    const t = Date.now();
     const head = await query(
-      `SELECT TOP ${n} * FROM ${T}.[WP_HEADER] WHERE ${dk.join(' AND ')} ORDER BY [START_DATE] DESC`
+      `SELECT TOP ${n} * FROM ${T}.[WP_HEADER] WHERE ${dieuKien} ORDER BY [START_DATE] DESC`
     );
     ghi(`✔ WP_HEADER — ${head.length} Work Package, ${Date.now() - t} ms`);
-    if (!head.length) return { ds: [], tongTruocLoc: 0, khongStatus0: await demStatus0(dk, ghi) };
+    if (!head.length) return { ds: [], tongTruocLoc: 0, dieuKien };
+
+    // HAU KIEM: dong tra ve co DUNG dieu kien da chon khong.
+    // Khong thua: cot AMOS qua linked server co the la CHAR dem khoang trang,
+    // hoac collation so sanh khac y muon - luc do cau van chay, van ra dong,
+    // chi la ra NHAM. Sai kieu do rat kho thay bang mat nen kiem bang may.
+    const lech = head.filter((r) => Number(lay(r, 'WP_STATUS')) !== wpStatus
+      || lay(r, 'STATION').toUpperCase() !== station.toUpperCase()
+      || Number(lay(r, 'STATUS')) !== STATUS_HIEU_LUC
+      || (tuAmos !== null && Number(lay(r, 'START_DATE')) < tuAmos));
+    if (lech.length) {
+      ghi(`⚠ ${lech.length}/${head.length} dòng KHÔNG khớp điều kiện đã chọn — đã loại bỏ`);
+    }
+    const hop = lech.length ? head.filter((r) => !lech.includes(r)) : head;
 
     // --- 2 + 3. HANGAR: RM_CALENDAR_ENTRY -> ADDRESS ---
     //     Day KHONG con la cot trang tri: nghiep vu chi ra soat WP CO hangar,
     //     nen buoc nay la BO LOC. Loi o day khong duoc nuot - nuot thi danh
     //     sach ra RONG va nguoi dung tuong la "khong co WP nao".
-    const wpIds = duyNhat(head.map((r) => layId(r, 'WPNO_I')));
+    const wpIds = duyNhat(hop.map((r) => layId(r, 'WPNO_I')));
     const lich = await layTheoId('RM_CALENDAR_ENTRY', 'WPNO_I', wpIds, ghi,
       ` AND [RESOURCE_TYPE_NOI] = ${RESOURCE_TYPE_HANGAR}`);
     const addrIds = duyNhat(lich.map((r) => layId(r, 'RESOURCE_AMOS_KEY')));
@@ -281,7 +329,7 @@ module.exports = function taoWpValidator({ query, demoMode, docDemo }) {
       if (ten) hangarTheoWp.set(layId(r, 'WPNO_I'), ten);
     }
 
-    const ds = head.map((r) => ({
+    const ds = hop.map((r) => ({
       wpnoI: layId(r, 'WPNO_I'),
       wp: lay(r, 'WPNO'),
       station: lay(r, 'STATION'),
@@ -296,28 +344,8 @@ module.exports = function taoWpValidator({ query, demoMode, docDemo }) {
       hangar: hangarTheoWp.get(layId(r, 'WPNO_I')) || '',
     })).filter((w) => w.hangar);      // CHI liet ke WP co du lieu hangar
 
-    ghi(`✔ Xong — ${ds.length}/${head.length} Work Package có hangar`, true);
-    return { ds, tongTruocLoc: head.length, chamTran: head.length >= n };
-  }
-
-  /**
-   * Khi tim ra 0 WP: dem thu neu BO dieu kien [STATUS] = 0 thi co bao nhieu.
-   * VI SAO: dieu kien nay duoc bung tu cau SQL cua nhanh IN PROGRESS sang ca
-   * ba tinh trang, chua ai xac nhan la dung cho CLOSED/PRELOAD. Neu no chinh
-   * la thu dang cat het ket qua thi phai noi ra ngay tren man hinh, thay vi de
-   * nguoi dung ngoi doan xem "khong co WP nao" that hay gia.
-   * Chi chay khi ket qua rong nen khong ton them gi o duong chay binh thuong.
-   */
-  async function demStatus0(dk, ghi) {
-    const conLai = dk.filter((d) => !d.startsWith('[STATUS] ='));
-    try {
-      const r = await query(
-        `SELECT COUNT(*) AS so FROM ${T}.[WP_HEADER] WHERE ${conLai.join(' AND ')}`
-      );
-      const so = Number(r[0] && r[0].so) || 0;
-      if (so) ghi(`· Nếu BỎ điều kiện [STATUS] = ${STATUS_HIEU_LUC} thì có ${so} WP khớp`);
-      return so;
-    } catch (_) { return null; }
+    ghi(`✔ Xong — ${ds.length}/${hop.length} Work Package có hangar`, true);
+    return { ds, tongTruocLoc: hop.length, lechDieuKien: lech.length, dieuKien, chamTran: head.length >= n };
   }
 
   function tenTinhTrang(n) {
@@ -459,6 +487,8 @@ module.exports = function taoWpValidator({ query, demoMode, docDemo }) {
           continue;
         }
         for (const ac of acts) {
+          // Ngay + gio phai doi CUNG NHAU sang gio VN (xem ngayGioVN)
+          const kh = ngayGioVN(lay(ac, 'ACTION_DATE'), lay(ac, 'ACTION_TIME'), LECH_GIO);
           const adds = addTheoItem.get(layId(ac, 'ACTIONNO_I')) || [];
           const tcs = adds.flatMap((a) => (tcTheoBooking.get(layId(a, 'BOOKINGNO_I')) || [])
             .map((b) => ({ b, a })));
@@ -469,8 +499,11 @@ module.exports = function taoWpValidator({ query, demoMode, docDemo }) {
           const stepTxt = lay(ac, 'TEXT');
           steps.push({
             ws,
-            rawDat: doiNgay(lay(ac, 'ACTION_DATE')),
-            rawTim: doiGio(lay(ac, 'ACTION_TIME')),
+            rawDat: kh.dat,
+            rawTim: kh.tim,
+            // Gio THO cua AMOS - hien o tooltip de doi chieu duoc phep +7h
+            amosDat: kh.datGoc,
+            amosTim: kh.timGoc,
             txt: stepTxt.slice(0, 800),
             html: stepTxt ? '' : descHtml.slice(0, 900),
             hdr: lay(ac, 'HEADER').slice(0, 90),
@@ -615,7 +648,6 @@ module.exports = function taoWpValidator({ query, demoMode, docDemo }) {
       dangDung: {
         wpStatus: WP_STATUS,
         themDieuKien: `[STATUS] = ${STATUS_HIEU_LUC}`,
-        canhBao: 'Điều kiện STATUS lấy từ câu SQL nhánh IN PROGRESS, chưa xác nhận cho CLOSED/PRELOAD.',
       },
       capGiaTri: ds,
       // Ba tinh trang dang dung co nam trong du lieu that khong?
@@ -633,4 +665,13 @@ module.exports = function taoWpValidator({ query, demoMode, docDemo }) {
     layWorkPackage, timWorkPackage, soiCot, soiTinhTrang,
     WP_STATUS, STATUS_HIEU_LUC, tenTinhTrang,
   };
+};
+
+/**
+ * Cac ham THUAN (khong dung DB) duoc bay ra rieng de kiem thu tu dong.
+ * Xem tools/wpcheck.js - noi chot phep doi gio AMOS -> VN va bang ma WP_STATUS.
+ */
+module.exports.tienIch = {
+  ngayGioVN, doiNgay, doiGio, doiCong, ngaySangAmos,
+  WP_STATUS, STATUS_HIEU_LUC, MOC_AMOS,
 };

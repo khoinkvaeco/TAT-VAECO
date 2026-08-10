@@ -441,8 +441,11 @@ function stepDetail(d, mode) {
         + `${c.bp ? ` · ${esc(c.bp)}` : ''}${c.viec ? ` · ${esc(c.viec)}` : ''}`
         + ` · ${(c.gio || 0).toFixed(2)}h</span>`).join('') + '</div>'
       : '';
+    // Gio hien la gio VN (AMOS + 7h). Giu gio THO cua AMOS o tooltip de doi
+    // chieu - neu phep cong sai thi nhin mot cai la biet, khong phai mo SQL.
+    const goc = x.amosDat ? `AMOS: ${x.amosDat}${x.amosTim ? ' ' + x.amosTim.slice(0, 5) : ''} → giờ VN (+7h)` : '';
     h += `<tr class="${cls}"><td class="mono">${esc(x.ws)}</td><td>${esc(x.hdr || '')}</td>
-        <td class="mono">${fdt(x.dt) || '—'}</td><td class="mono">${esc(x.sg || '')}</td>
+        <td class="mono" title="${esc(goc)}">${fdt(x.dt) || '—'}</td><td class="mono">${esc(x.sg || '')}</td>
         <td class="mono">${(x.mh || 0).toFixed(2)}</td>
         <td class="txtc">${body}${congHtml}</td><td>${note || ''}</td></tr>`;
   });
@@ -637,7 +640,8 @@ function baoLoi(msg, thuLai) {
 const anLoi = () => $('errBox').classList.add('hidden');
 
 /* ---------- Chon Work Package: station -> tình trạng (-> ngày) -> WP ---------- */
-const TEN_TT = { '-2': 'CLOSED', 112: 'IN PROGRESS', 11: 'PRELOAD' };
+// WP_HEADER.WP_STATUS: 11 = IN PROGRESS, 112 = PRELOAD, -2 = CLOSED
+const TEN_TT = { '-2': 'CLOSED', 11: 'IN PROGRESS', 112: 'PRELOAD' };
 let dsWp = [];        // ket qua buoc TIM
 let wpDangChon = -1;  // chi so dong dang chon trong dsWp (-1 = chua chon)
 
@@ -727,14 +731,8 @@ async function timWp(boQuaCache) {
         + (js.chamTran ? ' — đã chạm giới hạn, thu hẹp lại mốc ngày' : '')
         + `${js.demo ? ' (dữ liệu mẫu — DEMO_MODE)' : ''} — bấm chọn 1 WP rồi bấm “Validate”.`;
     } else {
-      // Rong thi phai noi RO vi sao: khong co WP nao, hay co nhung deu thieu
-      // hangar, hay chinh dieu kien STATUS dang cat het.
-      let vi = '';
-      if (boQua) vi = ` (có ${boQua} WP nhưng đều không có dữ liệu hangar)`;
-      else if (js.khongStatus0) {
-        vi = ` — nhưng nếu bỏ điều kiện [STATUS] = 0 thì có ${js.khongStatus0} WP.`
-          + ' Báo lại để chỉnh điều kiện này cho đúng.';
-      }
+      // Rong thi phai noi RO vi sao: khong co WP nao, hay co nhung deu thieu hangar
+      const vi = boQua ? ` (có ${boQua} WP nhưng đều không có dữ liệu hangar)` : '';
       $('fileStatus').textContent = `Không có Work Package ${TEN_TT[st]} nào ở ${station}`
         + `${tuNgay ? ` bắt đầu từ ${tuNgay}` : ''}${vi}`;
     }

@@ -112,7 +112,7 @@ Bật server ở chế độ **live** nhưng trỏ vào một địa chỉ DB kh
 - báo **lỗi kết nối** → ĐẠT (code chạy tốt)
 - báo **bất kỳ lỗi nào khác** → TRƯỢT, in rõ endpoint và thông báo lỗi
 
-Sau đó chạy tiếp **`tools/sqlcheck.js`** (soi câu SQL thật) và **`tools/build-assets.js --check`** (kiểm tra `public/vendor/` có còn khớp mã nguồn không — xem §7c).
+Sau đó chạy tiếp **`tools/sqlcheck.js`** (soi câu SQL thật), **`tools/wpcheck.js`** (chốt các phép đổi đơn vị của trang `/wp` — xem §7j) và **`tools/build-assets.js --check`** (kiểm tra `public/vendor/` có còn khớp mã nguồn không — xem §7c).
 
 Cần thiết vì `DEMO_MODE=true` **không hề gọi** các hàm dựng câu SQL (chúng bị thay bằng dữ liệu mẫu), còn `node --check` chỉ kiểm cú pháp — nên lỗi kiểu *"Cannot access 'dept' before initialization"* lọt qua cả hai, đến lúc chạy thật mới vỡ.
 
@@ -919,17 +919,15 @@ Không gõ tay số WP. Trang hỏi theo đúng thứ tự nghiệp vụ:
 
    | Chọn | `WP_STATUS` |
    |---|---|
-   | IN PROGRESS (đang thực hiện) | `112` |
-   | PRELOAD (chuẩn bị) | `11` |
+   | IN PROGRESS (đang thực hiện) | `11` |
+   | PRELOAD (chuẩn bị) | `112` |
    | CLOSED (đã đóng) | `-2` |
 
-   > ⚠️ Câu lệnh còn kèm `WP_HEADER.STATUS = 0` (cột **khác** `WP_STATUS`). Điều kiện này
-   > lấy từ câu SQL nhánh **IN PROGRESS** và đang áp cho cả ba tình trạng — **chưa xác nhận
-   > cho CLOSED/PRELOAD**. Nếu nó cắt nhầm thì kết quả ra rỗng, nên khi danh sách rỗng
-   > chương trình **đếm thử lại không có điều kiện đó** và báo thẳng ra màn hình:
-   > *“nhưng nếu bỏ điều kiện [STATUS] = 0 thì có N WP”*. Muốn chốt bằng số liệu thì mở
-   > `GET /api/admin/diag/wp-status` — nó liệt kê phân bố thật của từng cặp
-   > (`WP_STATUS`, `STATUS`).
+   Kèm `WP_HEADER.STATUS = 0` (cột **khác** `WP_STATUS`) cho cả ba tình trạng.
+   Ba mã này được chốt lại trong `tools/wpcheck.js` — đổi nhầm là **trượt ngay**, vì
+   `11` ↔ `112` nhìn rất giống nhau và nếu lộn thì màn hình vẫn ra đầy WP, chỉ là **sai
+   loại**, không có gì báo lỗi. Đối chiếu với dữ liệu thật bằng
+   `GET /api/admin/diag/wp-status` (phân bố thật của từng cặp `WP_STATUS`, `STATUS`).
 
 3. **Bắt đầu từ ngày** — ô này **chỉ hiện khi chọn CLOSED**, và khi đó là **bắt buộc**:
    WP đã đóng tích lũy theo cả lịch sử AMOS, không có mốc ngày thì câu truy vấn quét toàn
@@ -1014,6 +1012,24 @@ Câu nghiệp vụ chạy thẳng trên AMOS nên dùng `TO_DATE`, `TO_CHAR`, `I
 
 ⚠️ Chú ý `ACTION_TIME` là **phút**, khác hẳn `MUTATION_TIME` ở các bảng kho (**mili giây**,
 §5b) — hai bảng khác nhau dùng hai đơn vị khác nhau.
+
+#### `ACTION_DATE` + `ACTION_TIME` là giờ THÔ của AMOS → phải +7h ra giờ VN
+
+Và phải cộng vào **cả cặp ngày-giờ cùng lúc**, không được cộng vào riêng cột giờ:
+
+> Một hành động lúc **20:15 ngày 30/06** giờ AMOS = **03:15 ngày 01/07** giờ VN.
+> Nếu chỉ cộng 7h vào cột giờ thì ra *“03:15 ngày 30/06”* — **đúng giờ nhưng sai một ngày**.
+> Module Handover so ngày của dòng bàn giao với ngày bước cuối, nên lệch một ngày là chấm
+> sai toàn bộ mà vẫn “trông bình thường”.
+
+`ngayGioVN()` ghép `(ngày, phút)` thành một mốc thời gian, cộng `TZ_OFFSET` (mặc định 7 —
+**dùng chung hằng số với cả app**), rồi mới tách lại ngày/giờ. Giờ **thô** của AMOS được giữ
+lại và hiện ở **tooltip** ô *Thực hiện* (`AMOS: 30/06/2026 20:15 → giờ VN (+7h)`) để đối
+chiếu ngay trên màn hình, không phải mở SQL.
+
+Cả 30 trường hợp — kể cả qua ngày, qua tháng, qua năm — được chốt trong `tools/wpcheck.js`.
+Đã chứng minh bài kiểm tra bắt được đúng lỗi này: cố tình sửa thành cộng-vào-riêng-cột-giờ
+thì **5/30 trường hợp trượt ngay**.
 
 ### Tên cột — không còn chỗ nào phải đoán
 

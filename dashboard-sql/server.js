@@ -7143,6 +7143,9 @@ function docDemoWp() {
 }
 const wpVal = require('./wp-validator')({
   query, demoMode: CONFIG.demoMode, docDemo: docDemoWp,
+  // ACTION_DATE/ACTION_TIME la gio THO cua AMOS -> cong offset ra gio VN,
+  // dung mot hang so voi phan con lai cua app (TZ_OFFSET, mac dinh 7).
+  tzOffset: CONFIG.tzOffset,
 });
 
 // Tim Work Package theo station + tinh trang (+ ngay bat dau, cho WP da dong).

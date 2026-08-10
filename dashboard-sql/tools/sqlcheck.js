@@ -35,7 +35,7 @@ const ENDPOINTS = [
   '/api/reports/other', '/api/reports/return-store-tat', '/api/reports/repair-admin',
   '/api/pickslip', '/api/receiving',
   '/api/wp?wp=SQLCHECK-WP',
-  '/api/wp/tim?station=SGN&wpStatus=112', '/api/wp/tim?station=SGN&wpStatus=-2&tuNgay=2026-01-01',
+  '/api/wp/tim?station=SGN&wpStatus=11', '/api/wp/tim?station=SGN&wpStatus=-2&tuNgay=2026-01-01',
 ];
 
 /** Tim vi tri dau ')' dong lai cho '(' o vi tri `open`. */
