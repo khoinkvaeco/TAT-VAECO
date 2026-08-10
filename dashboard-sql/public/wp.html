@@ -15,7 +15,14 @@
 
 <div class="topbar">
   <div class="grp"><label for="fStation">Station</label>
-    <select id="fStation" style="min-width:110px"><option value="">Đang tải…</option></select></div>
+    <select id="fStation" style="min-width:110px">
+      <option value="HAN">HAN</option>
+      <option value="SGN">SGN</option>
+      <option value="DAD">DAD</option>
+      <option value="__khac">Khác…</option>
+    </select>
+    <input id="fStationKhac" class="hidden" style="width:92px" maxlength="10"
+           placeholder="Mã trạm" autocomplete="off" spellcheck="false"></div>
   <div class="grp"><label for="fStatus">Tình trạng WP</label>
     <select id="fStatus" style="min-width:150px">
       <option value="112">IN PROGRESS (đang thực hiện)</option>

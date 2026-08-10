@@ -37,7 +37,6 @@ const ENDPOINTS = [
   '/api/receiving',
   // Ra soat ho so bao duong (tach truy van tung bang AMOS)
   '/api/wp?wp=SMOKE-TEST-WP',
-  '/api/wp/stations',
   '/api/wp/tim?station=SGN&wpStatus=112',
   '/api/wp/tim?station=SGN&wpStatus=-2&tuNgay=2026-01-01',
   // Cac endpoint chan doan (chi IP quan tri - chay tu localhost nen qua duoc)
@@ -50,6 +49,7 @@ const ENDPOINTS = [
   '/api/admin/diag/linkserver',
   '/api/admin/diag/mutation-time',
   '/api/admin/diag/wp-columns',
+  '/api/admin/diag/wp-status',
 ];
 
 /** Loi NAY la binh thuong: khong co DB that de ket noi. */

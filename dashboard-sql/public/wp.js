@@ -653,29 +653,48 @@ function capNhatOTuNgay() {
   doThanhLoc();
 }
 
-async function napStation() {
-  try {
-    const res = await fetch('/api/wp/stations');
-    const js = await res.json();
-    const ds = js.ds || [];
-    const nho = localStorage.getItem('wpStation');
-    $('fStation').innerHTML = ds.length
-      ? ds.map((s) => `<option value="${esc(s)}">${esc(s)}</option>`).join('')
-      : '<option value="">(không có station nào)</option>';
-    if (nho && ds.includes(nho)) $('fStation').value = nho;
-  } catch (_) {
-    $('fStation').innerHTML = '<option value="">(không tải được)</option>';
-  }
+/**
+ * Station: ba trạm cố định HAN / SGN / DAD, còn lại gõ tay.
+ * KHÔNG hỏi AMOS danh sách station lúc mở trang: đó là một `SELECT DISTINCT`
+ * quét cả WP_HEADER qua linked server, chạy ngay khi mở trang cho MỌI người
+ * xem — trả về đúng 3-4 giá trị ai cũng thuộc lòng. Không đáng.
+ */
+const STATION_CHINH = ['HAN', 'SGN', 'DAD'];
+
+function stationDangChon() {
+  const v = $('fStation').value;
+  if (v !== '__khac') return v;
+  return $('fStationKhac').value.trim().toUpperCase();
+}
+
+function capNhatOStationKhac() {
+  const khac = $('fStation').value === '__khac';
+  $('fStationKhac').classList.toggle('hidden', !khac);
+  if (khac) $('fStationKhac').focus();
   doThanhLoc();
+}
+
+/** Nhớ lựa chọn lần trước trên máy này (kể cả trạm gõ tay). */
+function napStationDaNho() {
+  const nho = (localStorage.getItem('wpStation') || '').toUpperCase();
+  if (!nho) return;
+  if (STATION_CHINH.includes(nho)) { $('fStation').value = nho; return; }
+  $('fStation').value = '__khac';
+  $('fStationKhac').value = nho;
+  $('fStationKhac').classList.remove('hidden');
 }
 
 let dangTim = false;
 async function timWp(boQuaCache) {
   if (dangTim) return;
-  const station = $('fStation').value;
+  const station = stationDangChon();
   const st = $('fStatus').value;
   const tuNgay = st === '-2' ? $('fTuNgay').value : '';
-  if (!station) { $('fileStatus').textContent = '⚠️ Chưa chọn station.'; return; }
+  if (!station) {
+    if ($('fStation').value === '__khac') $('fStationKhac').focus();
+    $('fileStatus').textContent = '⚠️ Chưa nhập mã station.';
+    return;
+  }
   if (st === '-2' && !tuNgay) {
     $('fTuNgay').focus();
     $('fileStatus').textContent = '⚠️ WP đã đóng phải có “Bắt đầu từ ngày”.';
@@ -696,14 +715,29 @@ async function timWp(boQuaCache) {
     if (!res.ok || js.error) throw new Error(js.message || `Máy chủ trả về mã ${res.status}.`);
     dsWp = js.ds || [];
     veDanhSachWp();
+    const boQua = Math.max(0, (js.tongTruocLoc || 0) - dsWp.length);
     $('wpListDem').textContent = dsWp.length
       ? `${dsWp.length} WP · ${TEN_TT[st]} · ${station}${tuNgay ? ` · từ ${tuNgay}` : ''}`
+        + (boQua ? ` · đã bỏ ${boQua} WP không có hangar` : '')
         + (js.chamTran ? ' · ĐÃ CHẠM GIỚI HẠN' : '')
       : '';
-    $('fileStatus').textContent = dsWp.length
-      ? `✅ Tìm thấy ${dsWp.length} Work Package${js.chamTran ? ' (đã chạm giới hạn — thu hẹp lại mốc ngày)' : ''}`
-        + `${js.demo ? ' (dữ liệu mẫu — DEMO_MODE)' : ''} — bấm chọn 1 WP rồi bấm “Validate”.`
-      : `Không có Work Package ${TEN_TT[st]} nào ở ${station}${tuNgay ? ` bắt đầu từ ${tuNgay}` : ''}.`;
+    if (dsWp.length) {
+      $('fileStatus').textContent = `✅ Tìm thấy ${dsWp.length} Work Package`
+        + (boQua ? ` (bỏ ${boQua} WP không có dữ liệu hangar)` : '')
+        + (js.chamTran ? ' — đã chạm giới hạn, thu hẹp lại mốc ngày' : '')
+        + `${js.demo ? ' (dữ liệu mẫu — DEMO_MODE)' : ''} — bấm chọn 1 WP rồi bấm “Validate”.`;
+    } else {
+      // Rong thi phai noi RO vi sao: khong co WP nao, hay co nhung deu thieu
+      // hangar, hay chinh dieu kien STATUS dang cat het.
+      let vi = '';
+      if (boQua) vi = ` (có ${boQua} WP nhưng đều không có dữ liệu hangar)`;
+      else if (js.khongStatus0) {
+        vi = ` — nhưng nếu bỏ điều kiện [STATUS] = 0 thì có ${js.khongStatus0} WP.`
+          + ' Báo lại để chỉnh điều kiện này cho đúng.';
+      }
+      $('fileStatus').textContent = `Không có Work Package ${TEN_TT[st]} nào ở ${station}`
+        + `${tuNgay ? ` bắt đầu từ ${tuNgay}` : ''}${vi}`;
+    }
     xongLog(false);
     $('logTitle').textContent = 'Đã tìm xong';
   } catch (e) {
@@ -842,6 +876,8 @@ document.querySelectorAll('#refTable th[data-k]').forEach((th) => { th.onclick =
 $('btnTim').onclick = () => timWp(false);
 $('btnTimLai').onclick = () => timWp(true);
 $('fStatus').addEventListener('change', capNhatOTuNgay);
+$('fStation').addEventListener('change', capNhatOStationKhac);
+$('fStationKhac').addEventListener('keydown', (e) => { if (e.key === 'Enter') timWp(false); });
 // Bam dong trong danh sach chi CHON; chay ra soat phai bam nut nay.
 $('btnValidate').onclick = () => taiWp(false);
 $('btnReload').onclick = () => taiWp(true);
@@ -955,7 +991,7 @@ doThanhLoc();
 napCfgLuu(); fillCfg(); compileRules();
 refreshAll(); initChips(); greet();
 capNhatOTuNgay();
-napStation();
+napStationDaNho();
 // Mo thang mot WP bang duong dan: /wp?wp=<WPNO_I hoac ten WP>
 // (dung de gui link cho dong nghiep - van chi ra soat DUNG WP do)
 (() => {

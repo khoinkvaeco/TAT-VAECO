@@ -40,14 +40,26 @@ const T = '[DWH_DB]..[STG_AMOS]';
 const MOC_AMOS = Date.UTC(1971, 11, 31);
 
 /**
- * Tinh trang Work Package - ma so do nghiep vu cung cap.
- * WP_HEADER.STATUS = 0 luon di kem (ban ghi con hieu luc).
+ * WP_HEADER.WP_STATUS - ma so do nghiep vu cung cap (da xac nhan lai):
+ *     11  = PRELOAD      (WP chuan bi)
+ *     112 = IN PROGRESS  (WP dang thuc hien)
+ *     -2  = CLOSED       (WP da dong)
  */
 const WP_STATUS = {
-  CLOSED: -2,        // WP da dong
-  INPROGRESS: 112,   // WP dang thuc hien
-  PRELOAD: 11,       // WP chuan bi (preload)
+  PRELOAD: 11,
+  INPROGRESS: 112,
+  CLOSED: -2,
 };
+
+/**
+ * WP_HEADER.STATUS - cot KHAC WP_STATUS (ban ghi con hieu luc hay khong).
+ * ⚠️ Cau SQL nghiep vu chi dung `STATUS = 0` cho nhanh IN PROGRESS; o day no
+ * duoc ap cho ca ba tinh trang. Neu voi CLOSED/PRELOAD ma AMOS ghi gia tri
+ * khac thi danh sach se ra RONG - nen khi ket qua rong, demStatus0() dem thu
+ * "bo dieu kien nay thi duoc bao nhieu" va bao thang ra man hinh.
+ */
+const STATUS_HIEU_LUC = 0;
+
 /** Loai tai nguyen trong RM_CALENDAR_ENTRY dung de lay HANGAR. */
 const RESOURCE_TYPE_HANGAR = -13;
 
@@ -180,20 +192,6 @@ module.exports = function taoWpValidator({ query, demoMode, docDemo }) {
   //  A. CHON WORK PACKAGE - station + tinh trang (+ ngay bat dau neu CLOSED)
   // =========================================================================
 
-  /** Danh sach station co trong WP_HEADER (doi it, nen cache lau o tang tren). */
-  async function danhSachStation() {
-    if (demoMode) {
-      return { ds: [...new Set(docDemo().map((w) => w.STATION).filter(Boolean))].sort() };
-    }
-    const rows = await query(
-      `SELECT DISTINCT [STATION] AS station FROM ${T}.[WP_HEADER] WHERE [STATION] IS NOT NULL`
-    );
-    const ds = rows.map((r) => String(r.station || '').trim()).filter(Boolean).sort();
-    // Ba station chinh len dau cho de tim - giong thanh loc cua dashboard
-    const chinh = ['HAN', 'SGN', 'DAD'];
-    return { ds: [...chinh.filter((s) => ds.includes(s)), ...ds.filter((s) => !chinh.includes(s))] };
-  }
-
   /**
    * DEMO: gan station/tinh trang/ngay cho 5 WP mau mot cach CO DINH, de kiem
    * thu ca ba tinh trang ma khong phai co SQL Server.
@@ -215,7 +213,9 @@ module.exports = function taoWpValidator({ query, demoMode, docDemo }) {
         acModel: 'A321',
         acReg: wo.AC || '',
         projectNo: 'DEMO-' + (i + 1),
-        hangar: i % 2 ? 'HANGAR 2' : 'HANGAR 1',
+        // WP dau tien CO TINH de trong hangar: de kiem thu duoc luat "chi liet
+        // ke WP co hangar" tren du lieu mau, khong phai chay that moi biet.
+        hangar: i === 0 ? '' : (i % 2 ? 'HANGAR 2' : 'HANGAR 1'),
       };
     });
   }
@@ -242,42 +242,43 @@ module.exports = function taoWpValidator({ query, demoMode, docDemo }) {
 
     if (demoMode) {
       ghi('Chế độ DEMO — dùng dữ liệu mẫu, không hỏi AMOS.');
-      const ds = demoDanhSach().filter((w) => w.station === station && w.wpStatus === wpStatus
+      const tho = demoDanhSach().filter((w) => w.station === station && w.wpStatus === wpStatus
         && (tuAmos === null || w.startAmos >= tuAmos));
-      ghi(`✔ Xong — ${ds.length} Work Package (dữ liệu mẫu)`, true);
-      return { ds, demo: true };
+      const ds = tho.filter((w) => w.hangar);
+      ghi(`✔ Xong — ${ds.length}/${tho.length} Work Package có hangar (dữ liệu mẫu)`, true);
+      return { ds, tongTruocLoc: tho.length, demo: true };
     }
 
     // --- 1. WP_HEADER: chi dung phep so sanh THUAN, khong ham -> AMOS loc duoc ---
     const dk = [
       `[WP_STATUS] = ${wpStatus}`,
-      '[STATUS] = 0',
+      `[STATUS] = ${STATUS_HIEU_LUC}`,
       `[STATION] = ${q(station)}`,
     ];
     if (tuAmos !== null) dk.push(`[START_DATE] >= ${tuAmos}`);
-    ghi(`▶ WP_HEADER: station ${station}, tình trạng ${tenTinhTrang(wpStatus)}`
+    ghi(`▶ WP_HEADER: station ${station}, tình trạng ${tenTinhTrang(wpStatus)} (WP_STATUS = ${wpStatus})`
       + (tuAmos !== null ? `, bắt đầu từ ${loc.tuNgay}` : '') + '…');
     let t = Date.now();
     const head = await query(
       `SELECT TOP ${n} * FROM ${T}.[WP_HEADER] WHERE ${dk.join(' AND ')} ORDER BY [START_DATE] DESC`
     );
     ghi(`✔ WP_HEADER — ${head.length} Work Package, ${Date.now() - t} ms`);
-    if (!head.length) return { ds: [] };
+    if (!head.length) return { ds: [], tongTruocLoc: 0, khongStatus0: await demStatus0(dk, ghi) };
 
-    // --- 2 + 3. HANGAR: RM_CALENDAR_ENTRY -> ADDRESS (khong co thi de trong) ---
+    // --- 2 + 3. HANGAR: RM_CALENDAR_ENTRY -> ADDRESS ---
+    //     Day KHONG con la cot trang tri: nghiep vu chi ra soat WP CO hangar,
+    //     nen buoc nay la BO LOC. Loi o day khong duoc nuot - nuot thi danh
+    //     sach ra RONG va nguoi dung tuong la "khong co WP nao".
     const wpIds = duyNhat(head.map((r) => layId(r, 'WPNO_I')));
-    let hangarTheoWp = new Map();
-    try {
-      const lich = await layTheoId('RM_CALENDAR_ENTRY', 'WPNO_I', wpIds, ghi,
-        ` AND [RESOURCE_TYPE_NOI] = ${RESOURCE_TYPE_HANGAR}`);
-      const addrIds = duyNhat(lich.map((r) => layId(r, 'RESOURCE_AMOS_KEY')));
-      const addr = await layTheoId('ADDRESS', 'ADDRESS_I', addrIds, ghi);
-      const tenTheoAddr = new Map(addr.map((r) => [layId(r, 'ADDRESS_I'), lay(r, 'VENDOR')]));
-      hangarTheoWp = new Map(lich.map((r) =>
-        [layId(r, 'WPNO_I'), tenTheoAddr.get(layId(r, 'RESOURCE_AMOS_KEY')) || '']));
-    } catch (e) {
-      // HANGAR chi la thong tin phu - thieu no KHONG duoc lam hong ca danh sach
-      ghi(`· Không lấy được HANGAR (${e.message.slice(0, 60)}) — bỏ qua cột này`);
+    const lich = await layTheoId('RM_CALENDAR_ENTRY', 'WPNO_I', wpIds, ghi,
+      ` AND [RESOURCE_TYPE_NOI] = ${RESOURCE_TYPE_HANGAR}`);
+    const addrIds = duyNhat(lich.map((r) => layId(r, 'RESOURCE_AMOS_KEY')));
+    const addr = await layTheoId('ADDRESS', 'ADDRESS_I', addrIds, ghi);
+    const tenTheoAddr = new Map(addr.map((r) => [layId(r, 'ADDRESS_I'), lay(r, 'VENDOR')]));
+    const hangarTheoWp = new Map();
+    for (const r of lich) {
+      const ten = tenTheoAddr.get(layId(r, 'RESOURCE_AMOS_KEY')) || '';
+      if (ten) hangarTheoWp.set(layId(r, 'WPNO_I'), ten);
     }
 
     const ds = head.map((r) => ({
@@ -293,9 +294,30 @@ module.exports = function taoWpValidator({ query, demoMode, docDemo }) {
       acReg: lay(r, COT_AC_REG),
       projectNo: lay(r, 'PROJECTNO'),
       hangar: hangarTheoWp.get(layId(r, 'WPNO_I')) || '',
-    }));
-    ghi(`✔ Xong — ${ds.length} Work Package`, true);
-    return { ds, chamTran: ds.length >= n };
+    })).filter((w) => w.hangar);      // CHI liet ke WP co du lieu hangar
+
+    ghi(`✔ Xong — ${ds.length}/${head.length} Work Package có hangar`, true);
+    return { ds, tongTruocLoc: head.length, chamTran: head.length >= n };
+  }
+
+  /**
+   * Khi tim ra 0 WP: dem thu neu BO dieu kien [STATUS] = 0 thi co bao nhieu.
+   * VI SAO: dieu kien nay duoc bung tu cau SQL cua nhanh IN PROGRESS sang ca
+   * ba tinh trang, chua ai xac nhan la dung cho CLOSED/PRELOAD. Neu no chinh
+   * la thu dang cat het ket qua thi phai noi ra ngay tren man hinh, thay vi de
+   * nguoi dung ngoi doan xem "khong co WP nao" that hay gia.
+   * Chi chay khi ket qua rong nen khong ton them gi o duong chay binh thuong.
+   */
+  async function demStatus0(dk, ghi) {
+    const conLai = dk.filter((d) => !d.startsWith('[STATUS] ='));
+    try {
+      const r = await query(
+        `SELECT COUNT(*) AS so FROM ${T}.[WP_HEADER] WHERE ${conLai.join(' AND ')}`
+      );
+      const so = Number(r[0] && r[0].so) || 0;
+      if (so) ghi(`· Nếu BỎ điều kiện [STATUS] = ${STATUS_HIEU_LUC} thì có ${so} WP khớp`);
+      return so;
+    } catch (_) { return null; }
   }
 
   function tenTinhTrang(n) {
@@ -566,8 +588,49 @@ module.exports = function taoWpValidator({ query, demoMode, docDemo }) {
     return { thieuCot: thieu, bang: kq, tinhTrangWp: WP_STATUS };
   }
 
+  /**
+   * CHAN DOAN: WP_HEADER that su co nhung cap (WP_STATUS, STATUS) nao, moi cap
+   * bao nhieu WP, va bao nhieu trong so do CO hangar.
+   * Dung de CHOT bang so lieu hai cho con phai phong doan:
+   *   1. `STATUS = 0` co dung cho ca CLOSED/PRELOAD khong (hay chi IN PROGRESS)
+   *   2. loc "chi WP co hangar" cat mat bao nhieu
+   */
+  async function soiTinhTrang(station = '') {
+    if (demoMode) return { note: 'Dang o DEMO_MODE, khong co du lieu that.' };
+    const dk = station ? ` WHERE [STATION] = ${q(station)}` : '';
+    const cap = await query(
+      `SELECT [WP_STATUS] AS wp_status, [STATUS] AS status, COUNT(*) AS so`
+      + ` FROM ${T}.[WP_HEADER]${dk} GROUP BY [WP_STATUS], [STATUS]`
+    );
+    const ds = cap
+      .map((r) => ({
+        wpStatus: Number(r.wp_status),
+        status: Number(r.status),
+        so: Number(r.so),
+        nghia: tenTinhTrang(r.wp_status),
+      }))
+      .sort((a, b) => b.so - a.so);
+    return {
+      station: station || '(tất cả)',
+      dangDung: {
+        wpStatus: WP_STATUS,
+        themDieuKien: `[STATUS] = ${STATUS_HIEU_LUC}`,
+        canhBao: 'Điều kiện STATUS lấy từ câu SQL nhánh IN PROGRESS, chưa xác nhận cho CLOSED/PRELOAD.',
+      },
+      capGiaTri: ds,
+      // Ba tinh trang dang dung co nam trong du lieu that khong?
+      doiChieu: Object.entries(WP_STATUS).map(([ten, ma]) => ({
+        ten,
+        ma,
+        soWp: ds.filter((r) => r.wpStatus === ma).reduce((a, r) => a + r.so, 0),
+        soWpKemStatus0: ds.filter((r) => r.wpStatus === ma && r.status === STATUS_HIEU_LUC)
+          .reduce((a, r) => a + r.so, 0),
+      })),
+    };
+  }
+
   return {
-    layWorkPackage, timWorkPackage, danhSachStation, soiCot,
-    WP_STATUS, tenTinhTrang,
+    layWorkPackage, timWorkPackage, soiCot, soiTinhTrang,
+    WP_STATUS, STATUS_HIEU_LUC, tenTinhTrang,
   };
 };

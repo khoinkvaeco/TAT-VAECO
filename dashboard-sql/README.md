@@ -245,7 +245,7 @@ kèm **5 dòng thật đã giải mã** để đối chiếu mắt thường. **
 - **Tab LGC đang THỬ NGHIỆM — ẩn khỏi thanh tab.** Ở trang `/` không thấy mục *🏬 LGC*; muốn vào phải **gõ thêm `/lgc`** trên thanh địa chỉ. Gỡ ẩn khi hết thử nghiệm = bỏ `hidden` ở nút `data-tab="lgc"` trong `index.html`.
 - **LGC KHÔNG tự chạy truy vấn.** Các truy vấn của LGC đọc AMOS qua linked server nên **chậm**. Mở tab (hoặc đổi tab con) chỉ hiện thẻ *⏸ Chưa chạy truy vấn*; chọn kỳ báo cáo / Station / Store / Trung tâm xong bấm **▶ Chạy kiểm tra** thì mới gọi API. **Đổi bộ lọc cũng KHÔNG tự chạy lại** — mọi tab con quay về trạng thái *chưa chạy* để không ai đọc nhầm số liệu của bộ lọc cũ. Trạng thái *đã chạy* nhớ theo từng tab con, nên chuyển qua lại giữa 3 tab con không phải chạy lại. Nút đổi thành *⏳ Đang chạy…* và khoá lại trong lúc truy vấn.
 - **Trang riêng cho LGC — `/lgc`** (`/lgc.html`; **`/kho`, `/kho.html` là địa chỉ cũ, vẫn chạy** để link đã gửi đi không chết): **cùng một `index.html`, cùng `script.js`, cùng service** — chỉ khác điểm vào. Frontend thấy đường dẫn này thì mở thẳng nhóm *LGC*, ẩn các tab TAT, đổi tiêu đề trang thành *VAECO · LGC*, và **không chạy truy vấn dashboard** (nặng, mà tab đó đang ẩn). Có link *“Xem dashboard TAT đầy đủ →”* để quay lại. ⚠️ Đây là **đơn giản hóa giao diện, KHÔNG phải phân quyền** — ai gõ `/` vẫn xem được đầy đủ, đúng như hiện nay (mọi đơn vị đều được xem). Muốn **chặn** thật thì phải chặn ở server như `adminGuard`.
-- **Trang riêng: Rà soát hồ sơ bảo dưỡng — `/wp`** (xem §7j). Bản web của công cụ Excel ở TTBD Nội trường HCM: chọn **station** → **tình trạng WP** (IN PROGRESS / PRELOAD / CLOSED; riêng CLOSED phải nhập **ngày bắt đầu từ**) → **bấm chọn WP** trong danh sách rồi bấm **Validate** (rà soát đúng WP đó, không tự chạy) → chấm 3 phép kiểm tra *Handover Check* · *Action Step Control* · *Reference Validation*, kèm tab hỏi đáp và tab tùy chỉnh quy tắc. Trang này **độc lập** với dashboard TAT (CSS riêng, không dùng Tailwind, không dùng `script.js`).
+- **Trang riêng: Rà soát hồ sơ bảo dưỡng — `/wp`** (xem §7j). Bản web của công cụ Excel ở TTBD Nội trường HCM: chọn **station** (HAN/SGN/DAD hoặc gõ tay) → **tình trạng WP** (IN PROGRESS / PRELOAD / CLOSED; riêng CLOSED phải nhập **ngày bắt đầu từ**) → **bấm chọn WP** trong danh sách (chỉ những WP có hangar) rồi bấm **Validate** (rà soát đúng WP đó, không tự chạy) → chấm 3 phép kiểm tra *Handover Check* · *Action Step Control* · *Reference Validation*, kèm tab hỏi đáp và tab tùy chỉnh quy tắc. Trang này **độc lập** với dashboard TAT (CSS riêng, không dùng Tailwind, không dùng `script.js`).
 - **Dashboard:** 9 KPI cards (kèm chip **▲▼ % so với kỳ liền trước** — TAT giảm hiện xanh, tăng hiện đỏ), 4 biểu đồ, bảng chi tiết + tìm kiếm + filter theo cột.
 - **TAT tổng (3 chặng) = TAT install + TAT US return + TAT CUVT** — ba chặng **liên tiếp** của cùng một vòng đời khí tài: (1) xuất kho → lắp lên tàu; (2) tháo khỏi tàu → trả unservice; (3) trả unservice → CUVT nhận. Biểu đồ theo Trung tâm vẽ **cột xếp chồng** nên chiều cao cả cột chính là TAT tổng của trung tâm đó (rê chuột thấy dòng *TAT tổng*); các trung tâm xếp theo tổng giảm dần.
 - **Số lượng xuất kho theo Trung tâm** — cột **xếp chồng**: **Đã trả** (xanh, `--good`) + **Chưa trả** (vàng, `--warning`) = tổng thiết bị xuất kho của trung tâm đó. Số lượng hiện **ở giữa từng đoạn** (đoạn thấp dưới 16px thì bỏ qua để chữ không chồng nhau), **tổng hiện trên đỉnh cột**; màu chữ tự chọn trắng/đen theo độ sáng nền nên đọc được ở cả theme sáng và tối. *Đã trả* = đã đối ứng (`deptAgg`) **cộng** các cặp đối ứng thủ công của trung tâm đó; *Chưa trả* = `notRecAgg`. Tổng tất cả các cột luôn **khớp KPI “Thiết bị xuất kho”**.
@@ -910,15 +910,26 @@ Ba phép kiểm tra (đúng theo tài liệu quy trình):
 
 Không gõ tay số WP. Trang hỏi theo đúng thứ tự nghiệp vụ:
 
-1. **Station** — danh sách lấy thật từ `SELECT DISTINCT STATION FROM WP_HEADER` (HAN/SGN/DAD
-   ghim lên đầu), nhớ lựa chọn lần trước trong `localStorage`.
-2. **Tình trạng WP** — `WP_HEADER.WP_STATUS`, luôn kèm `WP_HEADER.STATUS = 0`:
+1. **Station** — **HAN · SGN · DAD** cố định sẵn, cộng mục **“Khác…”** mở ô gõ tay (tự viết
+   hoa). Nhớ lựa chọn lần trước trong `localStorage`, kể cả trạm gõ tay.
+   *Trước đây mở trang là chạy `SELECT DISTINCT STATION FROM WP_HEADER` — một lượt quét cả
+   bảng qua linked server, chạy cho **mọi** người mở trang, chỉ để trả về 3–4 giá trị ai
+   cũng thuộc. Đã bỏ hẳn: mở trang giờ **không gọi API nào**.*
+2. **Tình trạng WP** — `WP_HEADER.WP_STATUS`:
 
    | Chọn | `WP_STATUS` |
    |---|---|
    | IN PROGRESS (đang thực hiện) | `112` |
    | PRELOAD (chuẩn bị) | `11` |
    | CLOSED (đã đóng) | `-2` |
+
+   > ⚠️ Câu lệnh còn kèm `WP_HEADER.STATUS = 0` (cột **khác** `WP_STATUS`). Điều kiện này
+   > lấy từ câu SQL nhánh **IN PROGRESS** và đang áp cho cả ba tình trạng — **chưa xác nhận
+   > cho CLOSED/PRELOAD**. Nếu nó cắt nhầm thì kết quả ra rỗng, nên khi danh sách rỗng
+   > chương trình **đếm thử lại không có điều kiện đó** và báo thẳng ra màn hình:
+   > *“nhưng nếu bỏ điều kiện [STATUS] = 0 thì có N WP”*. Muốn chốt bằng số liệu thì mở
+   > `GET /api/admin/diag/wp-status` — nó liệt kê phân bố thật của từng cặp
+   > (`WP_STATUS`, `STATUS`).
 
 3. **Bắt đầu từ ngày** — ô này **chỉ hiện khi chọn CLOSED**, và khi đó là **bắt buộc**:
    WP đã đóng tích lũy theo cả lịch sử AMOS, không có mốc ngày thì câu truy vấn quét toàn
@@ -927,8 +938,10 @@ Không gõ tay số WP. Trang hỏi theo đúng thứ tự nghiệp vụ:
    cột thô**, đúng nguyên tắc §7b, nên AMOS lọc được ngay tại chỗ.
 
 4. Bấm *Tìm Work Package* → hiện **bảng WP** (số tàu · loại tàu · hãng · ngày bắt đầu/kết
-   thúc · Hangar · project).
-5. **Bấm chọn một dòng** → dòng đó được tô sáng, nút *Validate* mở khoá.
+   thúc · Hangar · project). **Chỉ liệt kê WP CÓ dữ liệu hangar** — WP thiếu hangar bị bỏ,
+   và số bị bỏ được ghi rõ (*“đã bỏ N WP không có hangar”*) để không ai tưởng là mất dữ liệu.
+5. **Bấm chọn một dòng** → dòng đó được tô sáng, nút *Validate* mở khoá. (Danh sách chỉ có
+   đúng một WP thì tự chọn sẵn.)
 6. Bấm **✔ Validate WP đã chọn** → mới chạy rà soát, **đúng một WP đó**.
 
 > **Vì sao tách hẳn hai bước:** *Tìm* chỉ đọc `WP_HEADER` (một bảng, nhanh); *rà soát* đi
@@ -946,9 +959,10 @@ Không gõ tay số WP. Trang hỏi theo đúng thứ tự nghiệp vụ:
 Thẻ thông tin đầu trang hiện Station · Tình trạng · Ngày bắt đầu/kết thúc · Hãng khai thác ·
 Loại tàu · Số tàu · Project · Hangar.
 
-*Hangar* lấy qua `RM_CALENDAR_ENTRY` (`RESOURCE_TYPE_NOI = -13`) → `ADDRESS.VENDOR`. Đây chỉ
-là thông tin phụ nên nếu bước này lỗi thì **cột Hangar bỏ trống**, danh sách WP vẫn hiện —
-không để một cột phụ làm hỏng cả màn hình.
+*Hangar* lấy qua `RM_CALENDAR_ENTRY` (`RESOURCE_TYPE_NOI = -13`) → `ADDRESS.VENDOR`. Vì nay
+nó là **bộ lọc** chứ không còn là cột trang trí, lỗi ở bước này **không được nuốt**: nuốt
+thì danh sách ra rỗng và người dùng tưởng *“không có WP nào”* trong khi thật ra là AMOS
+đang lỗi.
 
 ### Vì sao phải tách truy vấn từng bảng
 
@@ -1109,9 +1123,9 @@ CREATE INDEX IX_SIGN_user ON [DWH_DB].[STG_AMOS].[SIGN] ([USER_SIGN]) INCLUDE ([
 | `GET /api/scan-config` | Đường dẫn 2 thư mục file scan + **trạng thái thật** (đọc được bao nhiêu file PDF / lỗi gì) + `canEdit`. **Mọi máy xem được.** |
 | `POST /api/admin/scan-config` | Đổi đường dẫn thư mục file scan (body `{ picking, receiving }`, để trống = dùng mặc định). Lưu vào `data/scan-folders.json` trên máy backend. **Chỉ IP quản trị.** |
 | `GET /api/part-onoff` | Tra cứu Part On/Off (`WO_PART_ON_OFF`, linked server DWH_DB). 6 tham số riêng, khớp **chính xác**, kết hợp AND (bỏ trống = bỏ qua): `event`, `labelno` (số) · `partno`, `serialno`, `partnoOff`, `serialnoOff` (chữ). Giờ VN = ghép `MUTATION` (số ngày AMOS) + `MUTATION_TIME` (ms từ 0h) + 7h thành 1 cột; `CREATED_DATE` cũng là số ngày AMOS → chỉ có ngày (không giờ). |
-| `GET /api/wp/stations` | Danh sách station có trong `WP_HEADER` (HAN/SGN/DAD ghim lên đầu). Cache 6 giờ. |
 | `GET /api/wp/tim` | Tìm Work Package theo `station` + `wpStatus` (`112` IN PROGRESS · `11` PRELOAD · `-2` CLOSED) + `tuNgay=YYYY-MM-DD` (**bắt buộc khi CLOSED**). Trả `{ ds[] }` gồm `wpnoI`, `wp`, ngày bắt đầu/kết thúc, loại tàu, project, hangar. |
 | `GET /api/wp?wp=…` | Trang *Rà soát hồ sơ bảo dưỡng* (`/wp`): lấy một Work Package từ AMOS bằng cách **tách truy vấn 11 bảng** (xem §7j). `wp` nhận `WPNO_I` (số) hoặc `WPNO` (tên). Trả `{ wp, thongTin, rows[], ms }` với mỗi dòng là 1 WO kèm danh sách workstep. Truy vấn **nặng** → có xếp hàng, gộp request trùng, nhật ký tiến trình (`&job=…`), cache 15 phút (`&nocache=1` để hỏi lại). |
+| `GET /api/admin/diag/wp-status` | Phân bố THẬT của cặp (`WP_STATUS`, `STATUS`) trong `WP_HEADER` (lọc được theo `?station=`), kèm đối chiếu 3 mã đang dùng. Dùng để chốt bằng số liệu xem `STATUS = 0` có đúng cho cả CLOSED/PRELOAD hay chỉ IN PROGRESS. **Chỉ đọc. Chỉ IP quản trị.** |
 | `GET /api/admin/diag/wp-columns` | Liệt kê **cột thật** của 11 bảng AMOS mà trang `/wp` dùng, kèm `thieuCot` = những cột mã nguồn cần mà bảng **không có** — để phát hiện ngay nếu AMOS đổi tên cột. **Chỉ đọc. Chỉ IP quản trị.** |
 | `POST /api/chat` | Trợ lý TAT. Body JSON `{ message, ...filter }` → `{ reply, intent }`. Số liệu/tra cứu tính bằng SQL nội bộ; câu chưa hiểu mới (tùy chọn) chuyển AI theo `LLM_PROVIDER`. |
 | `POST /api/chat/flag` | Người dùng **👎 Báo sai** một câu trả lời. Body `{ message }` → nhờ AI (nếu bật) trả lời lại + lưu kinh nghiệm; nếu AI tắt thì ghi nhận để admin review. |

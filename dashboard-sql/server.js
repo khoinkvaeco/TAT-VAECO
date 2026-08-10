@@ -7145,11 +7145,6 @@ const wpVal = require('./wp-validator')({
   query, demoMode: CONFIG.demoMode, docDemo: docDemoWp,
 });
 
-// Danh sach station co Work Package (doi rat it -> cache 6 gio).
-app.get('/api/wp/stations', cached(6 * 60 * 60 * 1000, async (req, res) => {
-  res.json(await wpVal.danhSachStation());
-}, { nang: false }));
-
 // Tim Work Package theo station + tinh trang (+ ngay bat dau, cho WP da dong).
 app.get('/api/wp/tim', cached(10 * 60 * 1000, async (req, res) => {
   const ghi = moNhatKy(req.query.job);
@@ -7211,6 +7206,12 @@ app.get('/api/wp', cached(15 * 60 * 1000, async (req, res) => {
 app.get('/api/admin/diag/wp-columns', h(async (req, res) => {
   if (CONFIG.demoMode) return res.json({ note: 'Dang o DEMO_MODE, khong co du lieu that.' });
   res.json(await wpVal.soiCot());
+}));
+
+// CHAN DOAN: WP_HEADER that su co nhung cap (WP_STATUS, STATUS) nao.
+// Dung de CHOT bang so lieu xem `STATUS = 0` co dung cho ca CLOSED/PRELOAD.
+app.get('/api/admin/diag/wp-status', h(async (req, res) => {
+  res.json(await wpVal.soiTinhTrang(String(req.query.station || '').trim().toUpperCase()));
 }));
 
 // Route tien: /wp -> trang ra soat ho so bao duong

@@ -34,7 +34,7 @@ const ENDPOINTS = [
   '/api/reports/manual-pair', '/api/reports/removed-before-installed',
   '/api/reports/other', '/api/reports/return-store-tat', '/api/reports/repair-admin',
   '/api/pickslip', '/api/receiving',
-  '/api/wp?wp=SQLCHECK-WP', '/api/wp/stations',
+  '/api/wp?wp=SQLCHECK-WP',
   '/api/wp/tim?station=SGN&wpStatus=112', '/api/wp/tim?station=SGN&wpStatus=-2&tuNgay=2026-01-01',
 ];
 
