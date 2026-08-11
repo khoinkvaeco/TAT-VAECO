@@ -2244,7 +2244,7 @@ const COLS_PICKSLIP = [
   // (Ngay phieu / Gio xuat kho / Sua cuoi) vi gio hay trong; nay server tra kem
   // issue_shown + issue_exact nen mot cot la du, khong dong nao mat ngay.
   {
-    title: 'Ngày giờ xuất kho', field: 'issue_shown', width: 170,
+    title: 'Ngày xuất kho', field: 'issue_shown', 
     headerFilter: 'input', headerFilterFunc: dateFilterFunc,
     headerTooltip: 'PICKSLIP_HEADER.PICKSLIP_DATE (ngày AMOS) + PICKSLIP_HEADER.BOOKING_TIME '
       + '(giờ lập phiếu) → giờ VN (+7). Thiếu BOOKING_TIME thì hiện NGÀY phiếu và ghi rõ '
@@ -2253,7 +2253,7 @@ const COLS_PICKSLIP = [
   },
   { title: 'Pickslip', field: 'pickslipno', headerFilter: 'input' },
   {
-    title: 'Event (WO)', field: 'seqno', formatter: fmtIntCell, hozAlign: 'right', width: 125,
+    title: 'Event (WO)', field: 'seqno', formatter: fmtIntCell, hozAlign: 'right', 
     headerTooltip: 'PICKSLIPSEQNO_I — số Event/WO của item xuất kho, dùng để khớp với phiếu trả về kho.',
   },
   {
@@ -2270,9 +2270,9 @@ const COLS_PICKSLIP = [
   },
   { title: 'Part No', field: 'partno', headerFilter: 'input' },
   { title: 'Serial / Batch', field: 'serialno', headerFilter: 'input' },
-  { title: 'SL đặt', field: 'qty_booked', hozAlign: 'right', sorter: 'number', width: 85 },
+{ title: 'Booked Qty', field: 'qty_booked', hozAlign: 'right', sorter: 'number' },
   {
-    title: 'SL hủy/trả', field: 'qty_canceled', hozAlign: 'right', sorter: 'number', width: 95,
+    title: 'Canceled Qty', field: 'qty_canceled', hozAlign: 'right', sorter: 'number', 
     formatter: (cell) => {
       const v = Number(cell.getValue()) || 0;
       if (!v) return '<span style="color:var(--text-muted)">0</span>';
@@ -2282,7 +2282,7 @@ const COLS_PICKSLIP = [
   },
   // --- Phieu TRA LAI KHO (chi co o dong loai Return) ---
   {
-    title: 'Phiếu trả', field: 'return_no', headerFilter: 'input', width: 120,
+    title: 'Return No', field: 'return_no', headerFilter: 'input',
     headerTooltip: 'HISTORY.HISTORYNO_I + “-R” (VM ∈ EA, TC) khớp theo PICKSLIPSEQNO_I. NOT FOUND = chưa có phiếu nhập lại kho.',
     formatter: (cell) => {
       const v = cell.getValue();
@@ -2298,7 +2298,7 @@ const COLS_PICKSLIP = [
   // nhau (hang quay nguoc ve kho) va cot "Loai" da phan biet roi, nen khong
   // bay ba cot rieng (Sua cuoi dong huy / Ngay tra kho / Gio tra kho) nua.
   {
-    title: 'Ngày giờ hủy / trả', field: 'huytra_shown', width: 190,
+    title: 'Ngày giờ hủy / trả', field: 'huytra_shown', 
     headerFilter: 'input', headerFilterFunc: dateFilterFunc,
     headerTooltip: 'Item return: giờ hàng về kho (HISTORY.MUTATION + MUTATION_TIME → giờ VN +7). '
       + 'Item cancel / hủy-trả khác: AMOS KHÔNG có cột riêng cho giờ hủy — đây là lần SỬA CUỐI '
@@ -2319,7 +2319,7 @@ const COLS_PICKSLIP = [
     // theo gio va "TAT return" tinh ngay tron) - hai con so cho cung mot viec,
     // lech nhau, va nguoi doc phai doan tin cot nao. Nay ca hai dau moc deu co
     // du ngay gio nen chi con MOT so: ngay chinh xac.
-    title: 'TAT return (ngày)', field: 'tat_return', hozAlign: 'right', sorter: 'number', width: 135,
+    title: 'TAT return', field: 'tat_return', hozAlign: 'right', sorter: 'number', 
     headerTooltip: 'Số NGÀY từ NGÀY GIỜ xuất kho (PICKSLIP_DATE + BOOKING_TIME) đến '
       + 'NGÀY GIỜ về kho (HISTORY.MUTATION + MUTATION_TIME). Tính từ mốc thật rồi quy ra '
       + 'ngày nên là số lẻ — 0.17 ngày ≈ 4 giờ.',
@@ -2333,19 +2333,19 @@ const COLS_PICKSLIP = [
     },
   },
   {
-    title: 'Scan phiếu trả', field: 'return_scan', hozAlign: 'center', width: 125, ...SCAN_HEADER_FILTER,
+    title: 'Scaned return', field: 'return_scan', hozAlign: 'center',  ...SCAN_HEADER_FILTER,
     headerTooltip: 'Có file <HISTORYNO_I>-….pdf trong thư mục scan hay chưa.',
     formatter: fmtScanCell,
   },
-  { title: 'Station', field: 'station', headerFilter: 'input', width: 90 },
-  { title: 'Store', field: 'store', headerFilter: 'input', width: 100 },
+  { title: 'Station', field: 'station', headerFilter: 'input', },
+  { title: 'Store', field: 'store', headerFilter: 'input', },
   { title: 'Vị trí lấy', field: 'location_from', headerFilter: 'input' },
   { title: 'Center', field: 'department', headerFilter: 'input' },
   { title: 'Mech sign', field: 'mech_sign', headerFilter: 'input' },
   { title: 'Booking sign', field: 'booking_sign', headerFilter: 'input' },
   { title: 'Receiver', field: 'receiver', headerFilter: 'input' },
   { title: 'Owner', field: 'owner', headerFilter: 'input' },
-  { title: 'Người tạo', field: 'created_by', headerFilter: 'input' },
+  //{ title: 'Người tạo', field: 'created_by', headerFilter: 'input' },
   { title: 'Ghi chú', field: 'remarks', headerFilter: 'input', widthGrow: 2 },
   { title: 'Nội dung phiếu', field: 'pickslip_text', headerFilter: 'input', widthGrow: 2 },
 ];
@@ -2718,28 +2718,28 @@ const COLS_RECEIVING = [
     formatter: fmtScanCell,
   },
   {
-    title: 'Ngày giờ receive', field: 'receive_time_vn', width: 170,
+    title: 'Ngày giờ', field: 'receive_time_vn', 
     headerFilter: 'input', headerFilterFunc: dateFilterFunc,
     headerTooltip: 'HISTORY.MUTATION (ngày AMOS) + HISTORY.MUTATION_TIME (số ms từ 0h) → giờ VN (+7). '
       + 'DEL_DATE chỉ có NGÀY nên vẫn dùng làm mốc kỳ báo cáo, còn cột này là mốc thật để đối chiếu.',
     formatter: (cell) => escapeHtml(fmtDateTime(cell.getValue())),
   },
-  { title: 'Voucher', field: 'voucherno', headerFilter: 'input', width: 120 },
+  { title: 'Receiving No', field: 'voucherno', headerFilter: 'input'},
   { title: 'Part No', field: 'partno', headerFilter: 'input' },
   { title: 'Serial / Batch', field: 'serialno', headerFilter: 'input' },
-  { title: 'SL', field: 'qty', hozAlign: 'right', sorter: 'number', width: 70 },
-  { title: 'Tình trạng', field: 'tinh_trang', headerFilter: 'input', width: 100 },
-  { title: 'Station', field: 'station', headerFilter: 'input', width: 90 },
-  { title: 'Store', field: 'store', headerFilter: 'input', width: 100 },
-  { title: 'Location', field: 'location', headerFilter: 'input', width: 110 },
-  { title: 'PSN', field: 'psn', headerFilter: 'input' },
+  { title: 'Qty', field: 'qty', hozAlign: 'right', sorter: 'number' },
+  { title: 'Cond', field: 'tinh_trang', headerFilter: 'input'},
+  { title: 'Station', field: 'station', headerFilter: 'input', width: 80 },
+  { title: 'Store', field: 'store', headerFilter: 'input', width: 80 },
+  { title: 'Location', field: 'location', headerFilter: 'input' },
+//  { title: 'PSN', field: 'psn', headerFilter: 'input' },
   { title: 'Label', field: 'labelno', headerFilter: 'input' },
-  { title: 'Mat class', field: 'mat_class', headerFilter: 'input', width: 100 },
+  { title: 'MC', field: 'mat_class', headerFilter: 'input' },
   { title: 'Order No', field: 'orderno', headerFilter: 'input' },
-  { title: 'Ngày order', field: 'orderdate', formatter: fmtDateCell, width: 110 },
-  { title: 'Owner', field: 'owner', headerFilter: 'input', width: 90 },
-  { title: 'Người tạo', field: 'created_by', headerFilter: 'input' },
-  { title: 'History No', field: 'historyno', formatter: fmtIntCell, hozAlign: 'right' },
+  { title: 'Order date', field: 'orderdate', formatter: fmtDateCell },
+  { title: 'Owner', field: 'owner', headerFilter: 'input' },
+  { title: 'Inspector', field: 'created_by', headerFilter: 'input' },
+  //{ title: 'History No', field: 'historyno', formatter: fmtIntCell, hozAlign: 'right' },
   { title: 'Rec detail', field: 'recdetailno', formatter: fmtIntCell, hozAlign: 'right' },
 ];
 
