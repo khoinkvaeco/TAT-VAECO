@@ -821,8 +821,8 @@ function pickslip(range, f) {
       tatReturnAvg: tats.length ? Math.round((tats.reduce((a, b) => a + b, 0) / tats.length) * 100) / 100 : null,
       tatReturnMax: tats.length ? Math.round(Math.max(...tats) * 100) / 100 : null,
       phieuMienScan,
-      bookingTimeDonVi: '(DEMO) mili giây',
-      bookingTimeMax: 86399999,
+      bookingTimeMax: 1439,           // BOOKING_TIME tinh bang PHUT ke tu 00:00
+      bookingTimeLoi: false,
       returnDaScan: [...retScan.values()].filter((v) => v === 'SCANNED').length,
       returnChuaScan: [...retScan.values()].filter((v) => v === 'CHUA_SCAN').length,
     },

@@ -2668,34 +2668,28 @@ async function pickslipTemp(range, f) {
     : 'TRY_CONVERT(datetime, r.[PICKSLIP_DATE])';
 
   // NGAY GIO XUAT KHO = PICKSLIP_HEADER.PICKSLIP_DATE + PICKSLIP_HEADER.BOOKING_TIME
-  //   (nghiep vu chi dinh). BOOKING_TIME la GIO LAP PHIEU that su.
+  //   (nghiep vu chi dinh). Tai lieu AMOS: "BOOKING_TIME - Time of confirmation /
+  //   booking in MINUTES since midnight" -> don vi la PHUT ke tu 00:00.
   //   ⚠️ TUYET DOI khong dung [MUTATION] cho viec nay: do la lan SUA CUOI cua
   //   ban ghi. Da do that (/api/admin/diag/mutation-time): tren PICKSLIP_BOOKED
   //   co dong MUTATION = 19943 (07/08/2026) trong khi CREATED_DATE = 19701
   //   (08/12/2025) - lech 8 THANG.
-  //
-  //   DON VI cua BOOKING_TIME khong duoc ghi o dau ca (MUTATION_TIME la mili
-  //   giay, con ACTION_TIME cua bang workstep lai la PHUT - cung mot AMOS ma
-  //   hai don vi). Nen KHONG DOAN: do gia tri LON NHAT trong chinh lo du lieu
-  //   vua keo ve roi suy ra don vi, va bao don vi da chon ra API + nhat ky de
-  //   kiem chung duoc.
+  //   ⚠️ Cung mot AMOS dung BA don vi thoi gian khac nhau, rat de nham:
+  //        PICKSLIP_HEADER.BOOKING_TIME = PHUT       (bang nay)
+  //        MUTATION_TIME                = MILI GIAY  (HISTORY, on_off...)
+  //        WO_TEXT_ACTION.ACTION_TIME   = PHUT       (trang /wp, §7j)
   const issueVN = (hBook && kindH === 'number')
     ? `CASE WHEN r.[H_BOOK] IS NULL THEN NULL ELSE DATEADD(HOUR, @tzOffset,
-           DATEADD(MILLISECOND,
-             TRY_CONVERT(int, TRY_CONVERT(bigint, TRY_CONVERT(float, r.[H_BOOK]) * @btNhan) % 86400000),
+           DATEADD(MINUTE,
+             TRY_CONVERT(int, TRY_CONVERT(bigint, TRY_CONVERT(float, r.[H_BOOK])) % 1440),
              ${amosDayTimeToVN('r.[PICKSLIP_DATE]', null)})) END`
     : 'NULL';
-  // Do don vi mot lan cho ca lo (khong phai tung dong): max < 1440 -> PHUT,
-  // < 86400 -> GIAY, con lai -> MILI GIAY.
+  // Don vi da chot theo tai lieu AMOS (phut), khong phai doan - nhung van do
+  // gia tri lon nhat de CANH BAO neu du lieu khong con la phut. Do tren #raw
+  // (bang tam, da o local) nen khong ton them luot hoi AMOS nao.
   const doDonViBooking = hBook ? `
-    DECLARE @btMax float = (SELECT MAX(TRY_CONVERT(float, r.[H_BOOK])) FROM #raw r);
-    DECLARE @btNhan float = CASE WHEN @btMax IS NULL THEN 0
-                                 WHEN @btMax < 1440  THEN 60000.0
-                                 WHEN @btMax < 86400 THEN 1000.0
-                                 ELSE 1.0 END;
-    SELECT @btMax AS bt_max, @btNhan AS bt_nhan;` : `
-    DECLARE @btNhan float = 0;
-    SELECT NULL AS bt_max, NULL AS bt_nhan;`;
+    SELECT MAX(TRY_CONVERT(float, r.[H_BOOK])) AS bt_max FROM #raw r;` : `
+    SELECT NULL AS bt_max;`;
   // Lan SUA CUOI cua ban ghi - chi de doi chieu, KHONG phai gio nghiep vu.
   const headerVN = hMut ? amosDayTimeToVN('r.[H_MUT]', hMutT ? 'r.[H_MUTT]' : null) : 'NULL';
   const bookedVN = bMut ? amosDayTimeToVN('r.[B_MUT]', bMutT ? 'r.[B_MUTT]' : null) : 'NULL';
@@ -3173,15 +3167,16 @@ async function qPickslip(range, f, ghi = () => {}) {
   const topPart = pick('partno').filter((r) => 'so_dong_huy' in r && !('station' in r));
   const rows = sets.find((s) => s.length && 'pickslipno' in s[0] && 'remarks' in s[0]) || [];
 
-  // DON VI cua BOOKING_TIME do duoc o buoc 1b - BAO RA, khong de am tham.
-  // Doan sai don vi thi gio xuat kho van hien ra dep de nhung sai hoan toan,
-  // nen con so nay phai nhin thay duoc ca o nhat ky lan o API.
-  const btRow = (sets.find((s) => s.length && 'bt_nhan' in s[0]) || [])[0] || {};
-  const btNhan = Number(btRow.bt_nhan) || 0;
-  const btDonVi = btNhan === 60000 ? 'phút' : btNhan === 1000 ? 'giây'
-    : btNhan === 1 ? 'mili giây' : 'không có BOOKING_TIME';
-  ghi(`Giờ xuất kho: PICKSLIP_DATE + BOOKING_TIME — đơn vị đo được là ${btDonVi}`
-    + (btRow.bt_max != null ? ` (giá trị lớn nhất trong kỳ: ${btRow.bt_max})` : ''));
+  // BOOKING_TIME tinh bang PHUT ke tu 00:00 (tai lieu AMOS). Van do gia tri lon
+  // nhat de CANH BAO neu du lieu khong con la phut: sai don vi thi gio xuat kho
+  // van hien ra dep de nhung sai hoan toan, khong co gi bao loi.
+  const btMax = ((sets.find((s) => s.length && 'bt_max' in s[0]) || [])[0] || {}).bt_max;
+  const btLoi = btMax != null && Number(btMax) >= 1440;
+  if (btLoi) {
+    ghi(`⚠ BOOKING_TIME có giá trị ${btMax} ≥ 1440 — KHÔNG còn là phút kể từ 00:00. `
+      + 'Giờ xuất kho đang sai, báo lại để chỉnh đơn vị.');
+    console.warn(`[PICKSLIP] BOOKING_TIME max = ${btMax} (>= 1440) - don vi khong con la phut`);
+  }
 
   // --- DOI CHIEU FILE SCAN + PHIEU TRA + TAT RETURN (tinh o Node, khong SQL) ---
   const scan = await buoc(ghi, 'Đối chiếu file scan + tra phiếu trả trong HISTORY + tính TAT',
@@ -3217,8 +3212,8 @@ async function qPickslip(range, f, ghi = () => {}) {
       tatReturnAvg: sc.tatReturnAvg,
       tatReturnMax: sc.tatReturnMax,
       phieuMienScan: sc.phieuMienScan,
-      bookingTimeDonVi: btDonVi,
-      bookingTimeMax: btRow.bt_max ?? null,
+      bookingTimeMax: btMax ?? null,
+      bookingTimeLoi: btLoi,
       returnDaScan: sc.returnDaScan,
       returnChuaScan: sc.returnChuaScan,
     },
