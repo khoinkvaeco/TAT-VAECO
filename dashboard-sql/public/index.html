@@ -377,15 +377,15 @@
 
         <div class="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-5">
           <div class="card">
-            <h3 class="card-title">Số dòng xuất kho theo Trung tâm <span class="unit">(thực xuất / cancel / return)</span></h3>
+            <h3 class="card-title">Số item xuất kho theo Trung tâm <span class="unit">(xuất / cancel / return)</span></h3>
             <div class="chart-box"><canvas id="chartPickDept"></canvas></div>
           </div>
           <div class="card">
-            <h3 class="card-title">Xu hướng theo ngày <span class="unit">(số dòng · % hủy)</span></h3>
+            <h3 class="card-title">Xu hướng theo ngày <span class="unit">(số item · % hủy/trả)</span></h3>
             <div class="chart-box"><canvas id="chartPickDay"></canvas></div>
           </div>
           <div class="card">
-            <h3 class="card-title">Top 10 Part No bị hủy nhiều nhất <span class="unit">(số dòng)</span></h3>
+            <h3 class="card-title">Top 10 Part No bị hủy/trả nhiều nhất <span class="unit">(số item)</span></h3>
             <div class="chart-box"><canvas id="chartPickPart"></canvas></div>
           </div>
           <div class="card">
@@ -393,8 +393,8 @@
             <div class="chart-box"><canvas id="chartPickTat"></canvas></div>
           </div>
           <div class="card xl:col-span-2">
-            <h3 class="card-title">TAT hoàn kho theo Trung tâm
-              <span class="unit">(giờ — trung bình và lâu nhất, chính xác đến giờ)</span></h3>
+            <h3 class="card-title">TAT return theo Trung tâm
+              <span class="unit">(ngày — trung bình và lâu nhất, tính từ ngày giờ thật)</span></h3>
             <div class="chart-box"><canvas id="chartPickTatTt"></canvas></div>
           </div>
         </div>
@@ -402,19 +402,19 @@
         <div class="card">
           <div class="flex items-center justify-between gap-3 flex-wrap mb-3">
             <div>
-              <h3 class="card-title mb-0">Chi tiết dòng xuất kho</h3>
+              <h3 class="card-title mb-0">Chi tiết item xuất kho</h3>
               <p id="pickDesc" class="text-xs text-muted mt-0.5"></p>
             </div>
             <div class="flex items-center gap-2">
               <label class="flex items-center gap-1.5 text-sm cursor-pointer select-none"
-                     title="Chỉ hiện các dòng có QTY_CANCELED > 0">
+                     title="Chỉ hiện các item có QTY_CANCELED ≠ 0 (cancel / return / hủy-trả khác)">
                 <input type="checkbox" id="pickOnlyCancel" class="w-4 h-4" />
-                <span>Chỉ dòng bị hủy</span>
+                <span>Chỉ item hủy/trả</span>
               </label>
               <label class="flex items-center gap-1.5 text-sm cursor-pointer select-none"
-                     title="Chỉ hiện các dòng chưa tìm thấy file scan PDF trong thư mục">
+                     title="Chỉ hiện các item chưa tìm thấy file scan PDF trong thư mục">
                 <input type="checkbox" id="pickOnlyNoScan" class="w-4 h-4" />
-                <span>Chỉ dòng chưa scan</span>
+                <span>Chỉ item chưa scan</span>
               </label>
               <input id="pickSearch" type="text" placeholder="Tìm kiếm…" class="finput" />
               <span id="pickCount" class="text-xs text-muted"></span>
@@ -442,7 +442,7 @@
             <div class="chart-box"><canvas id="chartRecvStore"></canvas></div>
           </div>
           <div class="card xl:col-span-2">
-            <h3 class="card-title">Xu hướng theo ngày nhập <span class="unit">(số dòng · DEL_DATE)</span></h3>
+            <h3 class="card-title">Xu hướng theo ngày receive <span class="unit">(số item · DEL_DATE)</span></h3>
             <div class="chart-box"><canvas id="chartRecvDay"></canvas></div>
           </div>
         </div>
@@ -450,7 +450,7 @@
         <div class="card">
           <div class="flex items-center justify-between gap-3 flex-wrap mb-3">
             <div>
-              <h3 class="card-title mb-0">Chi tiết phiếu nhập kho</h3>
+              <h3 class="card-title mb-0">Chi tiết item receive</h3>
               <p id="recvDesc" class="text-xs text-muted mt-0.5"></p>
             </div>
             <div class="flex items-center gap-2">

@@ -2138,9 +2138,14 @@ let pickTable = null;
 let pickTotalRows = 0;
 let pickLoadSeq = 0;
 
+// THUAT NGU THONG NHAT cho toan bo tab LGC:
+//   Phiếu xuất  - item ra khoi kho binh thuong
+//   Cancel      - huy truoc khi hang ra khoi kho
+//   Return      - hang da ra kho roi quay ve
+//   Receive     - nhap kho (tab Receiving)
 const PICK_LOAI_LABEL = {
   CANCEL: 'Cancel', RETURN: 'Return',
-  KHAC: 'Hủy/trả khác', NORMAL: 'Bình thường',
+  KHAC: 'Hủy/trả khác', NORMAL: 'Phiếu xuất',
 };
 
 // --- Doi chieu FILE SCAN PDF (dung chung cho tab Xuat kho va tab Receiving) ---
@@ -2168,12 +2173,23 @@ function fmtScanCell(cell) {
     const c = cssVar('--critical');
     return `<span class="tat-badge" style="background:${c}22;color:${c}">Chưa scan</span>`;
   }
+  // Item cancel: hang khong ra khoi kho nen khong co phieu de ky va luu.
+  // Phai noi RO "khong can" thay vi de trong hay hien "Chua scan" - de trong
+  // thi nguoi doc tuong thieu du lieu, con "Chua scan" la buoc toan oan.
+  if (v === 'KHONG_CAN') {
+    return '<span style="color:var(--text-muted)" title="Item cancel — hàng không ra khỏi kho '
+      + 'nên không có phiếu để ký và lưu">không cần</span>';
+  }
   return '<span style="color:var(--text-muted)" title="Không đọc được thư mục scan">—</span>';
 }
 
 const SCAN_HEADER_FILTER = {
   headerFilter: 'list',
-  headerFilterParams: { values: { '': 'Tất cả', SCANNED: 'Đã scan', CHUA_SCAN: 'Chưa scan' } },
+  headerFilterParams: {
+    values: {
+      '': 'Tất cả', SCANNED: 'Đã scan', CHUA_SCAN: 'Chưa scan', KHONG_CAN: 'Không cần',
+    },
+  },
 };
 
 /**
@@ -2213,12 +2229,12 @@ const COLS_PICKSLIP = [
       if (v === 'CANCEL') return `<span class="tat-badge" style="background:${cssVar('--warning')}22;color:${cssVar('--warning')}">Cancel</span>`;
       if (v === 'RETURN') return `<span class="tat-badge" style="background:${cssVar('--series-4')}22;color:${cssVar('--series-4')}">Return</span>`;
       if (v === 'KHAC') return `<span class="tat-badge" style="background:${cssVar('--series-5')}22;color:${cssVar('--series-5')}" title="QTY_CANCELED ≠ 0 nhưng PICKSLIP_TEXT không có từ khóa cancel/return">Hủy/trả khác</span>`;
-      return '<span style="color:var(--text-muted)">Bình thường</span>';
+      return '<span style="color:var(--text-muted)">Phiếu xuất</span>';
     },
     headerFilter: 'list',
     headerFilterParams: {
       values: {
-        '': 'Tất cả', NORMAL: 'Bình thường', CANCEL: 'Cancel',
+        '': 'Tất cả', NORMAL: 'Phiếu xuất', CANCEL: 'Cancel',
         RETURN: 'Return', KHAC: 'Hủy/trả khác',
       },
     },
@@ -2228,17 +2244,17 @@ const COLS_PICKSLIP = [
   // (Ngay phieu / Gio xuat kho / Sua cuoi) vi gio hay trong; nay server tra kem
   // issue_shown + issue_exact nen mot cot la du, khong dong nao mat ngay.
   {
-    title: 'Giờ xuất kho', field: 'issue_shown', width: 165,
+    title: 'Ngày giờ xuất kho', field: 'issue_shown', width: 170,
     headerFilter: 'input', headerFilterFunc: dateFilterFunc,
-    headerTooltip: 'Giờ chỉ có khi MUTATION của phiếu RƠI ĐÚNG vào ngày phiếu (PICKSLIP_DATE) — '
-      + 'khi đó MUTATION_TIME mới đúng là giờ lập phiếu. Không có giờ thì hiện NGÀY phiếu '
-      + 'và ghi rõ “chỉ có ngày” (không bao giờ trình bày 00:00 như thể đó là giờ thật).',
+    headerTooltip: 'PICKSLIP_HEADER.PICKSLIP_DATE (ngày AMOS) + PICKSLIP_HEADER.BOOKING_TIME '
+      + '(giờ lập phiếu) → giờ VN (+7). Thiếu BOOKING_TIME thì hiện NGÀY phiếu và ghi rõ '
+      + '“chỉ có ngày” (không bao giờ trình bày 00:00 như thể đó là giờ thật).',
     formatter: fmtNgayGioGop('issue_exact'),
   },
   { title: 'Pickslip', field: 'pickslipno', headerFilter: 'input' },
   {
     title: 'Event (WO)', field: 'seqno', formatter: fmtIntCell, hozAlign: 'right', width: 125,
-    headerTooltip: 'PICKSLIPSEQNO_I — số Event/WO của dòng xuất kho, dùng để khớp với phiếu trả về kho.',
+    headerTooltip: 'PICKSLIPSEQNO_I — số Event/WO của item xuất kho, dùng để khớp với phiếu trả về kho.',
   },
   {
     title: 'Phiếu xuất', field: 'picking_listno', formatter: fmtIntCell, hozAlign: 'right',
@@ -2247,14 +2263,16 @@ const COLS_PICKSLIP = [
   },
   {
     title: 'Scan', field: 'scan', hozAlign: 'center', width: 105, ...SCAN_HEADER_FILTER,
-    headerTooltip: 'Có file <PICKING_LISTNO_I>-….pdf trong thư mục scan hay chưa. “—” = không đọc được thư mục.',
+    headerTooltip: 'Có file <PICKING_LISTNO_I>-….pdf trong thư mục scan hay chưa. '
+      + 'Item CANCEL ghi “không cần” — hàng không ra khỏi kho thì không có phiếu để ký và lưu. '
+      + '“—” = không đọc được thư mục.',
     formatter: fmtScanCell,
   },
   { title: 'Part No', field: 'partno', headerFilter: 'input' },
   { title: 'Serial / Batch', field: 'serialno', headerFilter: 'input' },
   { title: 'SL đặt', field: 'qty_booked', hozAlign: 'right', sorter: 'number', width: 85 },
   {
-    title: 'SL hủy', field: 'qty_canceled', hozAlign: 'right', sorter: 'number', width: 85,
+    title: 'SL hủy/trả', field: 'qty_canceled', hozAlign: 'right', sorter: 'number', width: 95,
     formatter: (cell) => {
       const v = Number(cell.getValue()) || 0;
       if (!v) return '<span style="color:var(--text-muted)">0</span>';
@@ -2280,12 +2298,11 @@ const COLS_PICKSLIP = [
   // nhau (hang quay nguoc ve kho) va cot "Loai" da phan biet roi, nen khong
   // bay ba cot rieng (Sua cuoi dong huy / Ngay tra kho / Gio tra kho) nua.
   {
-    title: 'Giờ hủy / trả', field: 'huytra_shown', width: 185,
+    title: 'Ngày giờ hủy / trả', field: 'huytra_shown', width: 190,
     headerFilter: 'input', headerFilterFunc: dateFilterFunc,
-    headerTooltip: 'Dòng Return: giờ hàng về kho (HISTORY.MUTATION + MUTATION_TIME → giờ VN +7); '
-      + 'thiếu MUTATION_TIME thì hiện NGÀY kèm “chỉ có ngày”. '
-      + 'Dòng Cancel / Hủy-trả khác: AMOS KHÔNG có cột riêng cho giờ hủy — đây là lần SỬA CUỐI '
-      + 'của dòng, mốc gần nhất có thể coi là lúc hủy nhưng KHÔNG chắc chắn, nên ghi rõ “(sửa cuối)”.',
+    headerTooltip: 'Item return: giờ hàng về kho (HISTORY.MUTATION + MUTATION_TIME → giờ VN +7). '
+      + 'Item cancel / hủy-trả khác: AMOS KHÔNG có cột riêng cho giờ hủy — đây là lần SỬA CUỐI '
+      + 'của item, mốc gần nhất có thể coi là lúc hủy nhưng KHÔNG chắc chắn, nên ghi rõ “(sửa cuối)”.',
     formatter: (cell) => {
       const r = cell.getRow().getData();
       const s = fmtDateTime(cell.getValue());
@@ -2298,27 +2315,21 @@ const COLS_PICKSLIP = [
     },
   },
   {
-    title: 'TAT hoàn kho (giờ)', field: 'tat_gio', hozAlign: 'right', sorter: 'number', width: 150,
-    headerTooltip: 'Số GIỜ từ lúc xuất kho đến lúc hàng về kho — chính xác đến giờ, '
-      + 'khác với cột “TAT return” chỉ tính ngày tròn.',
-    formatter: (cell) => {
-      const v = cell.getValue();
-      if (v === null || v === undefined || v === '') return '';
-      const n = Number(v);
-      const c = n > 24 * 14 ? cssVar('--critical') : (n > 24 * 7 ? cssVar('--warning') : cssVar('--good'));
-      const nhan = n < 24 ? `${n} giờ` : `${Math.round((n / 24) * 10) / 10} ngày`;
-      return `<span class="tat-badge" style="background:${c}22;color:${c}" title="${n} giờ">${nhan}</span>`;
-    },
-  },
-  {
-    title: 'TAT return', field: 'tat_return', hozAlign: 'right', sorter: 'number', width: 105,
-    headerTooltip: 'Số NGÀY từ ngày xuất kho (PICKSLIP_DATE) đến ngày trả về kho (HISTORY.MUTATION).',
+    // MOT cot TAT duy nhat. Truoc day co hai cot ("TAT hoan kho (gio)" tinh
+    // theo gio va "TAT return" tinh ngay tron) - hai con so cho cung mot viec,
+    // lech nhau, va nguoi doc phai doan tin cot nao. Nay ca hai dau moc deu co
+    // du ngay gio nen chi con MOT so: ngay chinh xac.
+    title: 'TAT return (ngày)', field: 'tat_return', hozAlign: 'right', sorter: 'number', width: 135,
+    headerTooltip: 'Số NGÀY từ NGÀY GIỜ xuất kho (PICKSLIP_DATE + BOOKING_TIME) đến '
+      + 'NGÀY GIỜ về kho (HISTORY.MUTATION + MUTATION_TIME). Tính từ mốc thật rồi quy ra '
+      + 'ngày nên là số lẻ — 0.17 ngày ≈ 4 giờ.',
     formatter: (cell) => {
       const v = cell.getValue();
       if (v === null || v === undefined || v === '') return '';
       const n = Number(v);
       const c = n > 14 ? cssVar('--critical') : (n > 7 ? cssVar('--warning') : cssVar('--good'));
-      return `<span class="tat-badge" style="background:${c}22;color:${c}">${n} ngày</span>`;
+      const gio = Math.round(n * 24 * 10) / 10;
+      return `<span class="tat-badge" style="background:${c}22;color:${c}" title="${gio} giờ">${n} ngày</span>`;
     },
   },
   {
@@ -2364,56 +2375,54 @@ function renderKpiCards(sel, cards) {
 function renderPickKpis(k) {
   const n = (v) => (v === null || v === undefined ? '—' : v);
   renderKpiCards('#pickKpi', [
-    { label: 'Số dòng xuất', value: k.soDong, unit: 'dòng', accent: '--series-1' },
-    { label: 'Thực xuất', value: k.soDongThuc, unit: 'dòng', accent: '--good' },
-    { label: 'Cancel', value: k.soCancel, unit: 'dòng', accent: '--warning' },
-    { label: 'Return', value: k.soReturn, unit: 'dòng', accent: '--series-4' },
+    { label: 'Tổng item', value: k.soDong, unit: 'item', accent: '--series-1' },
     {
-      label: 'Hủy/trả khác', value: k.soKhac ?? 0, unit: 'dòng', accent: '--series-5',
+      label: 'Item xuất', value: k.soDongThuc, unit: 'item', accent: '--good',
+      title: 'Item thực sự ra khỏi kho (không bị cancel / return).',
+    },
+    {
+      label: 'Item cancel', value: k.soCancel, unit: 'item', accent: '--warning',
+      title: 'QTY_CANCELED ≠ 0 và PICKSLIP_TEXT kết thúc bằng “cancel” — hàng KHÔNG ra khỏi kho.',
+    },
+    {
+      label: 'Item return', value: k.soReturn, unit: 'item', accent: '--series-4',
+      title: 'QTY_CANCELED ≠ 0 và PICKSLIP_TEXT kết thúc bằng “return” — hàng đã ra kho rồi quay về.',
+    },
+    {
+      label: 'Item hủy/trả khác', value: k.soKhac ?? 0, unit: 'item', accent: '--series-5',
       title: 'QTY_CANCELED ≠ 0 nhưng PICKSLIP_TEXT không có từ khóa cancel/return. '
-        + 'VẪN được tính là hủy/trả (trước đây bị xếp nhầm vào “Thực xuất”).',
+        + 'VẪN được tính là hủy/trả (trước đây bị xếp nhầm vào “Item xuất”).',
     },
     { label: 'Tỷ lệ hủy/trả', value: k.tyLeHuy, unit: '%', accent: '--critical' },
     { label: 'Phiếu có hủy/trả', value: `${k.soPhieuCoHuy}/${k.soPhieu}`, unit: `(${k.tyLePhieuCoHuy}%)`, accent: '--series-3' },
     {
       label: 'Đã scan', value: `${n(k.daScan)}/${n(k.tongPhieuScan)}`, unit: `phiếu (${k.tyLeScan ?? 0}%)`,
       accent: (k.chuaScan === 0 && k.tongPhieuScan > 0) ? '--good' : '--warning',
-      title: 'Số PICKING LIST đã có file PDF trong thư mục scan, tính trên TOÀN KỲ '
+      title: 'Số PHIẾU XUẤT đã có file PDF trong thư mục scan, tính trên TOÀN KỲ '
         + '(không phụ thuộc bảng chi tiết bên dưới — bảng đó bị cắt ở MAX_ROWS). '
+        + 'Phiếu chỉ toàn item cancel KHÔNG tính vào đây (hàng không ra khỏi kho thì không có gì để scan). '
         + 'Yêu cầu nghiệp vụ: phải đạt 100%.',
     },
     {
       label: 'Chưa scan', value: n(k.chuaScan), unit: 'phiếu', accent: k.chuaScan ? '--critical' : '--good',
-      title: 'Số PICKING LIST chưa tìm thấy file PDF. Đếm theo PHIẾU (một phiếu nhiều dòng '
+      title: 'Số PHIẾU XUẤT chưa tìm thấy file PDF. Đếm theo PHIẾU (một phiếu nhiều item '
         + 'chỉ cần một file), tính trên toàn kỳ. Đây là số file thực sự còn phải scan.',
     },
     {
-      label: 'TAT hoàn kho TB', value: n(k.tatGioAvg), unit: 'giờ', accent: '--series-2',
-      title: 'Trung bình số GIỜ từ lúc xuất kho đến lúc hàng về kho. '
-        + 'Thiếu giờ thật ở đầu nào thì lùi về NGÀY ở đầu đó (sai số tối đa 1 ngày). '
-        + 'Xem KPI “Chính xác đến giờ” bên cạnh để biết bao nhiêu dòng có giờ thật cả hai đầu.',
-    },
-    {
-      label: 'Chính xác đến giờ',
-      value: `${k.soChinhXacGio ?? 0}/${k.soCoTat ?? 0}`,
-      unit: `dòng (${k.soCoTat ? Math.round(((k.soChinhXacGio || 0) / k.soCoTat) * 100) : 0}%)`,
-      accent: '--series-3',
-      title: 'Số dòng có GIỜ thật ở CẢ HAI đầu (xuất kho và về kho). '
-        + 'Các dòng còn lại lùi về ngày nên TAT có thể lệch trong phạm vi 1 ngày.',
-    },
-    {
       label: 'TAT return TB', value: n(k.tatReturnAvg), unit: 'ngày', accent: '--series-2',
-      title: 'Trung bình số ngày từ khi xuất kho đến khi trả về kho — tính trên TOÀN KỲ, '
-        + 'chỉ gồm dòng Return đã tra được phiếu nhập lại.',
+      title: 'Trung bình số NGÀY từ lúc xuất kho đến lúc hàng về kho — tính trên TOÀN KỲ, '
+        + 'chỉ gồm item return đã tra được phiếu trả. '
+        + 'Cả hai mốc đều có đủ ngày giờ (xuất kho = PICKSLIP_DATE + BOOKING_TIME; '
+        + 'về kho = MUTATION + MUTATION_TIME) nên số ngày là số LẺ chính xác, không làm tròn.',
     },
     {
       label: 'TAT return lâu nhất', value: n(k.tatReturnMax), unit: 'ngày', accent: '--warning',
-      title: 'Dòng Return có thời gian nằm ngoài kho lâu nhất trong kỳ.',
+      title: 'Item return có thời gian nằm ngoài kho lâu nhất trong kỳ.',
     },
     {
       label: 'Return có phiếu trả', value: `${n(k.returnCoPhieu)}/${(k.returnCoPhieu || 0) + (k.returnKhongPhieu || 0)}`,
-      unit: 'dòng', accent: '--series-4',
-      title: 'Số dòng Return tra được số phiếu nhập lại kho trong HISTORY (VM ∈ EA, TC), toàn kỳ. '
+      unit: 'item', accent: '--series-4',
+      title: 'Số item return tra được số phiếu trả trong HISTORY (VM ∈ EA, TC), toàn kỳ. '
         + 'Không tra được thì cột "Phiếu trả" ghi NOT FOUND — khi đó không kiểm được scan của phiếu trả.',
     },
     {
@@ -2434,7 +2443,7 @@ function renderPickCharts(c) {
     data: {
       labels: c.byDept.labels,
       datasets: [
-        { label: 'Thực xuất', data: c.byDept.thuc, backgroundColor: cssVar('--good') },
+        { label: 'Phiếu xuất', data: c.byDept.thuc, backgroundColor: cssVar('--good') },
         { label: 'Cancel', data: c.byDept.cancel, backgroundColor: cssVar('--warning') },
         { label: 'Return', data: c.byDept.ret, backgroundColor: cssVar('--series-4') },
         { label: 'Hủy/trả khác', data: c.byDept.khac || [], backgroundColor: cssVar('--series-5'), borderRadius: 4 },
@@ -2471,9 +2480,9 @@ function renderPickCharts(c) {
     data: {
       labels: c.byDay.labels,
       datasets: [
-        { type: 'bar', label: 'Số dòng', data: c.byDay.soDong, backgroundColor: cssVar('--series-1'), borderRadius: 3, yAxisID: 'y' },
+        { type: 'bar', label: 'Số item', data: c.byDay.soDong, backgroundColor: cssVar('--series-1'), borderRadius: 3, yAxisID: 'y' },
         {
-          type: 'line', label: '% hủy', data: c.byDay.tyLe, yAxisID: 'y1',
+          type: 'line', label: '% hủy/trả', data: c.byDay.tyLe, yAxisID: 'y1',
           borderColor: cssVar('--warning'), backgroundColor: cssVar('--warning'),
           borderWidth: 2, tension: .25, pointRadius: 2,
         },
@@ -2484,7 +2493,7 @@ function renderPickCharts(c) {
       interaction: { mode: 'index', intersect: false },
       scales: {
         x: d.common.scales.x,
-        y: { ...d.common.scales.y, title: { display: true, text: 'Số dòng', color: cssVar('--text-secondary') } },
+        y: { ...d.common.scales.y, title: { display: true, text: 'Số item', color: cssVar('--text-secondary') } },
         y1: {
           position: 'right', beginAtZero: true, grid: { drawOnChartArea: false },
           ticks: { color: cssVar('--text-secondary'), callback: (v) => v + '%' },
@@ -2499,7 +2508,7 @@ function renderPickCharts(c) {
     type: 'bar',
     data: {
       labels: c.topPart.labels,
-      datasets: [{ label: 'Số dòng bị hủy', data: c.topPart.values, backgroundColor: cssVar('--warning'), borderRadius: 4 }],
+      datasets: [{ label: 'Số item bị hủy/trả', data: c.topPart.values, backgroundColor: cssVar('--warning'), borderRadius: 4 }],
     },
     options: {
       ...d.common,
@@ -2518,7 +2527,7 @@ function renderPickCharts(c) {
     data: {
       labels: tat.labels,
       datasets: [{
-        label: 'Số dòng Return',
+        label: 'Số item return',
         data: tat.values,
         backgroundColor: tat.labels.map((_, i) => cssVar(i >= 4 ? '--critical' : (i >= 2 ? '--warning' : '--good'))),
         borderRadius: 4,
@@ -2544,16 +2553,16 @@ function renderPickCharts(c) {
     plugins: [stackTotalLabel],
   });
 
-  // TAT hoan kho theo Trung tam - don vi GIO (chinh xac nho MUTATION_TIME)
+  // TAT return theo Trung tam - don vi NGAY (tinh tu ngay-gio that o ca hai dau)
   destroyChart('pickTatTt');
-  const tt = c.tatTheoTt || { labels: [], gioTb: [], gioMax: [], soDong: [] };
+  const tt = c.tatTheoTt || { labels: [], ngayTb: [], ngayMax: [], soItem: [] };
   charts.pickTatTt = new Chart($('#chartPickTatTt'), {
     type: 'bar',
     data: {
       labels: tt.labels,
       datasets: [
-        { label: 'TAT trung bình (giờ)', data: tt.gioTb, backgroundColor: cssVar('--series-1'), borderRadius: 4 },
-        { label: 'Lâu nhất (giờ)', data: tt.gioMax, backgroundColor: cssVar('--warning'), borderRadius: 4 },
+        { label: 'TAT trung bình (ngày)', data: tt.ngayTb, backgroundColor: cssVar('--series-1'), borderRadius: 4 },
+        { label: 'Lâu nhất (ngày)', data: tt.ngayMax, backgroundColor: cssVar('--warning'), borderRadius: 4 },
       ],
     },
     options: {
@@ -2565,11 +2574,11 @@ function renderPickCharts(c) {
           mode: 'index', intersect: false,
           callbacks: {
             label: (it) => {
-              const g = Number(it.parsed.y) || 0;
-              const ngay = Math.round((g / 24) * 10) / 10;
-              return `${it.dataset.label}: ${g} giờ (~${ngay} ngày)`;
+              const ngay = Number(it.parsed.y) || 0;
+              const gio = Math.round(ngay * 24 * 10) / 10;
+              return `${it.dataset.label}: ${ngay} ngày (~${gio} giờ)`;
             },
-            footer: (items) => `Số dòng Return: ${tt.soDong[items[0].dataIndex] ?? 0}`,
+            footer: (items) => `Số item return: ${tt.soItem[items[0].dataIndex] ?? 0}`,
           },
         },
       },
@@ -2577,7 +2586,7 @@ function renderPickCharts(c) {
         x: d.common.scales.x,
         y: {
           ...d.common.scales.y, beginAtZero: true, grace: '8%',
-          title: { display: true, text: 'Giờ', color: cssVar('--text-secondary') },
+          title: { display: true, text: 'Ngày', color: cssVar('--text-secondary') },
         },
       },
       onClick: chartDrill(tt.labels, 'department'),
@@ -2634,16 +2643,17 @@ async function loadPickslip() {
     renderPickCharts(data.charts);
     renderScanBar('#pickScanBar', data.scanFolder);
     $('#pickDesc').textContent =
-      'PICKSLIP_BOOKED × PICKSLIP_HEADER. Kỳ theo PICKSLIP_DATE (ngày AMOS); đơn vị đếm là SỐ DÒNG. '
-      + 'Cancel / Return phân biệt bằng ĐUÔI của PICKSLIP_TEXT (…cancel · …cancel booking · …return) kèm QTY_CANCELED ≠ 0. '
-      + 'Đã áp bộ lọc nghiệp vụ: QTY_BOOKED ≠ 0, STATUS ∉ {1, 11}, LOCATION_FROM không chứa “U/S”, STORE thuộc MAIN/VNA. '
-      + 'Cột “Giờ xuất kho” hiện giờ thật khi AMOS có; không có thì hiện NGÀY phiếu kèm ghi chú “chỉ có ngày”. '
-      + 'Cột Scan đối chiếu file PDF trong thư mục scan; TAT return = số ngày từ ngày xuất kho đến ngày trả về kho (HISTORY, VM ∈ EA/TC). '
-      + '⚠ Thẻ KPI “Đã scan / Chưa scan” đếm theo PHIẾU (một picking list nhiều dòng chỉ cần một file) và tính trên TOÀN KỲ; '
-      + 'bảng chi tiết bên dưới đếm theo DÒNG và bị cắt ở MAX_ROWS, nên hai con số không nhất thiết bằng nhau.';
+      'PICKSLIP_BOOKED × PICKSLIP_HEADER. Kỳ theo PICKSLIP_DATE (ngày AMOS); đơn vị đếm là ITEM. '
+      + 'Phiếu xuất / Cancel / Return phân biệt bằng ĐUÔI của PICKSLIP_TEXT (…cancel · …cancel booking · …return) kèm QTY_CANCELED ≠ 0. '
+      + 'Đã áp bộ lọc nghiệp vụ: QTY_BOOKED ≠ 0, STATUS ∉ {1, 11}, LOCATION_FROM không chứa “U/S”. '
+      + 'Ngày giờ xuất kho = PICKSLIP_DATE + BOOKING_TIME; ngày giờ về kho = HISTORY.MUTATION + MUTATION_TIME — '
+      + 'cả hai đều đủ ngày giờ nên TAT return là số NGÀY chính xác (số lẻ), không làm tròn ngày. '
+      + 'Item CANCEL không cần file scan (hàng không ra khỏi kho). '
+      + '⚠ Thẻ KPI “Đã scan / Chưa scan” đếm theo PHIẾU (một phiếu xuất nhiều item chỉ cần một file) và tính trên TOÀN KỲ; '
+      + 'bảng chi tiết bên dưới đếm theo ITEM và bị cắt ở MAX_ROWS, nên hai con số không nhất thiết bằng nhau.';
     pickTotalRows = data.count;
     $('#pickCount').textContent =
-      `${data.count.toLocaleString('vi')} dòng` + (data.truncated ? ' ⚠ chạm giới hạn MAX_ROWS' : '');
+      `${data.count.toLocaleString('vi')} item` + (data.truncated ? ' ⚠ chạm giới hạn MAX_ROWS' : '');
     if (!pickTable) {
       pickTable = new Tabulator('#pickTable', {
         data: data.rows,
@@ -2656,8 +2666,8 @@ async function loadPickslip() {
       pickTable.on('dataFiltered', (filters, rowsFiltered) => {
         const n = rowsFiltered.length;
         $('#pickCount').textContent = n === pickTotalRows
-          ? `${pickTotalRows.toLocaleString('vi')} dòng`
-          : `${n.toLocaleString('vi')}/${pickTotalRows.toLocaleString('vi')} dòng`;
+          ? `${pickTotalRows.toLocaleString('vi')} item`
+          : `${n.toLocaleString('vi')}/${pickTotalRows.toLocaleString('vi')} item`;
       });
     } else {
       pickTable.replaceData(data.rows);
@@ -2707,16 +2717,16 @@ const COLS_RECEIVING = [
       + 'giữ nguyên “R-259454.pdf” (SGN) hoặc bỏ tiền tố “259454.pdf” (HAN). “—” = không đọc được thư mục.',
     formatter: fmtScanCell,
   },
-  { title: 'Ngày nhập', field: 'del_date', formatter: fmtDateCell, width: 110 },
-  { title: 'Voucher', field: 'voucherno', headerFilter: 'input', width: 120 },
   {
-    title: 'Tên file scan', field: 'voucher_scan', headerFilter: 'input', width: 190,
-    headerTooltip: 'Đã tìm thấy → tên file thật trong thư mục. Chưa thấy → liệt kê CẢ HAI dạng '
-      + 'chấp nhận được (mỗi station đặt tên một kiểu: HAN bỏ tiền tố “R-”, SGN giữ nguyên).',
+    title: 'Ngày giờ receive', field: 'receive_time_vn', width: 170,
+    headerFilter: 'input', headerFilterFunc: dateFilterFunc,
+    headerTooltip: 'HISTORY.MUTATION (ngày AMOS) + HISTORY.MUTATION_TIME (số ms từ 0h) → giờ VN (+7). '
+      + 'DEL_DATE chỉ có NGÀY nên vẫn dùng làm mốc kỳ báo cáo, còn cột này là mốc thật để đối chiếu.',
+    formatter: (cell) => escapeHtml(fmtDateTime(cell.getValue())),
   },
+  { title: 'Voucher', field: 'voucherno', headerFilter: 'input', width: 120 },
   { title: 'Part No', field: 'partno', headerFilter: 'input' },
-  { title: 'Serial', field: 'serialno', headerFilter: 'input' },
-  { title: 'Batch', field: 'batchno', headerFilter: 'input', width: 100 },
+  { title: 'Serial / Batch', field: 'serialno', headerFilter: 'input' },
   { title: 'SL', field: 'qty', hozAlign: 'right', sorter: 'number', width: 70 },
   { title: 'Tình trạng', field: 'tinh_trang', headerFilter: 'input', width: 100 },
   { title: 'Station', field: 'station', headerFilter: 'input', width: 90 },
@@ -2743,8 +2753,8 @@ function recvFilter(row) {
 
 function renderRecvKpis(k) {
   renderKpiCards('#recvKpi', [
-    { label: 'Dòng nhập kho', value: k.soDong, unit: 'dòng', accent: '--series-1' },
-    { label: 'Số voucher', value: k.soPhieu, unit: 'phiếu', accent: '--series-3' },
+    { label: 'Item receive', value: k.soDong, unit: 'item', accent: '--series-1' },
+    { label: 'Số phiếu receive', value: k.soPhieu, unit: 'phiếu', accent: '--series-3' },
     {
       label: 'Đã scan', value: `${k.daScan}/${k.tongPhieuScan}`, unit: `phiếu (${k.tyLeScan ?? 0}%)`,
       accent: (k.chuaScan === 0 && k.tongPhieuScan > 0) ? '--good' : '--warning',
@@ -2754,16 +2764,16 @@ function renderRecvKpis(k) {
     },
     {
       label: 'Chưa scan', value: k.chuaScan, unit: 'phiếu', accent: k.chuaScan ? '--critical' : '--good',
-      title: 'Số VOUCHER chưa tìm thấy file PDF. Đếm theo PHIẾU (một voucher nhiều dòng '
+      title: 'Số VOUCHER chưa tìm thấy file PDF. Đếm theo PHIẾU (một voucher nhiều item '
         + 'chỉ cần một file), tính trên toàn kỳ. Đây là số file thực sự còn phải scan.',
     },
     {
-      label: 'Phiếu bị hủy nhập', value: k.b1BiHuy, unit: 'dòng', accent: '--warning',
-      title: 'Dòng B1 có RECDETAILNO_I trùng với một dòng CR → đã bị hủy nhập, KHÔNG tính vào báo cáo.',
+      label: 'Item bị hủy receive', value: k.b1BiHuy, unit: 'item', accent: '--warning',
+      title: 'Item B1 có RECDETAILNO_I trùng với một dòng CR → đã bị hủy nhập, KHÔNG tính vào báo cáo.',
     },
     {
-      label: 'B1 thô trong kỳ', value: k.b1Tho, unit: 'dòng', accent: '--text-muted',
-      title: 'Số dòng VM = B1 lấy về trước khi lọc (station / condition / store / location).',
+      label: 'B1 thô trong kỳ', value: k.b1Tho, unit: 'item', accent: '--text-muted',
+      title: 'Số item VM = B1 lấy về trước khi lọc (station / condition / store / location).',
     },
   ]);
 }
@@ -2803,7 +2813,7 @@ function renderRecvCharts(c) {
     type: 'bar',
     data: {
       labels: c.byDay.labels,
-      datasets: [{ label: 'Số dòng nhập', data: c.byDay.values, backgroundColor: cssVar('--series-2'), borderRadius: 3 }],
+      datasets: [{ label: 'Số item receive', data: c.byDay.values, backgroundColor: cssVar('--series-2'), borderRadius: 3 }],
     },
     options: {
       ...d.common,
@@ -2828,17 +2838,17 @@ async function loadReceiving() {
     renderRecvCharts(data.charts);
     renderScanBar('#recvScanBar', data.scanFolder);
     $('#recvDesc').textContent =
-      'HISTORY với VM = B1 (phiếu nhập kho), kỳ theo DEL_DATE (ngày AMOS). '
-      + 'Đã LOẠI các dòng B1 có RECDETAILNO_I trùng với dòng VM = CR (phiếu nhập đã bị hủy). '
-      + 'Bộ lọc: STATION chứa station đang chọn, CONDITION không chứa “us”, STORE thuộc MAIN/VNA, '
-      + 'loại riêng STORE = MAIN có LOCATION là SHOPLOC hoặc LG5. '
-      + 'Thống kê theo STATION và STORE (nhập kho không quy về Trung tâm). '
+      'HISTORY với VM = B1 (phiếu receive), kỳ theo DEL_DATE (ngày AMOS); đơn vị đếm là ITEM. '
+      + 'Đã LOẠI các item B1 có RECDETAILNO_I trùng với dòng VM = CR (phiếu receive đã bị hủy). '
+      + 'Bộ lọc: STATION chứa station đang chọn, CONDITION không chứa “us”. '
+      + 'Thống kê theo STATION và STORE (receive không quy về Trung tâm). '
+      + 'Ngày giờ receive = MUTATION + MUTATION_TIME → giờ VN (+7); DEL_DATE chỉ có ngày nên chỉ dùng làm mốc kỳ. '
       + 'Cột Scan đối chiếu file PDF trùng VOUCHERNO — chấp nhận cả “R-259454.pdf” (SGN) lẫn “259454.pdf” (HAN). '
       + '⚠ Thẻ KPI và biểu đồ “Đã scan / Chưa scan” đếm theo PHIẾU (voucher) và tính trên TOÀN KỲ; '
-      + 'bảng chi tiết bên dưới đếm theo DÒNG và bị cắt ở MAX_ROWS.';
+      + 'bảng chi tiết bên dưới đếm theo ITEM và bị cắt ở MAX_ROWS.';
     recvTotalRows = data.count;
     $('#recvCount').textContent =
-      `${data.count.toLocaleString('vi')} dòng` + (data.truncated ? ' ⚠ chạm giới hạn MAX_ROWS' : '');
+      `${data.count.toLocaleString('vi')} item` + (data.truncated ? ' ⚠ chạm giới hạn MAX_ROWS' : '');
     if (!recvTable) {
       recvTable = new Tabulator('#recvTable', {
         data: data.rows,
@@ -2851,8 +2861,8 @@ async function loadReceiving() {
       recvTable.on('dataFiltered', (filters, rowsFiltered) => {
         const n = rowsFiltered.length;
         $('#recvCount').textContent = n === recvTotalRows
-          ? `${recvTotalRows.toLocaleString('vi')} dòng`
-          : `${n.toLocaleString('vi')}/${recvTotalRows.toLocaleString('vi')} dòng`;
+          ? `${recvTotalRows.toLocaleString('vi')} item`
+          : `${n.toLocaleString('vi')}/${recvTotalRows.toLocaleString('vi')} item`;
       });
     } else {
       recvTable.replaceData(data.rows);

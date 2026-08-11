@@ -688,11 +688,10 @@ function pickslip(range, f) {
     // Ngay GIO (demo): gio xuat kho / gio huy
     r.booked_time_vn = new Date(Date.parse(r.pickslip_date) + rndInt(7, 19) * 3600000).toISOString();
     r.header_time_vn = r.booked_time_vn;
-    // ~70% dong biet duoc GIO xuat kho that (MUTATION roi dung ngay phieu)
-    r.issue_time_vn = rndInt(0, 9) < 7 ? r.booked_time_vn : null;
-    // Cot hien tren bang: khong co gio that thi lui ve NGAY phieu (giong server)
-    r.issue_shown = r.issue_time_vn || r.pickslip_date;
-    r.issue_exact = r.issue_time_vn ? 1 : 0;
+    // GIO XUAT KHO = PICKSLIP_DATE + BOOKING_TIME -> LUON co (giong server).
+    r.issue_time_vn = r.booked_time_vn;
+    r.issue_shown = r.issue_time_vn;
+    r.issue_exact = 1;
     // Ke ca nhom 'KHAC' - van la dong da huy/tra (giong server)
     r.cancel_time_vn = (r.loai === 'CANCEL' || r.loai === 'KHAC')
       ? new Date(Date.parse(r.booked_time_vn) + rndInt(1, 72) * 3600000).toISOString() : null;
@@ -702,33 +701,30 @@ function pickslip(range, f) {
     r.return_shown = null;
     r.return_exact = 0;
     r.tat_return = null;
-    r.tat_gio = null;
     r.return_scan = '';
     // MOT cot "Gio huy / tra" cho ca hai loai (giong server)
     r.huytra_shown = r.cancel_time_vn || null;
     r.huytra_kieu = r.cancel_time_vn ? 'CANCEL' : '';
     r.huytra_exact = 0;
+    // Item CANCEL khong can doi chieu file scan (giong server)
+    if (r.loai === 'CANCEL') r.scan = 'KHONG_CAN';
     if (r.loai !== 'RETURN') return;
     if (rndInt(0, 9) === 0) { r.return_no = 'NOT FOUND'; return; }
     const tat = rndInt(0, 40);
-    r.return_no = rndInt(3000000, 3999999) + '-R';
-    r.return_date = new Date(Date.parse(r.pickslip_date) + tat * 86400000).toISOString();
-    r.tat_return = tat;
-    // Gio chinh xac (demo: cong them so gio le)
     const gioLe = rndInt(0, 23);
-    // ~75% moi truong co MUTATION_TIME -> biet GIO tra kho that; con lai chi co
-    // NGAY. Phai sinh ca hai truong hop, neu khong se khong lo ra loi o nhanh
-    // "chỉ có ngày" cua cot "Gio tra kho".
-    r.return_time_vn = rndInt(0, 9) < 8
-      ? new Date(Date.parse(r.booked_time_vn) + tat * 86400000 + gioLe * 3600000).toISOString()
-      : null;
-    r.return_shown = r.return_time_vn || r.return_date;
-    r.return_exact = r.return_time_vn ? 1 : 0;
+    r.return_no = rndInt(3000000, 3999999) + '-R';
+    // Gio ve kho = MUTATION + MUTATION_TIME -> LUON co du ngay gio
+    r.return_time_vn = new Date(
+      Date.parse(r.booked_time_vn) + tat * 86400000 + gioLe * 3600000).toISOString();
+    r.return_date = r.return_time_vn;
+    r.return_shown = r.return_time_vn;
+    r.return_exact = 1;
     r.huytra_shown = r.return_shown;
     r.huytra_kieu = 'RETURN';
-    r.huytra_exact = r.return_exact;
-    r.tat_gio = Math.round((tat * 24 + (r.issue_time_vn ? gioLe : 0)) * 10) / 10;
-    r.tat_chinh_xac = !!r.issue_time_vn;
+    r.huytra_exact = 1;
+    // TAT = so NGAY CHINH XAC tu gio xuat kho den gio ve kho
+    r.tat_return = Math.round(
+      ((Date.parse(r.return_time_vn) - Date.parse(r.issue_time_vn)) / 86400000) * 100) / 100;
     r.return_scan = rndInt(0, 9) < 6 ? 'SCANNED' : 'CHUA_SCAN';
   });
   const kept = applyFilter(rows, f);
@@ -766,10 +762,17 @@ function pickslip(range, f) {
   const topPart = [...pm.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
 
   // Dem scan theo PHIEU (distinct picking list) - giong server that
+  // Phieu chi toan item CANCEL thi KHONG can scan -> bo han ra khoi mau so
+  // (giong server: mau so chi gom phieu co it nhat MOT item khong phai cancel).
   const plScan = new Map();
-  kept.forEach((r) => plScan.set(String(r.picking_listno), r.scan));
+  const plTatCa = new Set();
+  kept.forEach((r) => {
+    plTatCa.add(String(r.picking_listno));
+    if (r.loai !== 'CANCEL') plScan.set(String(r.picking_listno), r.scan);
+  });
   const daScan = [...plScan.values()].filter((v) => v === 'SCANNED').length;
   const chuaScan = [...plScan.values()].filter((v) => v === 'CHUA_SCAN').length;
+  const phieuMienScan = plTatCa.size - plScan.size;
   const daScanDong = kept.filter((r) => r.scan === 'SCANNED').length;
   const chuaScanDong = kept.filter((r) => r.scan === 'CHUA_SCAN').length;
   const retScan = new Map();
@@ -777,16 +780,12 @@ function pickslip(range, f) {
     .forEach((r) => retScan.set(r.return_no, r.return_scan));
   const retOk = kept.filter((r) => r.loai === 'RETURN' && r.tat_return !== null);
   const tats = retOk.map((r) => r.tat_return);
-  const gios = retOk.map((r) => r.tat_gio).filter((v) => v !== null && v !== undefined);
-  const soChinhXac = retOk.filter((r) => r.tat_chinh_xac).length;
-  // TAT hoan kho theo Trung tam (gio)
+  // TAT hoan kho theo Trung tam - don vi NGAY (tinh tu ngay-gio that)
   const ttm = new Map();
   retOk.forEach((r) => {
-    if (r.tat_gio === null || r.tat_gio === undefined) return;
     const k = r.department || 'PA';
-    const t = ttm.get(k) || { so: 0, tong: 0, max: 0, chinhXac: 0 };
-    t.so++; t.tong += r.tat_gio; t.max = Math.max(t.max, r.tat_gio);
-    if (r.tat_chinh_xac) t.chinhXac++;
+    const t = ttm.get(k) || { so: 0, tong: 0, max: 0 };
+    t.so++; t.tong += r.tat_return; t.max = Math.max(t.max, r.tat_return);
     ttm.set(k, t);
   });
   const ttArr = [...ttm.entries()].sort((a, b) => b[1].tong / b[1].so - a[1].tong / a[1].so);
@@ -798,7 +797,7 @@ function pickslip(range, f) {
     { label: '15-30 ngay', min: 15, max: 30 },
     { label: '> 30 ngay', min: 31, max: Infinity },
   ];
-  const buckets = TB.map((b) => tats.filter((d) => d >= b.min && d <= b.max).length);
+  const buckets = TB.map((b) => tats.filter((d) => Math.floor(d) >= b.min && Math.floor(d) <= b.max).length);
 
   return {
     range: { from: range.from, to: range.to, label: range.label },
@@ -819,12 +818,11 @@ function pickslip(range, f) {
       daScanDong, chuaScanDong,
       returnCoPhieu: kept.filter((r) => r.loai === 'RETURN' && r.return_no && r.return_no !== 'NOT FOUND').length,
       returnKhongPhieu: kept.filter((r) => r.return_no === 'NOT FOUND').length,
-      tatReturnAvg: tats.length ? Math.round((tats.reduce((a, b) => a + b, 0) / tats.length) * 10) / 10 : null,
-      tatReturnMax: tats.length ? Math.max(...tats) : null,
-      tatGioAvg: gios.length ? Math.round((gios.reduce((a, b) => a + b, 0) / gios.length) * 10) / 10 : null,
-      tatGioMax: gios.length ? Math.max(...gios) : null,
-      soCoTat: gios.length,
-      soChinhXacGio: soChinhXac,
+      tatReturnAvg: tats.length ? Math.round((tats.reduce((a, b) => a + b, 0) / tats.length) * 100) / 100 : null,
+      tatReturnMax: tats.length ? Math.round(Math.max(...tats) * 100) / 100 : null,
+      phieuMienScan,
+      bookingTimeDonVi: '(DEMO) mili giây',
+      bookingTimeMax: 86399999,
       returnDaScan: [...retScan.values()].filter((v) => v === 'SCANNED').length,
       returnChuaScan: [...retScan.values()].filter((v) => v === 'CHUA_SCAN').length,
     },
@@ -837,10 +835,9 @@ function pickslip(range, f) {
       tatReturn: { labels: TB.map((b) => b.label), values: buckets },
       tatTheoTt: {
         labels: ttArr.map(([k]) => k),
-        gioTb: ttArr.map(([, v]) => Math.round((v.tong / v.so) * 10) / 10),
-        gioMax: ttArr.map(([, v]) => Math.round(v.max * 10) / 10),
-        soDong: ttArr.map(([, v]) => v.so),
-        soChinhXac: ttArr.map(([, v]) => v.chinhXac),
+        ngayTb: ttArr.map(([, v]) => Math.round((v.tong / v.so) * 100) / 100),
+        ngayMax: ttArr.map(([, v]) => Math.round(v.max * 100) / 100),
+        soItem: ttArr.map(([, v]) => v.so),
       },
       byDept: {
         labels: byDept.map((r) => r.department),
@@ -880,8 +877,8 @@ function receiving(range, f) {
       location: rnd(['A01', 'B12', 'LG3', 'RACK-7', 'QUAR']),
       voucherno: '', // gan o vong duoi (theo ro voucher vcPool)
       partno: d.partno,
+      // MOT cot Serial/Batch (giong server): moi dong chi co mot trong hai
       serialno: d.serialno,
-      batchno: '',
       psn: 'P' + rndInt(100000, 999999),
       labelno: d.labelno,
       qty: rndInt(1, 6),
@@ -890,7 +887,8 @@ function receiving(range, f) {
       orderno: 'PO' + rndInt(10000, 99999),
       orderdate: new Date(del.getTime() - rndInt(5, 60) * 86400000).toISOString(),
       del_date: del.toISOString(),
-      mutation_date: del.toISOString(),
+      // NGAY GIO NHAP KHO day du = MUTATION + MUTATION_TIME (giong server)
+      receive_time_vn: new Date(del.getTime() + rndInt(7, 19) * 3600000).toISOString(),
       owner: rnd(['VNA', 'VAECO', '']),
       created_by: d.staff,
       // KHONG co 'department': phieu nhap kho thong ke theo Station/Store

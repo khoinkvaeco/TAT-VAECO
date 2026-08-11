@@ -2652,12 +2652,14 @@ async function pickslipTemp(range, f) {
   // chi co ngay chu KHONG lam vo truy van.
   const H = '[DWH_DB]..[STG_AMOS].[PICKSLIP_HEADER]';
   const B = '[DWH_DB]..[STG_AMOS].[PICKSLIP_BOOKED]';
-  const [hMut, hMutT, bMut, bMutT] = await Promise.all([
+  const [hMut, hMutT, bMut, bMutT, hBook] = await Promise.all([
     remoteHasColumn(H, 'MUTATION'), remoteHasColumn(H, 'MUTATION_TIME'),
     remoteHasColumn(B, 'MUTATION'), remoteHasColumn(B, 'MUTATION_TIME'),
+    remoteHasColumn(H, 'BOOKING_TIME'),
   ]);
   // Cot tho lay them (chi khi that su co) - van la COT THO nen khong lam cham
-  const colH = (hMut ? ', h.[MUTATION] AS H_MUT' : '') + (hMutT ? ', h.[MUTATION_TIME] AS H_MUTT' : '');
+  const colH = (hMut ? ', h.[MUTATION] AS H_MUT' : '') + (hMutT ? ', h.[MUTATION_TIME] AS H_MUTT' : '')
+    + (hBook ? ', h.[BOOKING_TIME] AS H_BOOK' : '');
   const colB = (bMut ? ', p.[MUTATION] AS B_MUT' : '') + (bMutT ? ', p.[MUTATION_TIME] AS B_MUTT' : '');
 
   // NGAY cua phieu (khong gio) - van la moc ky bao cao
@@ -2665,18 +2667,35 @@ async function pickslipTemp(range, f) {
     ? amosDayTimeToVN('r.[PICKSLIP_DATE]', null)
     : 'TRY_CONVERT(datetime, r.[PICKSLIP_DATE])';
 
-  // GIO XUAT KHO - CAN THAN:
-  //   [MUTATION] la lan SUA CUOI cua ban ghi, KHONG phai luc lap phieu. Da do
-  //   that (/api/admin/diag/mutation-time): tren PICKSLIP_BOOKED co dong
-  //   MUTATION = 19943 (07/08/2026) trong khi CREATED_DATE = 19701 (08/12/2025)
-  //   - lech 8 THANG. Lay [MUTATION] lam gio xuat kho la SAI HAN.
-  //   Chi khi MUTATION cua HEADER ROI DUNG VAO ngay phieu (PICKSLIP_DATE) thi
-  //   MUTATION_TIME moi la gio lap phieu dang tin. Khong trung -> de TRONG,
-  //   chi biet NGAY (thieu du lieu con hon so sai).
-  const issueVN = (hMut && hMutT && kindH === 'number')
-    ? `CASE WHEN TRY_CONVERT(float, r.[H_MUT]) = TRY_CONVERT(float, r.[PICKSLIP_DATE])
-             THEN ${amosDayTimeToVN('r.[PICKSLIP_DATE]', 'r.[H_MUTT]')} END`
+  // NGAY GIO XUAT KHO = PICKSLIP_HEADER.PICKSLIP_DATE + PICKSLIP_HEADER.BOOKING_TIME
+  //   (nghiep vu chi dinh). BOOKING_TIME la GIO LAP PHIEU that su.
+  //   ⚠️ TUYET DOI khong dung [MUTATION] cho viec nay: do la lan SUA CUOI cua
+  //   ban ghi. Da do that (/api/admin/diag/mutation-time): tren PICKSLIP_BOOKED
+  //   co dong MUTATION = 19943 (07/08/2026) trong khi CREATED_DATE = 19701
+  //   (08/12/2025) - lech 8 THANG.
+  //
+  //   DON VI cua BOOKING_TIME khong duoc ghi o dau ca (MUTATION_TIME la mili
+  //   giay, con ACTION_TIME cua bang workstep lai la PHUT - cung mot AMOS ma
+  //   hai don vi). Nen KHONG DOAN: do gia tri LON NHAT trong chinh lo du lieu
+  //   vua keo ve roi suy ra don vi, va bao don vi da chon ra API + nhat ky de
+  //   kiem chung duoc.
+  const issueVN = (hBook && kindH === 'number')
+    ? `CASE WHEN r.[H_BOOK] IS NULL THEN NULL ELSE DATEADD(HOUR, @tzOffset,
+           DATEADD(MILLISECOND,
+             TRY_CONVERT(int, TRY_CONVERT(bigint, TRY_CONVERT(float, r.[H_BOOK]) * @btNhan) % 86400000),
+             ${amosDayTimeToVN('r.[PICKSLIP_DATE]', null)})) END`
     : 'NULL';
+  // Do don vi mot lan cho ca lo (khong phai tung dong): max < 1440 -> PHUT,
+  // < 86400 -> GIAY, con lai -> MILI GIAY.
+  const doDonViBooking = hBook ? `
+    DECLARE @btMax float = (SELECT MAX(TRY_CONVERT(float, r.[H_BOOK])) FROM #raw r);
+    DECLARE @btNhan float = CASE WHEN @btMax IS NULL THEN 0
+                                 WHEN @btMax < 1440  THEN 60000.0
+                                 WHEN @btMax < 86400 THEN 1000.0
+                                 ELSE 1.0 END;
+    SELECT @btMax AS bt_max, @btNhan AS bt_nhan;` : `
+    DECLARE @btNhan float = 0;
+    SELECT NULL AS bt_max, NULL AS bt_nhan;`;
   // Lan SUA CUOI cua ban ghi - chi de doi chieu, KHONG phai gio nghiep vu.
   const headerVN = hMut ? amosDayTimeToVN('r.[H_MUT]', hMutT ? 'r.[H_MUTT]' : null) : 'NULL';
   const bookedVN = bMut ? amosDayTimeToVN('r.[B_MUT]', bMutT ? 'r.[B_MUTT]' : null) : 'NULL';
@@ -2729,6 +2748,9 @@ async function pickslipTemp(range, f) {
     JOIN [DWH_DB]..[STG_AMOS].[PICKSLIP_HEADER] h ON h.[PICKSLIPNO] = p.[PICKSLIPNO]
     WHERE ${whereH};
 
+    -- BUOC 1b: do DON VI cua BOOKING_TIME tren chinh lo vua keo ve (xem tren)
+    ${doDonViBooking}
+
     -- BUOC 2 (TAI CHO): cat got chuoi, phan loai va ap bo loc nghiep vu tren
     --   #raw - da nam trong SQL Server nen cac ham nay khong ton gi.
     SELECT
@@ -2748,11 +2770,10 @@ async function pickslipTemp(range, f) {
       RTRIM(r.[CREATED_BY])    AS created_by,
       ${dateVN}                AS pickslip_date,
       ${issueVN}               AS issue_time_vn,
-      -- COT DE HIEN TREN BANG: luon co gia tri. Co gio that thi lay gio, khong
-      -- thi lui ve NGAY phieu. Nho vay bang chi can MOT cot thoi gian xuat kho
-      -- (da bo cot "Ngay phieu" rieng) ma khong dong nao bi mat ngay.
-      -- issue_exact = 0 -> giao dien lam mo va ghi ro "chi co ngay", khong
-      -- bao gio trinh bay 00:00 nhu the do la gio xuat kho that.
+      -- COT DE HIEN TREN BANG: luon co gia tri. BOOKING_TIME thieu (dong hong
+      -- hoac moi truong khong co cot do) thi lui ve NGAY phieu va issue_exact=0
+      -- -> giao dien lam mo va ghi ro "chi co ngay", khong bao gio trinh bay
+      -- 00:00 nhu the do la gio xuat kho that.
       ISNULL(${issueVN}, ${dateVN})                          AS issue_shown,
       CASE WHEN ${issueVN} IS NULL THEN 0 ELSE 1 END         AS issue_exact,
       ${headerVN}              AS header_time_vn,
@@ -2864,15 +2885,20 @@ function dayDiff(a, b) {
   return Math.round((db - da) / 86400000);
 }
 
-/** So GIO giua 2 moc (b - a), lam tron 1 chu so thap phan. */
-function hourDiff(a, b) {
+/**
+ * So NGAY CHINH XAC giua 2 moc (b - a), 2 chu so thap phan.
+ * Moi moc thoi gian cua LGC (xuat kho, cancel, return, receive) deu co DU ngay
+ * gio, nen moi chi so TAT deu tinh tu ngay-gio that roi QUY RA NGAY - khong con
+ * kieu "tron ngay" (lam tron mat toi 1 ngay) hay "chi biet ngay".
+ */
+function ngayChinhXac(a, b) {
   const da = a instanceof Date ? a : (a ? new Date(a) : null);
   const db = b instanceof Date ? b : (b ? new Date(b) : null);
   if (!da || !db || isNaN(da) || isNaN(db)) return null;
-  return Math.round(((db - da) / 3600000) * 10) / 10;
+  return Math.round(((db - da) / 86400000) * 100) / 100;
 }
 
-/** Cac khoang TAT return de ve bieu do phan bo. */
+/** Cac khoang TAT return de ve bieu do phan bo (xep theo so ngay DA LAM TRON XUONG). */
 const TAT_RETURN_BUCKETS = [
   { label: 'Trong ngay', min: -Infinity, max: 0 },
   { label: '1-3 ngay', min: 1, max: 3 },
@@ -2920,17 +2946,20 @@ async function enrichPickslipRows(rows, allPicking = [], allReturns = [], ghi = 
     : new Map();
 
   const st = {
-    daScan: 0, chuaScan: 0, tongPhieu: 0,
+    daScan: 0, chuaScan: 0, tongPhieu: 0, phieuMienScan: 0,
     daScanDong: 0, chuaScanDong: 0,
     returnCoPhieu: 0, returnKhongPhieu: 0,
     returnDaScan: 0, returnChuaScan: 0,
     tatReturnAvg: null, tatReturnMax: null,
-    tatGioAvg: null, tatGioMax: null,
-    soCoTat: 0, soChinhXacGio: 0,
   };
 
   // --- (1) Scan phieu xuat: dem theo PHIEU, ca ky ---
+  //     PHIEU CANCEL KHONG CAN SCAN (nghiep vu): hang khong ra khoi kho thi
+  //     khong co gi de ky va luu. Phieu nao MOI item deu la cancel thi bo han
+  //     ra khoi mau so - neu khong ty le scan se khong bao gio dat 100% vi mot
+  //     so file khong bao gio ton tai.
   for (const p of allPicking) {
+    if (!Number(p.so_can_scan)) { st.phieuMienScan += 1; continue; }
     const s = scanStateTheoStation(index, p.station, idStr(p.pl_all));
     if (s === 'SCANNED') st.daScan += 1;
     else if (s === 'CHUA_SCAN') st.chuaScan += 1;
@@ -2939,7 +2968,6 @@ async function enrichPickslipRows(rows, allPicking = [], allReturns = [], ghi = 
 
   // --- (2) Phieu tra + TAT return: cung tinh tren TOAN KY ---
   const tats = [];
-  const gios = [];
   const buckets = TAT_RETURN_BUCKETS.map(() => 0);
   const theoTt = new Map(); // Trung tam -> { so, tongGio, maxGio }
   const retScanDone = new Set(); // moi phieu tra chi dem MOT lan
@@ -2954,49 +2982,39 @@ async function enrichPickslipRows(rows, allPicking = [], allReturns = [], ghi = 
       if (s === 'SCANNED') st.returnDaScan += 1;
       else if (s === 'CHUA_SCAN') st.returnChuaScan += 1;
     }
-    const d = dayDiff(r.ngay_xuat, h.return_date);
+    // TAT return = so NGAY CHINH XAC tu ngay-gio xuat kho den ngay-gio ve kho.
+    // Ca hai dau deu co du ngay gio (xuat kho: PICKSLIP_DATE + BOOKING_TIME;
+    // ve kho: MUTATION + MUTATION_TIME) nen KHONG con kieu "tron ngay" hay
+    // "chi biet ngay" - moi chi so deu tinh tu moc that roi quy ra ngay.
+    const d = ngayChinhXac(r.gio_xuat || r.ngay_xuat, h.return_time_vn || h.return_date);
     if (d !== null) {
       tats.push(d);
-      const bi = TAT_RETURN_BUCKETS.findIndex((b) => d >= b.min && d <= b.max);
+      const sanNgay = Math.floor(d);
+      const bi = TAT_RETURN_BUCKETS.findIndex((b) => sanNgay >= b.min && sanNgay <= b.max);
       if (bi >= 0) buckets[bi] += 1;
-    }
-    // TAT hoan kho theo GIO.
-    //   Moc DAU  : gio xuat kho THAT neu biet, khong thi lui ve NGAY phieu.
-    //   Moc CUOI : gio ve kho THAT neu biet, khong thi lui ve ngay tra.
-    // Lui ve ngay chi kem chinh xac TRONG MOT NGAY - khac han viec dung
-    // [MUTATION] cua dong booked (do duoc lech toi 8 THANG, da bo).
-    // Truoc day bat buoc CA HAI dau phai co gio that nen bieu do "TAT hoan kho
-    // theo Trung tam" gan nhu KHONG BAO GIO co du lieu - hien ra trong tron.
-    const dau = r.gio_xuat || r.ngay_xuat;
-    const cuoi = h.return_time_vn || h.return_date;
-    const chinhXac = !!(r.gio_xuat && h.return_time_vn);
-    const g = hourDiff(dau, cuoi);
-    if (g !== null) {
-      gios.push(g);
-      if (chinhXac) st.soChinhXacGio += 1;
       const k = r.department || 'PA';
-      const t = theoTt.get(k) || { so: 0, tongGio: 0, maxGio: 0, chinhXac: 0 };
-      t.so += 1; t.tongGio += g; t.maxGio = Math.max(t.maxGio, g);
-      if (chinhXac) t.chinhXac += 1;
+      const t = theoTt.get(k) || { so: 0, tong: 0, max: 0 };
+      t.so += 1; t.tong += d; t.max = Math.max(t.max, d);
       theoTt.set(k, t);
     }
   }
   if (tats.length) {
-    st.tatReturnAvg = Math.round((tats.reduce((a, b) => a + b, 0) / tats.length) * 10) / 10;
-    st.tatReturnMax = Math.max(...tats);
+    st.tatReturnAvg = Math.round((tats.reduce((a, b) => a + b, 0) / tats.length) * 100) / 100;
+    st.tatReturnMax = Math.round(Math.max(...tats) * 100) / 100;
   }
-  if (gios.length) {
-    st.tatGioAvg = Math.round((gios.reduce((a, b) => a + b, 0) / gios.length) * 10) / 10;
-    st.tatGioMax = Math.max(...gios);
-  }
-  st.soCoTat = gios.length;
-  const ttSorted = [...theoTt.entries()].sort((a, b) => b[1].tongGio / b[1].so - a[1].tongGio / a[1].so);
+  const ttSorted = [...theoTt.entries()].sort((a, b) => b[1].tong / b[1].so - a[1].tong / a[1].so);
 
-  // --- (3) Gan cot hien thi cho tung dong cua bang chi tiet ---
+  // --- (3) Gan cot hien thi cho tung item cua bang chi tiet ---
   for (const r of rows) {
-    r.scan = scanStateTheoStation(index, r.station, idStr(r.picking_listno));
-    if (r.scan === 'SCANNED') st.daScanDong += 1;
-    else if (r.scan === 'CHUA_SCAN') st.chuaScanDong += 1;
+    // Item CANCEL khong can doi chieu file scan (nghiep vu): hang khong ra
+    // khoi kho thi khong co phieu de ky va luu.
+    if (r.loai === 'CANCEL') {
+      r.scan = 'KHONG_CAN';
+    } else {
+      r.scan = scanStateTheoStation(index, r.station, idStr(r.picking_listno));
+      if (r.scan === 'SCANNED') st.daScanDong += 1;
+      else if (r.scan === 'CHUA_SCAN') st.chuaScanDong += 1;
+    }
 
     r.return_no = '';
     r.return_date = null;
@@ -3008,8 +3026,6 @@ async function enrichPickslipRows(rows, allPicking = [], allReturns = [], ghi = 
     r.huytra_shown = null;
     r.huytra_kieu = '';      // '' | 'RETURN' | 'CANCEL'
     r.huytra_exact = 0;
-    r.tat_gio = null;
-    r.tat_chinh_xac = false;
     r.return_scan = '';
 
     // MOT cot "Gio huy / tra" cho CA hai loai - cancel va return ban chat gan
@@ -3042,11 +3058,10 @@ async function enrichPickslipRows(rows, allPicking = [], allReturns = [], ghi = 
     r.huytra_kieu = 'RETURN';
     r.huytra_exact = r.return_exact;
     r.return_scan = scanStateTheoStation(index, r.station, base);
-    r.tat_return = dayDiff(r.pickslip_date, h.return_date);
-    // TAT den GIO. Thieu gio that o dau nao thi lui ve NGAY o dau do;
-    // tat_chinh_xac cho biet dong nay co gio that ca hai dau khong.
-    r.tat_gio = hourDiff(r.issue_time_vn || r.pickslip_date, h.return_time_vn || h.return_date);
-    r.tat_chinh_xac = !!(r.issue_time_vn && h.return_time_vn);
+    // MOT cot TAT duy nhat: so NGAY CHINH XAC tu ngay-gio xuat kho den
+    // ngay-gio ve kho (khong con cap "tron ngay" + "theo gio" nua).
+    r.tat_return = ngayChinhXac(
+      r.issue_time_vn || r.pickslip_date, h.return_time_vn || h.return_date);
   }
 
   return {
@@ -3054,14 +3069,12 @@ async function enrichPickslipRows(rows, allPicking = [], allReturns = [], ghi = 
     folder: scanIndexStatus(index, dirs.picking),
     charts: {
       tatReturn: { labels: TAT_RETURN_BUCKETS.map((b) => b.label), values: buckets },
-      // TAT hoan kho TRUNG BINH (gio) theo tung Trung tam
+      // TAT hoan kho theo tung Trung tam - don vi NGAY (tinh tu ngay-gio that)
       tatTheoTt: {
         labels: ttSorted.map(([k]) => k),
-        gioTb: ttSorted.map(([, v]) => Math.round((v.tongGio / v.so) * 10) / 10),
-        gioMax: ttSorted.map(([, v]) => Math.round(v.maxGio * 10) / 10),
-        soDong: ttSorted.map(([, v]) => v.so),
-        // Bao nhieu dong trong so do biet duoc GIO that (con lai lui ve ngay)
-        soChinhXac: ttSorted.map(([, v]) => v.chinhXac),
+        ngayTb: ttSorted.map(([, v]) => Math.round((v.tong / v.so) * 100) / 100),
+        ngayMax: ttSorted.map(([, v]) => Math.round(v.max * 100) / 100),
+        soItem: ttSorted.map(([, v]) => v.so),
       },
     },
   };
@@ -3128,7 +3141,10 @@ async function qPickslip(range, f, ghi = () => {}) {
     --     Dung de dem "da/chua scan" theo PHIEU va KHONG bi cat boi TOP(@top)
     --     nhu bang chi tiet - nghiep vu yeu cau scan dat 100% nen so nay phai
     --     phu het ky, khong duoc thieu.
-    SELECT x.picking_listno AS pl_all, MIN(x.station) AS station
+    --     Item CANCEL khong can scan -> dem so item CAN scan de bo han cac
+    --     phieu chi toan cancel ra khoi mau so ty le scan.
+    SELECT x.picking_listno AS pl_all, MIN(x.station) AS station,
+           SUM(CASE WHEN x.loai = 'CANCEL' THEN 0 ELSE 1 END) AS so_can_scan
     ${join} WHERE 1 = 1 ${w}
     GROUP BY x.picking_listno;
 
@@ -3156,6 +3172,16 @@ async function qPickslip(range, f, ghi = () => {}) {
   const byDay = pick('ngay');
   const topPart = pick('partno').filter((r) => 'so_dong_huy' in r && !('station' in r));
   const rows = sets.find((s) => s.length && 'pickslipno' in s[0] && 'remarks' in s[0]) || [];
+
+  // DON VI cua BOOKING_TIME do duoc o buoc 1b - BAO RA, khong de am tham.
+  // Doan sai don vi thi gio xuat kho van hien ra dep de nhung sai hoan toan,
+  // nen con so nay phai nhin thay duoc ca o nhat ky lan o API.
+  const btRow = (sets.find((s) => s.length && 'bt_nhan' in s[0]) || [])[0] || {};
+  const btNhan = Number(btRow.bt_nhan) || 0;
+  const btDonVi = btNhan === 60000 ? 'phút' : btNhan === 1000 ? 'giây'
+    : btNhan === 1 ? 'mili giây' : 'không có BOOKING_TIME';
+  ghi(`Giờ xuất kho: PICKSLIP_DATE + BOOKING_TIME — đơn vị đo được là ${btDonVi}`
+    + (btRow.bt_max != null ? ` (giá trị lớn nhất trong kỳ: ${btRow.bt_max})` : ''));
 
   // --- DOI CHIEU FILE SCAN + PHIEU TRA + TAT RETURN (tinh o Node, khong SQL) ---
   const scan = await buoc(ghi, 'Đối chiếu file scan + tra phiếu trả trong HISTORY + tính TAT',
@@ -3190,11 +3216,9 @@ async function qPickslip(range, f, ghi = () => {}) {
       returnKhongPhieu: sc.returnKhongPhieu,
       tatReturnAvg: sc.tatReturnAvg,
       tatReturnMax: sc.tatReturnMax,
-      // Chinh xac den GIO (chi tinh duoc khi AMOS co cot MUTATION_TIME)
-      tatGioAvg: sc.tatGioAvg,
-      tatGioMax: sc.tatGioMax,
-      soCoTat: sc.soCoTat,
-      soChinhXacGio: sc.soChinhXacGio,
+      phieuMienScan: sc.phieuMienScan,
+      bookingTimeDonVi: btDonVi,
+      bookingTimeMax: btRow.bt_max ?? null,
       returnDaScan: sc.returnDaScan,
       returnChuaScan: sc.returnChuaScan,
     },
@@ -3300,7 +3324,7 @@ async function qReceiving(range, f, ghi = () => {}) {
       h.[VOUCHERNO], h.[PARTNO], h.[SERIALNO], h.[BATCHNO], h.[PSN], h.[LABELNO],
       h.[HISTORYNO_I], h.[RECDETAILNO_I], h.[STATION], h.[STORE], h.[LOCATION],
       h.[VM], h.[CONDITION], h.[MAT_CLASS], h.[ORDERNO], h.[OWNER], h.[CREATED_BY],
-      h.[QTY], h.[DEL_DATE], h.[ORDERDATE], h.[MUTATION]
+      h.[QTY], h.[DEL_DATE], h.[ORDERDATE], h.[MUTATION], h.[MUTATION_TIME]
     INTO #hraw
     FROM [DWH_DB]..[STG_AMOS].[HISTORY] h
     WHERE h.[VM] IN ('B1', 'CR')
@@ -3310,8 +3334,10 @@ async function qReceiving(range, f, ghi = () => {}) {
     SELECT
       RTRIM(h.[VOUCHERNO])                  AS voucherno,
       RTRIM(h.[PARTNO])                     AS partno,
-      RTRIM(h.[SERIALNO])                   AS serialno,
-      RTRIM(h.[BATCHNO])                    AS batchno,
+      -- MOT cot Serial/Batch: moi dong chi co MOT trong hai (serial cho thiet
+      -- bi co so, batch cho vat tu theo lo) nen bay hai cot thi luon co mot cot
+      -- rong - giong het cach bang phieu xuat dang lam.
+      LTRIM(RTRIM(ISNULL(RTRIM(h.[SERIALNO]), '') + ISNULL(RTRIM(h.[BATCHNO]), ''))) AS serialno,
       RTRIM(h.[PSN])                        AS psn,
       RTRIM(h.[LABELNO])                    AS labelno,
       TRY_CONVERT(bigint, h.[HISTORYNO_I])  AS historyno,
@@ -3328,7 +3354,11 @@ async function qReceiving(range, f, ghi = () => {}) {
       TRY_CONVERT(float, h.[QTY])           AS qty,
       ${d2v('h.[DEL_DATE]')}                AS del_date,
       ${d2v('h.[ORDERDATE]')}               AS orderdate,
-      ${d2v('h.[MUTATION]')}                AS mutation_date
+      ${d2v('h.[MUTATION]')}                AS mutation_date,
+      -- NGAY GIO NHAP KHO day du: MUTATION (so ngay AMOS) + MUTATION_TIME
+      -- (so ms ke tu 0h) -> gio VN. DEL_DATE chi co NGAY nen van giu lam moc
+      -- ky bao cao, con cot hien tren bang la moc nay.
+      ${amosDayTimeToVN('h.[MUTATION]', 'h.[MUTATION_TIME]')} AS receive_time_vn
     INTO #hi
     FROM #hraw h;
     DROP TABLE #hraw;
@@ -3358,12 +3388,12 @@ async function qReceiving(range, f, ghi = () => {}) {
 
     -- [2] Bang chi tiet
     SELECT TOP (@top)
-      x.station, x.store, x.location, x.voucherno, x.partno, x.serialno, x.batchno,
+      x.station, x.store, x.location, x.voucherno, x.partno, x.serialno,
       x.psn, x.labelno, x.qty, x.tinh_trang, x.mat_class, x.orderno, x.orderdate,
-      x.del_date, x.mutation_date, x.owner, x.created_by,
+      x.del_date, x.receive_time_vn, x.owner, x.created_by,
       x.historyno, x.recdetailno
     FROM #hi x WHERE ${conLai} ${w}
-    ORDER BY x.del_date DESC, x.voucherno;
+    ORDER BY x.receive_time_vn DESC, x.voucherno;
 
     -- [3] DANH SACH VOUCHER (distinct) cua TOAN KY - de dem "da/chua scan"
     --     theo PHIEU (mot voucher co nhieu dong) va KHONG bi cat boi TOP(@top).
