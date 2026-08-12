@@ -1082,11 +1082,6 @@ const REPORT_DEFS = {
           + 'Lần thay thiết bị CHƯA booking là một lý do rất hay gặp khiến on_off không có sự kiện tương ứng.',
         formatter: fmtBookingCell,
       },
-      {
-        title: 'Có on_off', field: 'co_su_kien_on_off', hozAlign: 'center', width: 100,
-        headerFilter: 'list',
-        headerFilterParams: { values: { '': 'Tất cả', 'Có': 'Có', 'Không': 'Không' } },
-      },
       { title: 'Pickslip', field: 'voucher_issue', headerFilter: 'input' },
       { title: 'Ngày xuất kho', field: 'issue_time_vn', formatter: fmtDateCell },
       { title: 'Giờ trả US', field: 'return_unservice_time', formatter: fmtDateCell },
