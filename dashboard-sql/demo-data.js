@@ -266,6 +266,10 @@ function removedBeforeInstalled(range, f) {
       ac_position: rnd(['AP25', 'AP44', '28WR', '3DN', null]),
       thoi_diem_vn: t.toISOString(),
       created_by: d.staff,
+      // Lan thay thiet bi CHUA booking hay lam on_off khong co su kien tuong
+      // ung -> demo cho hai thu nay tuong quan voi nhau (giong thuc te).
+      booking_status: coOnOff ? 1 : (rndInt(0, 1) ? 0 : 1),
+      status_tho: '',
       co_su_kien_on_off: coOnOff ? 'Có' : 'Không',
       voucher_issue: coPhieuXuat ? 'P-' + rndInt(300000, 399999) : null,
       issue_time_vn: coPhieuXuat ? new Date(t.getTime() - rndInt(1, 10) * 86400000).toISOString() : null,
@@ -539,7 +543,10 @@ function partOnOff(crit) {
       serialno_off: crit.serialnoOff || 'SN' + rndInt(10000, 99999),
       releaseno: 'REL' + rndInt(1000, 9999),
       mutator: 'USER' + rndInt(10, 99),
-      status: rnd(['ON', 'OFF', 'RELEASED']),
+      // WO_PART_ON_OFF.STATUS = tinh trang BOOKING: 0 = Not Booked, 1 = Booked.
+      // (Demo cu sinh 'ON'/'OFF'/'RELEASED' - hoan toan sai nghia cua cot nay.)
+      booking_status: rndInt(0, 4) ? 1 : 0,
+      status_tho: '',
       // Gia lap gio VN (server that ghep MUTATION+MUTATION_TIME): tra chuoi ISO-Z
       mutation_time_vn: t.toISOString(),
       created_by: 'USER' + rndInt(10, 99),

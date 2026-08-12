@@ -822,6 +822,34 @@ const fmtDateOnlyCell = (cell) => {
   return s ? s.slice(0, 10) : '';
 };
 
+/**
+ * WO_PART_ON_OFF.STATUS — *Booking status of the component change* (tài liệu AMOS):
+ * **0 = Not Booked · 1 = Booked**.
+ * Hiện chữ chứ không hiện số: “0” và “1” trần trụi thì người đọc phải nhớ nghĩa,
+ * và rất dễ lẫn với các cột STATUS khác của AMOS (pickslip dùng 1/11 cho việc khác).
+ * Giá trị lạ (không phải 0/1) hiện NGUYÊN VĂN — không âm thầm coi là “chưa booking”.
+ */
+function fmtBookingCell(cell) {
+  const v = cell.getValue();
+  const r = cell.getRow().getData();
+  if (v === 1) {
+    const c = cssVar('--good');
+    return `<span class="tat-badge" style="background:${c}22;color:${c}" title="STATUS = 1 — Booked">Đã booking</span>`;
+  }
+  if (v === 0) {
+    const c = cssVar('--warning');
+    return `<span class="tat-badge" style="background:${c}22;color:${c}" title="STATUS = 0 — Not Booked">Chưa booking</span>`;
+  }
+  const tho = String(r.status_tho ?? '').trim();
+  if (!tho) return '';
+  return `<span style="color:var(--text-muted)" title="Giá trị STATUS không phải 0/1 — hiện nguyên văn">${escapeHtml(tho)}</span>`;
+}
+
+const BOOKING_HEADER_FILTER = {
+  headerFilter: 'list',
+  headerFilterParams: { values: { '': 'Tất cả', 1: 'Đã booking', 0: 'Chưa booking' } },
+};
+
 /** Cột tab Tra cứu Part On/Off (WO_PART_ON_OFF). Giờ đã đổi sang VN ở server:
  *  Mutation (ngày AMOS) + Mutation Time (ms) đã GHÉP thành 1 cột giờ VN. */
 const COLS_PART_ONOFF = [
@@ -835,7 +863,13 @@ const COLS_PART_ONOFF = [
   { title: 'Serial No (off)', field: 'serialno_off', headerFilter: 'input' },
   { title: 'Release No', field: 'releaseno', headerFilter: 'input' },
   { title: 'Mutator', field: 'mutator', headerFilter: 'input' },
-  { title: 'Status', field: 'status', headerFilter: 'input' },
+  {
+    title: 'Booking', field: 'booking_status', hozAlign: 'center', width: 140,
+    ...BOOKING_HEADER_FILTER,
+    headerTooltip: 'WO_PART_ON_OFF.STATUS — Booking status of the component change: '
+      + '0 = Not Booked (chưa booking) · 1 = Booked (đã booking).',
+    formatter: fmtBookingCell,
+  },
   { title: 'Giờ mutation (VN)', field: 'mutation_time_vn', formatter: fmtDateCell },
   { title: 'Created By', field: 'created_by', headerFilter: 'input' },
   { title: 'Created Date (VN)', field: 'created_date_vn', formatter: fmtDateOnlyCell },
@@ -1041,6 +1075,13 @@ const REPORT_DEFS = {
       { title: 'Event Perf', field: 'event_perf', formatter: fmtIntCell, headerFilter: 'input' },
       { title: 'Vị trí (AC pos)', field: 'ac_position', headerFilter: 'input' },
       { title: 'Thời điểm', field: 'thoi_diem_vn', formatter: fmtDateCell },
+      {
+        title: 'Booking', field: 'booking_status', hozAlign: 'center', width: 140,
+        ...BOOKING_HEADER_FILTER,
+        headerTooltip: 'WO_PART_ON_OFF.STATUS — 0 = Not Booked · 1 = Booked. '
+          + 'Lần thay thiết bị CHƯA booking là một lý do rất hay gặp khiến on_off không có sự kiện tương ứng.',
+        formatter: fmtBookingCell,
+      },
       {
         title: 'Có on_off', field: 'co_su_kien_on_off', hozAlign: 'center', width: 100,
         headerFilter: 'list',

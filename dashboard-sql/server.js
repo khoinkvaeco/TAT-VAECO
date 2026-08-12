@@ -1552,6 +1552,18 @@ function woKey(pn, sn) {
   return String(pn || '').trim().toUpperCase() + '|' + String(sn || '').trim().toUpperCase();
 }
 
+/**
+ * WO_PART_ON_OFF.[STATUS] - "Booking status of the component change" (tai lieu
+ * AMOS): 0 = Not Booked, 1 = Booked.
+ * Cot Oracle co the la so hoac chuoi ('0', '1', co khoang trang) nen ep ve so;
+ * gia tri LA (khong phai 0/1) -> NULL, giao dien se hien nguyen van chu khong
+ * am tham coi la "chua booking".
+ */
+function bookingStatusExpr(col) {
+  return `CASE WHEN TRY_CONVERT(float, ${col}) IN (0, 1)
+               THEN TRY_CONVERT(int, TRY_CONVERT(float, ${col})) END`;
+}
+
 /** Lay cac lan LAP trong WO_PART_ON_OFF cho danh sach thiet bi (theo lo).
  *  @returns Map<'PARTNO|SERIALNO', Array<{install_time_vn, ...}>> */
 async function fetchWoInstalls(rows) {
@@ -1579,7 +1591,9 @@ async function fetchWoInstalls(rows) {
                 TRY_CONVERT(bigint, w.[EVENT_PERFNO_I]) AS event_perf,
                 RTRIM(w.[AC_POSITION])  AS ac_position,
                 RTRIM(w.[PARTNO_OFF])   AS partno_off,
-                RTRIM(w.[SERIALNO_OFF]) AS serialno_off
+                RTRIM(w.[SERIALNO_OFF]) AS serialno_off,
+                ${bookingStatusExpr('w.[STATUS]')} AS booking_status,
+                RTRIM(w.[STATUS])       AS status_tho
          FROM [DWH_DB]..[STG_AMOS].[WO_PART_ON_OFF] w
          WHERE w.[SERIALNO] IN (${names.join(', ')})`,
         params
@@ -1627,6 +1641,9 @@ async function splitIssuedByWoInstall(rows) {
       // cua dong nay bi thao xuong (dat ten wo_* de khong lan voi partno_off).
       wo_partno_off: best.partno_off || null,
       wo_serialno_off: best.serialno_off || null,
+      // Tinh trang booking cua lan thay the do (0 = chua booking, 1 = da booking)
+      booking_status: best.booking_status ?? null,
+      status_tho: best.status_tho || '',
       tat_install_days: issue ? (inst - issue) / 86400000 : null,
     });
   }
@@ -2256,6 +2273,8 @@ async function qOneSidedWoParts(range, f) {
       TRY_CONVERT(bigint, x.[EVENT_PERFNO_I])  AS event_perf,
       RTRIM(x.[AC_POSITION])                   AS ac_position,
       ${mutVN}                                 AS thoi_diem_vn,
+      ${bookingStatusExpr('x.[STATUS]')}       AS booking_status,
+      RTRIM(x.[STATUS])                        AS status_tho,
       RTRIM(x.[CREATED_BY])                    AS created_by
     INTO #w1
     FROM [DWH_DB]..[STG_AMOS].[WO_PART_ON_OFF] x
@@ -2300,6 +2319,8 @@ async function qOneSidedWoParts(range, f) {
       w.event_perf    AS event_perf,
       w.ac_position   AS ac_position,
       w.thoi_diem_vn  AS thoi_diem_vn,
+      w.booking_status AS booking_status,
+      w.status_tho    AS status_tho,
       w.created_by    AS created_by,
       -- Co su kien on_off tuong ung khong? (khong co = cac bao cao dua tren
       -- on_off dang BO SOT thiet bi nay)
@@ -4345,7 +4366,10 @@ async function qPartOnOff(crit) {
       RTRIM(w.[SERIALNO_OFF])   AS serialno_off,
       RTRIM(w.[RELEASENO])      AS releaseno,
       RTRIM(w.[MUTATOR])        AS mutator,
-      RTRIM(w.[STATUS])         AS status,
+      -- Tinh trang BOOKING cua lan thay thiet bi (0 = Not Booked, 1 = Booked).
+      -- Giu ca gia tri THO de neu AMOS tra ve thu khac 0/1 thi van nhin thay.
+      ${bookingStatusExpr('w.[STATUS]')} AS booking_status,
+      RTRIM(w.[STATUS])         AS status_tho,
       ${mutVN}                  AS mutation_time_vn,
       RTRIM(w.[CREATED_BY])     AS created_by,
       ${createdVN}              AS created_date_vn
@@ -6490,6 +6514,33 @@ app.get('/api/admin/diag/higher', h(async (req, res) => {
     };
   } catch (e) {
     out.woPartOnOff = { docDuoc: false, loi: e.message };
+  }
+
+  // ---- 1b) STATUS = tinh trang BOOKING (0 = Not Booked, 1 = Booked) --------
+  //          Phan bo trong ky + doi chieu voi "co su kien on_off hay khong":
+  //          lan thay thiet bi CHUA booking la mot ly do rat hay gap khien
+  //          on_off khong co su kien tuong ung.
+  try {
+    const dp = { ...amosDayParams(range) };
+    out.bookingStatus = {
+      nghia: { 0: 'Not Booked (chua booking)', 1: 'Booked (da booking)' },
+      phanBo: await query(`
+        SELECT ${bookingStatusExpr('x.[STATUS]')} AS booking_status,
+               RTRIM(x.[STATUS]) AS status_tho,
+               COUNT(*) AS so_dong,
+               SUM(CASE WHEN x.[SERIALNO] IS NOT NULL AND LTRIM(RTRIM(x.[SERIALNO])) <> ''
+                         AND x.[SERIALNO_OFF] IS NOT NULL AND LTRIM(RTRIM(x.[SERIALNO_OFF])) <> ''
+                        THEN 1 ELSE 0 END) AS ca_hai_phia,
+               SUM(CASE WHEN x.[SERIALNO] IS NULL OR LTRIM(RTRIM(x.[SERIALNO])) = ''
+                         OR x.[SERIALNO_OFF] IS NULL OR LTRIM(RTRIM(x.[SERIALNO_OFF])) = ''
+                        THEN 1 ELSE 0 END) AS mot_phia
+        FROM [DWH_DB]..[STG_AMOS].[WO_PART_ON_OFF] x
+        WHERE x.[MUTATION] BETWEEN @fromDay AND @toDay
+        GROUP BY ${bookingStatusExpr('x.[STATUS]')}, RTRIM(x.[STATUS])
+        ORDER BY COUNT(*) DESC`, dp),
+    };
+  } catch (e) {
+    out.bookingStatus = { loi: e.message };
   }
 
   // ---- 2) on_off: cot [higher_par] dang duoc dung nhu the nao --------------
