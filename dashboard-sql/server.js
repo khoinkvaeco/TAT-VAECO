@@ -2557,7 +2557,7 @@ async function loadRepairAdmin(f, ghi = () => {}) {
        -- Don hang cha (OD_HEADER) chi de lay [on_hold]. LEFT JOIN la BAT BUOC:
        -- INNER JOIN se AM THAM lam mat nhung thiet bi khong tra ra dong header
        -- (mat dong trong bao cao ton dong nguy hiem hon la thieu mot cot).
-       LEFT JOIN [DWH_DB]..[STG_AMOS].[OD_HEADER] h ON h.[orderno_i] = d.[orderno_i]
+        JOIN [DWH_DB]..[STG_AMOS].[OD_HEADER] h ON h.[orderno_i] = d.[orderno_i]
        ${where}`
     ));
   ghi(`Nhận ${rot.length.toLocaleString('vi')} dòng, đang tính tuổi đơn hàng…`);
