@@ -616,19 +616,14 @@ function gomTheoNhanVien(rows, cot, kieu) {
     if (!ma) continue;
     let g = m.get(ma);
     if (!g) {
-      g = { ma_nv: ma, ten_nv: 'NV ' + ma.slice(-4), so_item: 0, so_xuat: 0,
-            tong_sl: 0, phieu: new Set(), phieuXuat: new Set(), scan: new Map() };
+      g = { ma_nv: ma, ten_nv: 'NV ' + ma.slice(-4), so_item: 0, so_huy: 0,
+            tong_sl: 0, phieu: new Set(), scan: new Map() };
       m.set(ma, g);
     }
     g.so_item += 1;
     g.tong_sl += Number(r.qty) || 0;
     g.phieu.add(String(r[khoaPhieu]));
-    // Ben thu kho chi dem item THUC SU XUAT; phieu chi toan cancel/return
-    // khong phai mot lan xuat kho nen khong vao "so phieu xuat".
-    if (kieu === 'pickslip' && !r.is_cancel) {
-      g.so_xuat += 1;
-      g.phieuXuat.add(String(r[khoaPhieu]));
-    }
+    if (r.is_cancel) g.so_huy += 1;
     // Item cancel khong can scan -> khong dua vao mau so ty le scan
     if (!(kieu === 'pickslip' && r.loai === 'CANCEL')) g.scan.set(String(r[khoaPhieu]), r.scan);
   }
@@ -638,11 +633,12 @@ function gomTheoNhanVien(rows, cot, kieu) {
     const da = tt.filter((v) => v === 'SCANNED').length;
     const chua = tt.filter((v) => v === 'CHUA_SCAN').length;
     const o = {
-      ma_nv: g.ma_nv, ten_nv: g.ten_nv,
-      so_phieu: kieu === 'pickslip' ? g.phieuXuat.size : g.phieu.size,
+      ma_nv: g.ma_nv, ten_nv: g.ten_nv, so_phieu: g.phieu.size,
       da_scan: da, chua_scan: chua, ty_le_scan: (da + chua) ? pct(da, da + chua) : null,
     };
-    if (kieu === 'pickslip') o.so_xuat = g.so_xuat;
+    // Ben thu kho: chi ra "item xuat" (= tong item tru so item huy/tra, DUNG
+    // cong thuc cu), khong ra cancel/return/khac.
+    if (kieu === 'pickslip') o.so_xuat = g.so_item - g.so_huy;
     else { o.so_item = g.so_item; o.tong_sl = Math.round(g.tong_sl * 100) / 100; }
     return o;
   }).sort((a, b) => (kieu === 'pickslip' ? b.so_xuat - a.so_xuat : b.so_item - a.so_item));

@@ -67,15 +67,14 @@ async function main() {
     kiemTra('Không còn cột cancel / return / khác trong bảng thủ kho',
       tk.every((r) => !('so_cancel' in r) && !('so_return' in r)
         && !('so_khac' in r) && !('ty_le_huy' in r) && !('so_item' in r)));
-    // Phieu chi toan cancel/return KHONG phai mot lan xuat kho -> khong duoc
-    // tinh vao "so phieu xuat". Tinh LAI hoan toan doc lap tu bang chi tiet
-    // (duong khac han: SQL gom tren #ps + Node dem phieu, con day la reduce
-    // tren rows) - dem mot phieu cho hai nguoi se lam tong o day VOT LEN.
-    const plXuat = new Set((ps.rows || []).filter((r) => !r.is_cancel)
-      .map((r) => String(r.picking_listno)));
-    kiemTra('Tổng phiếu xuất = số picking list CÓ item xuất (tính lại từ bảng chi tiết)',
-      !ps.truncated && cong(tk, 'so_phieu') === plXuat.size,
-      `${cong(tk, 'so_phieu')} vs ${plXuat.size}`);
+    // So phieu GIU NGUYEN cach tinh cu: moi picking list cua ky, quy cho DUNG
+    // MOT thu kho. Tinh LAI hoan toan doc lap tu bang chi tiet (duong khac han:
+    // SQL gom tren #ps + Node dem phieu, con day la reduce tren rows) - dem mot
+    // phieu cho hai nguoi se lam tong o day VOT LEN.
+    const plAll = new Set((ps.rows || []).map((r) => String(r.picking_listno)));
+    kiemTra('Tổng số phiếu = số picking list của kỳ (tính lại từ bảng chi tiết)',
+      !ps.truncated && cong(tk, 'so_phieu') === plAll.size,
+      `${cong(tk, 'so_phieu')} vs ${plAll.size}`);
     // ⚠️ MOT PHIEU CHI THUOC MOT THU KHO: neu dem mot phieu cho nhieu nguoi thi
     //    tong o day se LON HON mau so cua ca tab (da tung xay ra o du lieu mau).
     kiemTra('Phiếu đã scan khớp — không đếm một phiếu cho nhiều người',

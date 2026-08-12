@@ -203,16 +203,14 @@ Mỗi tab LGC có thêm một bảng KPI theo người:
 | **KPI thủ kho xuất booking** (tab *Quản lý xuất kho*) | `PICKSLIP_HEADER.BOOKING_SIGN` | số phiếu xuất · item xuất · phiếu đã scan · **tỷ lệ scan** |
 | **KPI inspector nhập kho** (tab *Receiving*) | `HISTORY.CREATED_BY` | số phiếu receive · item · tổng SL · phiếu đã scan · **tỷ lệ scan** |
 
-⚠️ **Bảng thủ kho CHỈ đo việc XUẤT KHO** (nghiệp vụ chốt): **cancel / return / khác không được
-đếm và không tính tỷ lệ** — chúng không phản ánh năng suất của thủ kho. Kéo theo hai hệ quả phải
-biết:
+⚠️ **Bảng thủ kho chỉ đo việc XUẤT KHO** (nghiệp vụ chốt): **không hiện cancel / return / khác** —
+chúng không phản ánh năng suất của thủ kho. **Cách tính của các chỉ số còn lại GIỮ NGUYÊN như
+cũ**, chỉ bỏ cột đi:
 
-* **`item xuất`** chỉ đếm dòng `is_cancel = 0`, nên tổng của bảng bằng **`soDongThuc`** của tab
-  (số item **thực**), *không* bằng tổng item.
-* **`số phiếu xuất`** chỉ đếm phiếu **có ít nhất một item xuất**. Phiếu chỉ toàn cancel/return
-  **không phải một lần xuất kho** — đếm vào thì con số của thủ kho cao hơn lượng hàng họ thực sự
-  đã xuất. Vì vậy `số phiếu xuất` có thể **nhỏ hơn mẫu số của tỷ lệ scan** (mẫu số scan chỉ loại
-  phiếu *toàn cancel*, vẫn giữ phiếu return) — hai cột đếm hai tập khác nhau, đúng như thiết kế.
+* **`item xuất`** = tổng item **trừ** số item hủy/trả (`COUNT(*) − SUM(is_cancel)`) — đúng công
+  thức cũ; `so_item`/`so_huy` chỉ dùng để tính ra nó, **không** đưa ra bảng.
+* **`số phiếu`** vẫn là **mọi picking list** của người đó trong kỳ, mỗi phiếu quy cho **đúng một**
+  thủ kho — không đổi.
 
 Số liệu cancel / return / khác **vẫn còn đầy đủ** ở thẻ KPI và biểu đồ của cả tab, chỉ bỏ khỏi
 bảng đánh giá con người.
@@ -233,10 +231,11 @@ server mỗi lần; bản cache cũ thiếu cột đó sẽ tự bị dựng l�
    mẫu số tỷ lệ scan (đã trừ phiếu chỉ toàn item cancel).
 3. **Tỷ lệ scan để trống (`—`), không phải `0%`**, khi người đó không có phiếu nào cần scan.
    `0%` đọc ra là *“chưa scan cái nào”* — oan cho người ta.
-4. **`Số phiếu xuất` được tính LẠI hoàn toàn độc lập** trong bài kiểm tra (reduce trên bảng chi
-   tiết, khác hẳn đường SQL-gom-trên-`#ps` + Node-đếm-phiếu của server) rồi so bằng. Bài này đã
-   được **chứng minh là bắt được lỗi**: cố tình đếm cả phiếu toàn cancel → `69` so với `61`, trượt
-   ngay. Bài cũng chốt luôn **không được có lại** các cột cancel / return / khác trong bảng này.
+4. **`Số phiếu` được tính LẠI hoàn toàn độc lập** trong bài kiểm tra (reduce trên bảng chi tiết,
+   khác hẳn đường SQL-gom-trên-`#ps` + Node-đếm-phiếu của server) rồi so bằng. Bài này đã được
+   **chứng minh là bắt được lỗi**: cố tình gán `booking_sign` theo *dòng* thay vì theo *phiếu* →
+   `201` so với `69`, trượt ngay. Bài cũng chốt luôn **không được có lại** các cột cancel /
+   return / khác trong bảng này.
 
 Bộ lọc Station/Store/Trung tâm và kỳ báo cáo **ăn vào cả bảng KPI** (cũng được kiểm tra).
 

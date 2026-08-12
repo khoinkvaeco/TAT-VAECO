@@ -3035,10 +3035,7 @@ async function enrichPickslipRows(rows, allPicking = [], allReturns = [], ghi = 
   };
   for (const p of allPicking) {
     const g = layNv(p.booking_sign);
-    // "So phieu xuat" chi dem phieu CO item thuc su xuat. Phieu chi toan
-    // cancel/return khong phai mot lan xuat kho - dem vao thi con so KPI cua
-    // thu kho se cao hon luong hang thuc su ho da xuat.
-    if (g && Number(p.so_item_xuat) > 0) g.soPhieu += 1;
+    if (g) g.soPhieu += 1;
     // Phieu chi toan item cancel -> khong can scan, khong vao mau so ty le
     if (!Number(p.so_can_scan)) { st.phieuMienScan += 1; continue; }
     const s = scanStateTheoStation(index, p.station, idStr(p.pl_all));
@@ -3230,11 +3227,7 @@ async function qPickslip(range, f, ghi = () => {}) {
     --     phieu chi toan cancel ra khoi mau so ty le scan.
     SELECT x.picking_listno AS pl_all, MIN(x.station) AS station,
            MIN(x.booking_sign) AS booking_sign,
-           SUM(CASE WHEN x.loai = 'CANCEL' THEN 0 ELSE 1 END) AS so_can_scan,
-           -- So item THUC SU XUAT (is_cancel = 0) cua tung phieu. Dung de dem
-           -- "so phieu xuat" cua thu kho: phieu chi toan cancel/return KHONG
-           -- phai la mot lan xuat kho nen khong duoc tinh vao KPI xuat.
-           SUM(CASE WHEN x.is_cancel = 0 THEN 1 ELSE 0 END) AS so_item_xuat
+           SUM(CASE WHEN x.loai = 'CANCEL' THEN 0 ELSE 1 END) AS so_can_scan
     ${join} WHERE 1 = 1 ${w}
     GROUP BY x.picking_listno;
 
@@ -3251,14 +3244,14 @@ async function qPickslip(range, f, ghi = () => {}) {
     -- [7] KPI THU KHO XUAT BOOKING - gom theo PICKSLIP_HEADER.BOOKING_SIGN
     --     (nguoi thao tac booking xuat kho). Chay tren #ps da o local nen
     --     KHONG ton them luot hoi AMOS nao.
-    --     ⚠️ KPI nay chi do VIEC XUAT KHO (nghiep vu chot): chi dem item thuc
-    --     su xuat (is_cancel = 0). Cancel/Return/Khac KHONG duoc dem va cung
-    --     KHONG tinh ty le - chung khong phan anh nang suat cua thu kho.
-    --     (Cac con so cancel/return van con day du o the KPI va bieu do cua ca
-    --     tab, chi bo khoi bang danh gia con nguoi.)
+    --     ⚠️ Bang nay chi do VIEC XUAT KHO (nghiep vu chot): KHONG hien
+    --     cancel/return/khac. CACH TINH GIU NGUYEN nhu cu - van dem tren cung
+    --     bo dong do, chi bo cac cot cancel/return ra khoi bang. So lieu day
+    --     du cua chung van con o the KPI va bieu do cua ca tab.
     SELECT x.booking_sign AS ma_nv,
            MAX(${tenNhanVien('sb')}) AS ten_nv,
-           SUM(CASE WHEN x.is_cancel = 0 THEN 1 ELSE 0 END) AS so_xuat
+           COUNT(*) AS so_item,
+           SUM(x.is_cancel) AS so_huy
     ${join} ${signJoin('x.[booking_sign]', 'sb')}
     WHERE 1 = 1 ${w}
     GROUP BY x.booking_sign;
@@ -3300,7 +3293,7 @@ async function qPickslip(range, f, ghi = () => {}) {
   // KPI THU KHO XUAT BOOKING: so lieu dem tu SQL (#ps) + so phieu da/chua scan
   // tinh o Node (doi chieu thu muc file scan) -> ghep lai theo ma nhan vien.
   const kpiThuKho = (pick('ma_nv') || [])
-    .filter((r) => 'so_xuat' in r)
+    .filter((r) => 'so_huy' in r)
     .map((r) => {
       const ma = String(r.ma_nv || '').trim();
       const sn = scan.scanTheoNv.get(ma) || { soPhieu: 0, daScan: 0, chuaScan: 0 };
@@ -3311,7 +3304,9 @@ async function qPickslip(range, f, ghi = () => {}) {
         // So phieu lay tu Node (moi phieu quy cho DUNG MOT nguoi), khong lay
         // COUNT(DISTINCT ...) cua SQL - xem giai thich o enrichPickslipRows().
         so_phieu: sn.soPhieu,
-        so_xuat: r.so_xuat || 0,
+        // Item xuat = tong item tru so item huy/tra - GIU NGUYEN cong thuc cu.
+        // so_item / so_huy chi dung de tinh ra day, KHONG dua ra bang.
+        so_xuat: (r.so_item || 0) - (r.so_huy || 0),
         da_scan: sn.daScan,
         chua_scan: sn.chuaScan,
         ty_le_scan: tongScan ? pct(sn.daScan, tongScan) : null,
