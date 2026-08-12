@@ -622,6 +622,11 @@ function repairAdminItems(f) {
           order_date_vn: new Date(Date.now() - age * 86400000).toISOString(),
           od_status: 0, od_state: st2, od_backorder: bo,
           od_ext_state: rnd(['', 'AOG', 'RTN']),
+          // OD_HEADER.on_hold: ~15% don dang bi giu; ~5% khong tra ra dong
+          // header (null) - phai sinh ca truong hop nay de kiem thu duoc nhanh
+          // "khong hieu duoc gia tri" cua giao dien.
+          on_hold: rndInt(0, 19) === 0 ? null : (rndInt(0, 6) === 0),
+          on_hold_tho: '',
           age_days: age, nhom: age < 30 ? 'less30' : 'over30',
           tinh_tong_hop: bo === 1 && st2 === 'O',
         });

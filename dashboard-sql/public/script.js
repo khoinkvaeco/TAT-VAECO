@@ -1149,7 +1149,8 @@ const REPORT_DEFS = {
   'repair-admin': {
     title: 'Repair Admin — tồn đọng tại vị trí Unserviceable',
     desc: 'Thiết bị đang nằm ở vị trí U/S (LOCATION.location_type = -4) có đơn sửa chữa OD_DETAIL với '
-      + 'status = 0, backorder = 1 và state = O. Nguồn: LOCATION × ROTABLES × OD_DETAIL (nối psn + labelno). '
+      + 'status = 0, backorder = 1 và state = O. Nguồn: LOCATION × ROTABLES × OD_DETAIL (nối psn + labelno), '
+      + 'thêm OD_HEADER (nối ORDERNO_I) để lấy cột Hold — đơn sửa chữa có đang bị giữ hay không. '
       + 'Đây là ẢNH CHỤP HIỆN TRẠNG nên KHÔNG phụ thuộc kỳ báo cáo — chỉ lọc theo Station/Store đang chọn. '
       + 'Tuổi tồn đọng tính từ ROTABLES.orderdate. Bảng tổng hợp bên dưới dựng từ chính danh sách này nên luôn khớp; '
       + 'nút ⬇ Excel xuất danh sách chi tiết.',
@@ -1164,6 +1165,33 @@ const REPORT_DEFS = {
       { title: 'Label', field: 'labelno', formatter: fmtIntCell, hozAlign: 'right', headerFilter: 'input' },
       { title: 'PSN', field: 'psn', formatter: fmtIntCell, hozAlign: 'right', headerFilter: 'input' },
       { title: 'Order No', field: 'orderno', headerFilter: 'input' },
+      {
+        title: 'Hold', field: 'on_hold', hozAlign: 'center', width: 110,
+        headerFilter: 'list',
+        headerFilterParams: { values: { '': 'Tất cả', true: 'Đang hold', false: 'Không hold' } },
+        // So sanh TUONG MINH theo chuoi. Du lieu la BOOLEAN (true/false) con gia
+        // tri o loc la CHUOI ('true'/'false'); Tabulator 6 hien tu ep kieu nen
+        // van dung, nhung cach ep do la chi tiet BEN TRONG thu vien - viet han
+        // ra day thi nang cap Tabulator khong the am tham lam hong o loc nay.
+        // (Da do ca hai chieu bang Playwright: 6 dong hold / 48 dong khong hold,
+        // khop dung so lieu API.)
+        headerFilterFunc: (giaTriLoc, giaTriDong) => String(giaTriDong) === String(giaTriLoc),
+        headerTooltip: 'OD_HEADER.on_hold — đơn sửa chữa có đang bị GIỮ (hold) không. '
+          + 'Nối OD_DETAIL × OD_HEADER theo ORDERNO_I. Trống = OD_HEADER không có dòng tương ứng.',
+        formatter: (cell) => {
+          const v = cell.getValue();
+          if (v === true) {
+            const c = cssVar('--critical');
+            return `<span class="tat-badge" style="background:${c}22;color:${c}">Đang hold</span>`;
+          }
+          if (v === false) return '<span style="color:var(--text-muted)">—</span>';
+          // Khong hieu duoc gia tri -> hien NGUYEN VAN, khong doan la "khong hold"
+          const tho = String(cell.getRow().getData().on_hold_tho ?? '').trim();
+          return tho
+            ? `<span style="color:var(--text-muted)" title="Giá trị on_hold không nhận dạng được">${escapeHtml(tho)}</span>`
+            : '<span style="color:var(--text-muted)" title="OD_HEADER không có dòng tương ứng">?</span>';
+        },
+      },
       { title: 'Ngày order', field: 'order_date_vn', formatter: fmtDateOnlyCell },
       {
         title: 'Tuổi (ngày)', field: 'age_days', hozAlign: 'right', sorter: 'number',
@@ -1342,13 +1370,14 @@ function repairAdminSummary(rows) {
     let g = map.get(key);
     if (!g) {
       g = { station: r.station || '', store: r.store || '', location: r.location || '',
-            less30: 0, over30: 0, unknown: 0, total: 0 };
+            less30: 0, over30: 0, unknown: 0, hold: 0, total: 0 };
       map.set(key, g);
     }
     const a = r.age_days;
     if (a === null || a === undefined) g.unknown++;
     else if (Number(a) < 30) g.less30++;
     else g.over30++;
+    if (r.on_hold === true) g.hold++;
     g.total++;
   }
   const list = [...map.values()].sort(
@@ -1362,18 +1391,24 @@ function repairAdminSummary(rows) {
     if (!v) return '<td class="ra-num ra-zero">0</td>';
     return `<td class="ra-num"${warn ? ` style="color:${cssVar('--warning')};font-weight:600"` : ''}>${v}</td>`;
   };
+  // Cot "Dang hold" chi hien khi ky nay THUC SU co thiet bi bi hold - khong
+  // bay mot cot toan so 0 (giong cach lam cua cot "Khong ro ngay").
+  const coHold = sum('hold') > 0;
   const head = `<tr><th>Station</th><th>Store</th><th>Vị trí (U/S)</th>`
     + `<th class="ra-num">&lt; 30 ngày</th><th class="ra-num">≥ 30 ngày</th>`
     + (coUnknown ? '<th class="ra-num">Không rõ ngày</th>' : '')
+    + (coHold ? '<th class="ra-num">Đang hold</th>' : '')
     + `<th class="ra-num">Tổng</th></tr>`;
   const body = list.map((r) =>
     `<tr><td>${esc(r.station)}</td><td>${esc(r.store)}</td><td>${esc(r.location)}</td>`
     + num(r.less30) + num(r.over30, true)
     + (coUnknown ? num(r.unknown) : '')
+    + (coHold ? num(r.hold, true) : '')
     + `<td class="ra-num"><b>${r.total}</b></td></tr>`).join('');
   const foot = `<tr class="ra-total"><td colspan="3">TỔNG CỘNG (${list.length} vị trí)</td>`
     + `<td class="ra-num">${sum('less30')}</td><td class="ra-num">${sum('over30')}</td>`
     + (coUnknown ? `<td class="ra-num">${sum('unknown')}</td>` : '')
+    + (coHold ? `<td class="ra-num">${sum('hold')}</td>` : '')
     + `<td class="ra-num">${sum('total')}</td></tr>`;
   return `<table class="ra-table"><thead>${head}</thead><tbody>${body}</tbody><tfoot>${foot}</tfoot></table>`;
 }

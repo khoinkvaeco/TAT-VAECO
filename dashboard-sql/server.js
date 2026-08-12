@@ -2484,6 +2484,23 @@ function amosValueToDate(v) {
   return y >= 1990 && y <= 2100 ? d : null;
 }
 
+/**
+ * OD_HEADER.[on_hold] -> true / false / null.
+ * AMOS ghi cot co/khong theo nhieu kieu tuy bang (0/1, 'Y'/'N', 'T'/'F'), nen
+ * nhan het cac kieu do; gia tri KHONG hieu duoc tra ve null va giao dien se
+ * hien NGUYEN VAN - khong am tham coi la "khong hold" (bao thieu mot thiet bi
+ * dang bi giu la sai nguy hiem hon la de trong).
+ */
+function chuanHoaHold(v) {
+  if (v === null || v === undefined) return null;
+  if (typeof v === 'boolean') return v;
+  const s = String(v).trim().toUpperCase();
+  if (s === '') return null;
+  if (['1', 'Y', 'YES', 'T', 'TRUE'].includes(s)) return true;
+  if (['0', 'N', 'NO', 'F', 'FALSE'].includes(s)) return false;
+  return null;
+}
+
 const _repairMemo = new Map();
 /** Chay 1 lan cho ca 2 bao cao (tong hop + chi tiet) trong vong 60s. */
 async function getRepairAdmin(f, ghi = () => {}) {
@@ -2526,16 +2543,21 @@ async function loadRepairAdmin(f, ghi = () => {}) {
   if (f.store && f.store.length) where += ` AND l.[store] IN (${f.store.map(q).join(', ')})`;
 
   const rot = await buoc(ghi,
-    'Nối LOCATION × ROTABLES × OD_DETAIL trên AMOS (qua linked server — bước lâu nhất)',
+    'Nối LOCATION × ROTABLES × OD_DETAIL × OD_HEADER trên AMOS (qua linked server — bước lâu nhất)',
     () => query(
       `SELECT l.[locationno_i], l.[station], l.[store], l.[location],
               r.[partno], r.[serialno], r.[psn], r.[orderno], r.[orderdate], r.[labelno],
               d.[status] AS od_status, d.[state] AS od_state,
-              d.[backorder] AS od_backorder, d.[ext_state] AS od_ext_state
+              d.[backorder] AS od_backorder, d.[ext_state] AS od_ext_state,
+              h.[on_hold] AS od_on_hold
        FROM [DWH_DB]..[STG_AMOS].[LOCATION] l
        JOIN [DWH_DB]..[STG_AMOS].[ROTABLES] r ON l.[locationno_i] = r.[locationno_i]
        JOIN [DWH_DB]..[STG_AMOS].[OD_DETAIL] d
          ON r.[psn] = d.[psn] AND r.[labelno] = d.[labelno]
+       -- Don hang cha (OD_HEADER) chi de lay [on_hold]. LEFT JOIN la BAT BUOC:
+       -- INNER JOIN se AM THAM lam mat nhung thiet bi khong tra ra dong header
+       -- (mat dong trong bao cao ton dong nguy hiem hon la thieu mot cot).
+       LEFT JOIN [DWH_DB]..[STG_AMOS].[OD_HEADER] h ON h.[orderno_i] = d.[orderno_i]
        ${where}`
     ));
   ghi(`Nhận ${rot.length.toLocaleString('vi')} dòng, đang tính tuổi đơn hàng…`);
@@ -2561,6 +2583,12 @@ async function loadRepairAdmin(f, ghi = () => {}) {
       od_state: tr(r.od_state) || '',
       od_backorder: r.od_backorder ?? null,
       od_ext_state: tr(r.od_ext_state) || '',
+      // OD_HEADER.on_hold - don sua chua co dang bi GIU (hold) khong.
+      // Giu ca gia tri THO: cot Oracle co the la 0/1, 'Y'/'N', NULL... nen
+      // khong ep cung ve boolean o server ma de giao dien noi ro cai no thay.
+      on_hold: chuanHoaHold(r.od_on_hold),
+      on_hold_tho: r.od_on_hold === null || r.od_on_hold === undefined
+        ? '' : String(tr(r.od_on_hold)),
       age_days: age,
       nhom: age === null ? 'unknown' : (age < REPAIR_AGE_DAYS ? 'less30' : 'over30'),
       tinh_tong_hop: isRepairCounted(r.od_backorder, r.od_state),
