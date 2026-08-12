@@ -881,6 +881,7 @@ const REPORT_DEFS = {
     title: 'Danh mục trả unservice',
     desc: 'Thiết bị đã trả unservice (real_us1) trong kỳ, kèm ngày giao và nhân viên giao.',
     columns: [
+      { title: 'event_perf', field: 'event_perf', headerFilter: 'input' },
       { title: 'Part No', field: 'partno', headerFilter: 'input' },
       { title: 'Serial No', field: 'serialno', headerFilter: 'input' },
       { title: 'Label', field: 'labelno', headerFilter: 'input' },
@@ -932,6 +933,7 @@ const REPORT_DEFS = {
       + 'mà trả US sang tháng 8 sẽ tự biến mất khỏi báo cáo tháng 7. Vì vậy cùng một kỳ xem lại lúc khác có thể ra số khác — đó là đúng ý đồ. '
       + 'Xem /api/admin/diag/rnr để biết từng điều kiện cắt bớt bao nhiêu dòng.',
     columns: [
+      { title: 'event_perf', field: 'event_perf', headerFilter: 'input' },
       { title: 'Part No', field: 'partno', headerFilter: 'input' },
       { title: 'Serial No', field: 'serialno', headerFilter: 'input' },
       { title: 'Label', field: 'labelno', headerFilter: 'input'  },
@@ -952,6 +954,8 @@ const REPORT_DEFS = {
       { title: 'Center', field: 'trung_tam', headerFilter: 'input'  },
       { title: 'Staff', field: 'staff', headerFilter: 'input' },
       { title: 'Ngày Giờ tháo', field: 'removed_time_vn', formatter: fmtDateCell },
+      { title: 'station_now', field: 'station_now',  },
+      { title: 'store_now', field: 'store_now', headerFilter: 'input' },
       { title: 'PSN', field: 'psn', headerFilter: 'input', formatter: fmtIntCell, hozAlign: 'right' },
     ],
   },
@@ -1069,6 +1073,7 @@ const REPORT_DEFS = {
         headerFilter: 'list',
         headerFilterParams: { values: { '': 'Tất cả', ON: 'Chỉ lắp (ON)', OFF: 'Chỉ tháo (OFF)' } },
       },
+      
       { title: 'Part No', field: 'partno', headerFilter: 'input' },
       { title: 'Serial No', field: 'serialno', headerFilter: 'input' },
       { title: 'Label', field: 'labelno', formatter: fmtIntCell, headerFilter: 'input' },
