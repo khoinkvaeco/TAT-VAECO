@@ -1808,6 +1808,7 @@ async function qRemovedNotReturned(range, f) {
   );
   const text = `
     SELECT TOP (@top)
+      o.[event_perf] as event_perf,
       o.[partno]     AS partno,
       o.[serialno]   AS serialno,
       o.[labelno]    AS labelno,
@@ -1825,8 +1826,9 @@ async function qRemovedNotReturned(range, f) {
       -- Store hien tai lay tu LOCATION theo locationno_i cua ROTABLES - dung
       -- quan he ma chinh SQL cua Repair Admin dang dung. LEFT JOIN nen KHONG
       -- the lam mat dong nao; thieu du lieu thi lui ve store cua on_off.
-      COALESCE(NULLIF(RTRIM(LOC.[store]), ''), RTRIM(o.[store])) AS store_now,
-      RTRIM(RO.[location])   AS location,
+      COALESCE(NULLIF(RTRIM(LOC.[store]), ''), RTRIM(LOC.[store])) AS store_now,
+      COALESCE(NULLIF(RTRIM(LOC.[station]), ''), RTRIM(LOC.[station])) AS station_now,
+      RTRIM(LOC.[location])   AS location,
       o.[psn]                AS psn,
       ${amosToVN('o')} AS removed_time_vn
     FROM [NQT].[dbo].[on_off] o
@@ -2378,6 +2380,7 @@ async function qReturnedUnservice(range, f) {
   );
   const text = `
     SELECT TOP (@top)
+      r.[event_perf] as event_perf,
       r.[partno_off]     AS partno,
       r.[serialno_o]   AS serialno,
       r.[labelno]    AS labelno,
