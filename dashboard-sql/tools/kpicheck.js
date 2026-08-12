@@ -57,17 +57,25 @@ async function main() {
     const tk = ps.kpiThuKho || [];
     const k = ps.kpis || {};
     kiemTra('Có bảng KPI thủ kho', tk.length > 0, `${tk.length} người`);
-    kiemTra('Tổng item khớp KPI cả tab',
-      cong(tk, 'so_item') === k.soDong, `${cong(tk, 'so_item')} vs ${k.soDong}`);
-    kiemTra('Tổng cancel khớp',
-      cong(tk, 'so_cancel') === k.soCancel, `${cong(tk, 'so_cancel')} vs ${k.soCancel}`);
-    kiemTra('Tổng return khớp',
-      cong(tk, 'so_return') === k.soReturn, `${cong(tk, 'so_return')} vs ${k.soReturn}`);
-    kiemTra('Tổng "hủy/trả khác" khớp',
-      cong(tk, 'so_khac') === k.soKhac, `${cong(tk, 'so_khac')} vs ${k.soKhac}`);
-    // Item xuat = item - (cancel + return + khac): tu kiem tra trong bang
-    kiemTra('Item xuất = item − (cancel + return + khác) ở TỪNG người',
-      tk.every((r) => r.so_xuat === r.so_item - r.so_cancel - r.so_return - r.so_khac));
+    // Nghiep vu CHOT: bang nay chi do VIEC XUAT KHO. Tong "item xuat" phai
+    // bang so item THUC (da tru cancel/return/khac) cua ca tab.
+    kiemTra('Tổng item xuất khớp KPI cả tab',
+      cong(tk, 'so_xuat') === k.soDongThuc, `${cong(tk, 'so_xuat')} vs ${k.soDongThuc}`);
+    // Chot theo yeu cau nguoi dung: KHONG duoc co lai cot cancel/return/khac.
+    // (Kiem cai KHONG CO nghe la thua, nhung day la yeu cau nghiep vu ro rang -
+    // ai do them lai cot vao sau nay se bi bao ngay tai day.)
+    kiemTra('Không còn cột cancel / return / khác trong bảng thủ kho',
+      tk.every((r) => !('so_cancel' in r) && !('so_return' in r)
+        && !('so_khac' in r) && !('ty_le_huy' in r) && !('so_item' in r)));
+    // Phieu chi toan cancel/return KHONG phai mot lan xuat kho -> khong duoc
+    // tinh vao "so phieu xuat". Tinh LAI hoan toan doc lap tu bang chi tiet
+    // (duong khac han: SQL gom tren #ps + Node dem phieu, con day la reduce
+    // tren rows) - dem mot phieu cho hai nguoi se lam tong o day VOT LEN.
+    const plXuat = new Set((ps.rows || []).filter((r) => !r.is_cancel)
+      .map((r) => String(r.picking_listno)));
+    kiemTra('Tổng phiếu xuất = số picking list CÓ item xuất (tính lại từ bảng chi tiết)',
+      !ps.truncated && cong(tk, 'so_phieu') === plXuat.size,
+      `${cong(tk, 'so_phieu')} vs ${plXuat.size}`);
     // ⚠️ MOT PHIEU CHI THUOC MOT THU KHO: neu dem mot phieu cho nhieu nguoi thi
     //    tong o day se LON HON mau so cua ca tab (da tung xay ra o du lieu mau).
     kiemTra('Phiếu đã scan khớp — không đếm một phiếu cho nhiều người',
@@ -100,9 +108,9 @@ async function main() {
     const ps2 = await fetch(`${BASE}/api/pickslip?nocache=1&station=HAN`).then((r) => r.json());
     const tk2 = ps2.kpiThuKho || [];
     kiemTra('Đổi bộ lọc → bảng KPI cũng đổi theo (không phải số của cả kỳ)',
-      cong(tk2, 'so_item') === (ps2.kpis || {}).soDong
-        && cong(tk2, 'so_item') <= cong(tk, 'so_item'),
-      `HAN: ${cong(tk2, 'so_item')} item ≤ tất cả: ${cong(tk, 'so_item')}`);
+      cong(tk2, 'so_xuat') === (ps2.kpis || {}).soDongThuc
+        && cong(tk2, 'so_xuat') <= cong(tk, 'so_xuat'),
+      `HAN: ${cong(tk2, 'so_xuat')} item xuất ≤ tất cả: ${cong(tk, 'so_xuat')}`);
   } finally {
     srv.kill();
     await sleep(300);

@@ -616,20 +616,21 @@ function gomTheoNhanVien(rows, cot, kieu) {
     if (!ma) continue;
     let g = m.get(ma);
     if (!g) {
-      g = { ma_nv: ma, ten_nv: 'NV ' + ma.slice(-4), so_item: 0, tong_sl: 0,
-            phieu: new Set(), scan: new Map(),
-            so_cancel: 0, so_return: 0, so_khac: 0, so_huy: 0 };
+      g = { ma_nv: ma, ten_nv: 'NV ' + ma.slice(-4), so_item: 0, so_xuat: 0,
+            tong_sl: 0, phieu: new Set(), phieuXuat: new Set(), scan: new Map() };
       m.set(ma, g);
     }
     g.so_item += 1;
     g.tong_sl += Number(r.qty) || 0;
     g.phieu.add(String(r[khoaPhieu]));
+    // Ben thu kho chi dem item THUC SU XUAT; phieu chi toan cancel/return
+    // khong phai mot lan xuat kho nen khong vao "so phieu xuat".
+    if (kieu === 'pickslip' && !r.is_cancel) {
+      g.so_xuat += 1;
+      g.phieuXuat.add(String(r[khoaPhieu]));
+    }
     // Item cancel khong can scan -> khong dua vao mau so ty le scan
     if (!(kieu === 'pickslip' && r.loai === 'CANCEL')) g.scan.set(String(r[khoaPhieu]), r.scan);
-    if (r.loai === 'CANCEL') g.so_cancel += 1;
-    else if (r.loai === 'RETURN') g.so_return += 1;
-    else if (r.loai === 'KHAC') g.so_khac += 1;
-    if (r.is_cancel) g.so_huy += 1;
   }
   const pct = (a, b) => (b ? Math.round((a / b) * 1000) / 10 : 0);
   return [...m.values()].map((g) => {
@@ -638,18 +639,13 @@ function gomTheoNhanVien(rows, cot, kieu) {
     const chua = tt.filter((v) => v === 'CHUA_SCAN').length;
     const o = {
       ma_nv: g.ma_nv, ten_nv: g.ten_nv,
-      so_phieu: g.phieu.size, so_item: g.so_item,
+      so_phieu: kieu === 'pickslip' ? g.phieuXuat.size : g.phieu.size,
       da_scan: da, chua_scan: chua, ty_le_scan: (da + chua) ? pct(da, da + chua) : null,
     };
-    if (kieu === 'pickslip') {
-      o.so_xuat = g.so_item - g.so_huy;
-      o.so_cancel = g.so_cancel; o.so_return = g.so_return; o.so_khac = g.so_khac;
-      o.ty_le_huy = pct(g.so_huy, g.so_item);
-    } else {
-      o.tong_sl = Math.round(g.tong_sl * 100) / 100;
-    }
+    if (kieu === 'pickslip') o.so_xuat = g.so_xuat;
+    else { o.so_item = g.so_item; o.tong_sl = Math.round(g.tong_sl * 100) / 100; }
     return o;
-  }).sort((a, b) => b.so_item - a.so_item);
+  }).sort((a, b) => (kieu === 'pickslip' ? b.so_xuat - a.so_xuat : b.so_item - a.so_item));
 }
 
 // Doi ngu THU KHO (booking) va INSPECTOR (nhap kho) - CO CHU DINH la mot nhom

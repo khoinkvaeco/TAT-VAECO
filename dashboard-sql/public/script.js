@@ -1371,6 +1371,10 @@ const reportSeqs = {};      // hostKey -> chong race RIENG tung cho
  * ⚠️ Ty le scan de `null` khi nguoi do KHONG co phieu nao can scan (vi du toan
  * item cancel) - hien "—" chu KHONG hien 0%: 0% doc ra la "chua scan cai nao",
  * oan cho nguoi ta.
+ *
+ * ⚠️ Ben thu kho CHI do viec XUAT KHO (nghiep vu chot): phieu xuat + item xuat.
+ * Cancel/Return/Khac co y KHONG dua vao bang nay - so lieu day du cua chung
+ * van nam o the KPI va bieu do cua ca tab.
  */
 function veKpiNhanVien(sel, rows, kieu) {
   const box = $(sel);
@@ -1389,28 +1393,26 @@ function veKpiNhanVien(sel, rows, kieu) {
   };
   const laXuat = kieu === 'pickslip';
   const cot = laXuat
-    ? ['Mã NV', 'Tên', 'Số phiếu xuất', 'Item', 'Item xuất', 'Cancel', 'Return', 'Khác', 'Tỷ lệ hủy/trả', 'Phiếu đã scan', 'Tỷ lệ scan']
+    ? ['Mã NV', 'Tên', 'Số phiếu xuất', 'Item xuất', 'Phiếu đã scan', 'Tỷ lệ scan']
     : ['Mã NV', 'Tên', 'Số phiếu receive', 'Item', 'Tổng SL', 'Phiếu đã scan', 'Tỷ lệ scan'];
   const head = '<tr>' + cot.map((c, i) => `<th${i >= 2 ? ' class="ra-num"' : ''}>${c}</th>`).join('') + '</tr>';
   const num = (v) => `<td class="ra-num">${v}</td>`;
   const body = ds.map((r) => {
     const chung = `<tr><td class="nv-ma">${esc(r.ma_nv)}</td><td class="nv-ten">${esc(r.ten_nv) || '—'}</td>`
-      + num(r.so_phieu) + num(r.so_item);
+      + num(r.so_phieu);
     const duoi = num(`${r.da_scan}/${r.da_scan + r.chua_scan}`) + num(bar(r.ty_le_scan)) + '</tr>';
     return laXuat
-      ? chung + num(r.so_xuat) + num(r.so_cancel) + num(r.so_return) + num(r.so_khac)
-        + num(`${r.ty_le_huy}%`) + duoi
-      : chung + num(r.tong_sl) + duoi;
+      ? chung + num(r.so_xuat) + duoi
+      : chung + num(r.so_item) + num(r.tong_sl) + duoi;
   }).join('');
   const tong = (k) => ds.reduce((a, r) => a + (Number(r[k]) || 0), 0);
   const scanTong = tong('da_scan');
   const scanMau = tong('da_scan') + tong('chua_scan');
   const foot = `<tr class="ra-total"><td colspan="2">TỔNG (${ds.length} người)</td>`
-    + num(tong('so_phieu')) + num(tong('so_item'))
+    + num(tong('so_phieu'))
     + (laXuat
-      ? num(tong('so_xuat')) + num(tong('so_cancel')) + num(tong('so_return')) + num(tong('so_khac'))
-        + num(`${tong('so_item') ? Math.round((1000 * (tong('so_cancel') + tong('so_return') + tong('so_khac'))) / tong('so_item')) / 10 : 0}%`)
-      : num(Math.round(tong('tong_sl') * 100) / 100))
+      ? num(tong('so_xuat'))
+      : num(tong('so_item')) + num(Math.round(tong('tong_sl') * 100) / 100))
     + num(`${scanTong}/${scanMau}`)
     + num(scanMau ? `${Math.round((1000 * scanTong) / scanMau) / 10}%` : '—')
     + '</tr>';

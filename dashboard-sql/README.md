@@ -200,25 +200,43 @@ Mỗi tab LGC có thêm một bảng KPI theo người:
 
 | Bảng | Gom theo | Cột |
 |---|---|---|
-| **KPI thủ kho xuất booking** (tab *Quản lý xuất kho*) | `PICKSLIP_HEADER.BOOKING_SIGN` | số phiếu xuất · item · item xuất / cancel / return / khác · tỷ lệ hủy-trả · phiếu đã scan · **tỷ lệ scan** |
+| **KPI thủ kho xuất booking** (tab *Quản lý xuất kho*) | `PICKSLIP_HEADER.BOOKING_SIGN` | số phiếu xuất · item xuất · phiếu đã scan · **tỷ lệ scan** |
 | **KPI inspector nhập kho** (tab *Receiving*) | `HISTORY.CREATED_BY` | số phiếu receive · item · tổng SL · phiếu đã scan · **tỷ lệ scan** |
+
+⚠️ **Bảng thủ kho CHỈ đo việc XUẤT KHO** (nghiệp vụ chốt): **cancel / return / khác không được
+đếm và không tính tỷ lệ** — chúng không phản ánh năng suất của thủ kho. Kéo theo hai hệ quả phải
+biết:
+
+* **`item xuất`** chỉ đếm dòng `is_cancel = 0`, nên tổng của bảng bằng **`soDongThuc`** của tab
+  (số item **thực**), *không* bằng tổng item.
+* **`số phiếu xuất`** chỉ đếm phiếu **có ít nhất một item xuất**. Phiếu chỉ toàn cancel/return
+  **không phải một lần xuất kho** — đếm vào thì con số của thủ kho cao hơn lượng hàng họ thực sự
+  đã xuất. Vì vậy `số phiếu xuất` có thể **nhỏ hơn mẫu số của tỷ lệ scan** (mẫu số scan chỉ loại
+  phiếu *toàn cancel*, vẫn giữ phiếu return) — hai cột đếm hai tập khác nhau, đúng như thiết kế.
+
+Số liệu cancel / return / khác **vẫn còn đầy đủ** ở thẻ KPI và biểu đồ của cả tab, chỉ bỏ khỏi
+bảng đánh giá con người.
 
 Cả hai gom **trên bảng tạm đã kéo về** (`#ps`, `#hi`) nên **không tốn thêm lượt hỏi AMOS nào** —
 đây là lý do đặt ngay trong tab thay vì làm một trang riêng. Tên nhân viên lấy từ
 `SIGN.DESCRIPTION`, nay được cache thêm vào `SIGN_CACHE` (cột `TEN`) để không phải hỏi linked
 server mỗi lần; bản cache cũ thiếu cột đó sẽ tự bị dựng lại.
 
-**Ba điều dễ sai, đã chốt bằng `tools/kpicheck.js` (16 trường hợp):**
+**Bốn điều dễ sai, đã chốt bằng `tools/kpicheck.js` (14 trường hợp):**
 
 1. **Mỗi phiếu quy cho ĐÚNG MỘT người.** Số phiếu và số phiếu đã scan lấy từ Node theo cùng một
    quy tắc quy chủ (`MIN(booking_sign)` / `MIN(created_by)` của phiếu đó), **không** dùng
    `COUNT(DISTINCT …)` mỗi bên một kiểu. Nếu để mỗi người từng chạm vào phiếu đều được tính thì
    cộng cả bảng sẽ **lớn hơn** con số của cả tab — mà đây là số đánh giá **con người** nên lệch
    kiểu đó rất nặng. *(Bài kiểm tra đã bắt đúng lỗi này khi mới viết: 180 phiếu so với 65 thật.)*
-2. **Cộng cả bảng phải ra đúng KPI của cả tab** — item, cancel, return, khác, phiếu đã scan, và
+2. **Cộng cả bảng phải ra đúng KPI của cả tab** — item xuất (`soDongThuc`), phiếu đã scan, và
    mẫu số tỷ lệ scan (đã trừ phiếu chỉ toàn item cancel).
 3. **Tỷ lệ scan để trống (`—`), không phải `0%`**, khi người đó không có phiếu nào cần scan.
    `0%` đọc ra là *“chưa scan cái nào”* — oan cho người ta.
+4. **`Số phiếu xuất` được tính LẠI hoàn toàn độc lập** trong bài kiểm tra (reduce trên bảng chi
+   tiết, khác hẳn đường SQL-gom-trên-`#ps` + Node-đếm-phiếu của server) rồi so bằng. Bài này đã
+   được **chứng minh là bắt được lỗi**: cố tình đếm cả phiếu toàn cancel → `69` so với `61`, trượt
+   ngay. Bài cũng chốt luôn **không được có lại** các cột cancel / return / khác trong bảng này.
 
 Bộ lọc Station/Store/Trung tâm và kỳ báo cáo **ăn vào cả bảng KPI** (cũng được kiểm tra).
 
