@@ -570,3 +570,20 @@ body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
   background: color-mix(in srgb, var(--warning) 10%, transparent);
   border-radius: 0 0 10px 10px;
 }
+
+/* ---- Bang KPI theo NHAN VIEN (thu kho xuat booking / inspector nhap kho) ----
+   Dung lai khung .ra-table; chi them thanh ty le de so sanh nhanh giua nguoi
+   voi nguoi ma khong phai doc tung con so. */
+.nvkpi { overflow-x: auto; }
+.nvkpi .ra-table { width: 100%; }
+.nvkpi .nv-ma { font-family: var(--mono, Consolas, monospace); font-size: 12px; }
+.nvkpi .nv-ten { color: var(--text-secondary); }
+.nvkpi .nv-bar {
+  display: inline-block; vertical-align: middle;
+  width: 70px; height: 7px; border-radius: 4px;
+  background: var(--hair); overflow: hidden; margin-left: 8px;
+}
+.nvkpi .nv-bar > i { display: block; height: 100%; background: var(--good); }
+.nvkpi .nv-bar.thap > i { background: var(--critical); }
+.nvkpi .nv-bar.vua > i { background: var(--warning); }
+.nvkpi .nv-trong { color: var(--text-muted); font-size: 13px; padding: 10px 2px; }

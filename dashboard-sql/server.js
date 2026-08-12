@@ -302,21 +302,30 @@ async function refreshSignCache() {
   if (CONFIG.demoMode || !CONFIG.signCache) return;
   try {
     await query(`
-      SELECT [USER_SIGN], MAX([DEPARTMENT]) AS [DEPARTMENT]
+      -- Cache them [TEN] (= SIGN.DESCRIPTION) de bang KPI theo nhan vien hien
+      -- duoc TEN chu khong chi ma - doc "VAE52863" thi khong biet la ai.
+      SELECT [USER_SIGN], MAX([DEPARTMENT]) AS [DEPARTMENT],
+             MAX(LTRIM(RTRIM([DESCRIPTION]))) AS [TEN]
       INTO #sign_new
       FROM [DWH_DB]..[STG_AMOS].[SIGN]
       GROUP BY [USER_SIGN];
 
+      -- Ban cache CU (tao truoc khi co cot TEN) -> bo di de tao lai dung cau
+      -- truc. An toan: day thuan tuy la cache, moi chu ky deu dung lai tu SIGN.
+      IF OBJECT_ID('[NQT].[dbo].[SIGN_CACHE]', 'U') IS NOT NULL
+         AND COL_LENGTH('[NQT].[dbo].[SIGN_CACHE]', 'TEN') IS NULL
+        DROP TABLE [NQT].[dbo].[SIGN_CACHE];
+
       IF OBJECT_ID('[NQT].[dbo].[SIGN_CACHE]', 'U') IS NULL
       BEGIN
-        SELECT [USER_SIGN], [DEPARTMENT] INTO [NQT].[dbo].[SIGN_CACHE] FROM #sign_new;
+        SELECT [USER_SIGN], [DEPARTMENT], [TEN] INTO [NQT].[dbo].[SIGN_CACHE] FROM #sign_new;
         CREATE CLUSTERED INDEX [IX_SIGN_CACHE_USER] ON [NQT].[dbo].[SIGN_CACHE]([USER_SIGN]);
       END
       ELSE
       BEGIN
         TRUNCATE TABLE [NQT].[dbo].[SIGN_CACHE];
-        INSERT INTO [NQT].[dbo].[SIGN_CACHE] ([USER_SIGN], [DEPARTMENT])
-        SELECT [USER_SIGN], [DEPARTMENT] FROM #sign_new;
+        INSERT INTO [NQT].[dbo].[SIGN_CACHE] ([USER_SIGN], [DEPARTMENT], [TEN])
+        SELECT [USER_SIGN], [DEPARTMENT], [TEN] FROM #sign_new;
       END`);
     signCacheReady = true;
     console.log(`[SIGN] Da lam moi SIGN_CACHE (chu ky ${CONFIG.signCacheMinutes} phut).`);
@@ -418,10 +427,16 @@ function signJoin(staffCol, alias) {
     return `LEFT JOIN [NQT].[dbo].[SIGN_CACHE] ${alias} ON ${alias}.[USER_SIGN] = ${staffCol}`;
   }
   return `LEFT JOIN (
-      SELECT [USER_SIGN], MAX([DEPARTMENT]) AS [DEPARTMENT]
+      SELECT [USER_SIGN], MAX([DEPARTMENT]) AS [DEPARTMENT],
+             MAX(LTRIM(RTRIM([DESCRIPTION]))) AS [TEN]
       FROM [DWH_DB]..[STG_AMOS].[SIGN]
       GROUP BY [USER_SIGN]
     ) ${alias} ON ${alias}.[USER_SIGN] = ${staffCol}`;
+}
+
+/** Ten nhan vien tu bang SIGN (da join bang signJoin). Rong -> chuoi rong. */
+function tenNhanVien(alias) {
+  return `ISNULL(NULLIF(LTRIM(RTRIM(${alias}.[TEN])), ''), '')`;
 }
 
 /**
@@ -3004,11 +3019,28 @@ async function enrichPickslipRows(rows, allPicking = [], allReturns = [], ghi = 
   //     khong co gi de ky va luu. Phieu nao MOI item deu la cancel thi bo han
   //     ra khoi mau so - neu khong ty le scan se khong bao gio dat 100% vi mot
   //     so file khong bao gio ton tai.
+  // Dem theo TUNG THU KHO (booking_sign) de ghep vao bang KPI nhan su.
+  // MOI PHIEU QUY CHO DUNG MOT NGUOI (booking_sign lay bang MIN o SQL): neu de
+  // moi nguoi tung cham vao phieu deu duoc tinh thi cong ca bang KPI se LON HON
+  // con so cua ca tab - so danh gia con nguoi ma lech kieu do la rat nang.
+  const scanTheoNv = new Map();
+  const layNv = (ma) => {
+    const nv = String(ma || '').trim();
+    if (!nv) return null;
+    if (!scanTheoNv.has(nv)) scanTheoNv.set(nv, { soPhieu: 0, daScan: 0, chuaScan: 0 });
+    return scanTheoNv.get(nv);
+  };
   for (const p of allPicking) {
+    const g = layNv(p.booking_sign);
+    if (g) g.soPhieu += 1;
+    // Phieu chi toan item cancel -> khong can scan, khong vao mau so ty le
     if (!Number(p.so_can_scan)) { st.phieuMienScan += 1; continue; }
     const s = scanStateTheoStation(index, p.station, idStr(p.pl_all));
     if (s === 'SCANNED') st.daScan += 1;
     else if (s === 'CHUA_SCAN') st.chuaScan += 1;
+    if (!g) continue;
+    if (s === 'SCANNED') g.daScan += 1;
+    else if (s === 'CHUA_SCAN') g.chuaScan += 1;
   }
   st.tongPhieu = st.daScan + st.chuaScan;
 
@@ -3112,6 +3144,7 @@ async function enrichPickslipRows(rows, allPicking = [], allReturns = [], ghi = 
 
   return {
     stats: st,
+    scanTheoNv,
     folder: scanIndexStatus(index, dirs.picking),
     charts: {
       tatReturn: { labels: TAT_RETURN_BUCKETS.map((b) => b.label), values: buckets },
@@ -3190,6 +3223,7 @@ async function qPickslip(range, f, ghi = () => {}) {
     --     Item CANCEL khong can scan -> dem so item CAN scan de bo han cac
     --     phieu chi toan cancel ra khoi mau so ty le scan.
     SELECT x.picking_listno AS pl_all, MIN(x.station) AS station,
+           MIN(x.booking_sign) AS booking_sign,
            SUM(CASE WHEN x.loai = 'CANCEL' THEN 0 ELSE 1 END) AS so_can_scan
     ${join} WHERE 1 = 1 ${w}
     GROUP BY x.picking_listno;
@@ -3203,6 +3237,21 @@ async function qPickslip(range, f, ghi = () => {}) {
            MIN(${dept})           AS department
     ${join} WHERE x.loai = 'RETURN' ${w}
     GROUP BY x.seqno;
+
+    -- [7] KPI THU KHO XUAT BOOKING - gom theo PICKSLIP_HEADER.BOOKING_SIGN
+    --     (nguoi thao tac booking xuat kho). Chay tren #ps da o local nen
+    --     KHONG ton them luot hoi AMOS nao.
+    SELECT x.booking_sign AS ma_nv,
+           MAX(${tenNhanVien('sb')}) AS ten_nv,
+           COUNT(*) AS so_item,
+           COUNT(DISTINCT x.picking_listno) AS so_phieu,
+           SUM(CASE WHEN x.loai = 'CANCEL' THEN 1 ELSE 0 END) AS so_cancel,
+           SUM(CASE WHEN x.loai = 'RETURN' THEN 1 ELSE 0 END) AS so_return,
+           SUM(CASE WHEN x.loai = 'KHAC' THEN 1 ELSE 0 END)   AS so_khac,
+           SUM(x.is_cancel) AS so_huy
+    ${join} ${signJoin('x.[booking_sign]', 'sb')}
+    WHERE 1 = 1 ${w}
+    GROUP BY x.booking_sign;
 
     ${drop}`;
 
@@ -3237,6 +3286,33 @@ async function qPickslip(range, f, ghi = () => {}) {
   const pct = (a, b) => (b ? Math.round((a / b) * 1000) / 10 : 0);
   const deptSorted = [...byDept].sort((a, b) => b.so_dong - a.so_dong);
   const sc = scan.stats;
+
+  // KPI THU KHO XUAT BOOKING: so lieu dem tu SQL (#ps) + so phieu da/chua scan
+  // tinh o Node (doi chieu thu muc file scan) -> ghep lai theo ma nhan vien.
+  const kpiThuKho = (pick('ma_nv') || [])
+    .filter((r) => 'so_phieu' in r)
+    .map((r) => {
+      const ma = String(r.ma_nv || '').trim();
+      const sn = scan.scanTheoNv.get(ma) || { soPhieu: 0, daScan: 0, chuaScan: 0 };
+      const tongScan = sn.daScan + sn.chuaScan;
+      return {
+        ma_nv: ma,
+        ten_nv: String(r.ten_nv || '').trim(),
+        // So phieu lay tu Node (moi phieu quy cho DUNG MOT nguoi), khong lay
+        // COUNT(DISTINCT ...) cua SQL - xem giai thich o enrichPickslipRows().
+        so_phieu: sn.soPhieu,
+        so_item: r.so_item || 0,
+        so_xuat: (r.so_item || 0) - (r.so_huy || 0),
+        so_cancel: r.so_cancel || 0,
+        so_return: r.so_return || 0,
+        so_khac: r.so_khac || 0,
+        ty_le_huy: pct(r.so_huy || 0, r.so_item || 0),
+        da_scan: sn.daScan,
+        chua_scan: sn.chuaScan,
+        ty_le_scan: tongScan ? pct(sn.daScan, tongScan) : null,
+      };
+    })
+    .sort((a, b) => b.so_item - a.so_item);
   return {
     range: { from: range.from, to: range.to, label: range.label },
     kpis: {
@@ -3270,6 +3346,7 @@ async function qPickslip(range, f, ghi = () => {}) {
       returnChuaScan: sc.returnChuaScan,
     },
     scanFolder: scan.folder,
+    kpiThuKho,
     charts: {
       tatReturn: scan.charts.tatReturn,
       tatTheoTt: scan.charts.tatTheoTt,
@@ -3445,9 +3522,22 @@ async function qReceiving(range, f, ghi = () => {}) {
     -- [3] DANH SACH VOUCHER (distinct) cua TOAN KY - de dem "da/chua scan"
     --     theo PHIEU (mot voucher co nhieu dong) va KHONG bi cat boi TOP(@top).
     --     Nghiep vu yeu cau scan dat 100% nen so nay phai phu het ky.
-    SELECT x.voucherno AS vc_all, MIN(x.station) AS station, MIN(x.store) AS store
+    SELECT x.voucherno AS vc_all, MIN(x.station) AS station, MIN(x.store) AS store,
+           MIN(x.created_by) AS created_by
     FROM #hi x WHERE ${conLai} ${w}
     GROUP BY x.voucherno;
+
+    -- [4] KPI INSPECTOR NHAP KHO - gom theo HISTORY.CREATED_BY (nguoi lap
+    --     phieu nhap). Chay tren #hi da o local nen KHONG ton them luot hoi
+    --     AMOS nao. Join SIGN chi de lay TEN (bang cache local neu co).
+    SELECT x.created_by AS ma_nv,
+           MAX(${tenNhanVien('si')}) AS ten_nv,
+           COUNT(*) AS so_item,
+           COUNT(DISTINCT x.voucherno) AS so_phieu,
+           SUM(TRY_CONVERT(float, x.qty)) AS tong_sl
+    FROM #hi x ${signJoin('x.[created_by]', 'si')}
+    WHERE ${conLai} ${w}
+    GROUP BY x.created_by;
 
     DROP TABLE #hi;`;
 
@@ -3491,12 +3581,22 @@ async function qReceiving(range, f, ghi = () => {}) {
     g.tong += 1;
     if (s === 'SCANNED') g.daScan += 1; else if (s === 'CHUA_SCAN') g.chuaScan += 1;
   };
+  // Dem theo TUNG INSPECTOR. MOI VOUCHER QUY CHO DUNG MOT NGUOI (created_by lay
+  // bang MIN o SQL) - neu khong, cong ca bang KPI se lon hon so cua ca tab.
+  const scanTheoNv = new Map();
   for (const v of vouchers) {
     const { trangThai: s } = scanStateNhieuKhoa(index, v.station, scanKeys(v.vc_all));
     if (s === 'SCANNED') daScan += 1;
     else if (s === 'CHUA_SCAN') chuaScan += 1;
     gom(byStation, v.station, s);
     gom(byStore, v.store, s);
+    const nv = String(v.created_by || '').trim();
+    if (!nv) continue;
+    if (!scanTheoNv.has(nv)) scanTheoNv.set(nv, { soPhieu: 0, daScan: 0, chuaScan: 0 });
+    const g = scanTheoNv.get(nv);
+    g.soPhieu += 1;
+    if (s === 'SCANNED') g.daScan += 1;
+    else if (s === 'CHUA_SCAN') g.chuaScan += 1;
   }
 
   const byDay = new Map();
@@ -3536,6 +3636,26 @@ async function qReceiving(range, f, ghi = () => {}) {
       daScanDong, chuaScanDong,
     },
     scanFolder: scanIndexStatus(index, dirs.receiving),
+    // KPI INSPECTOR NHAP KHO: so lieu dem tu SQL (#hi) + so phieu da/chua scan
+    // tinh o Node -> ghep lai theo ma nhan vien.
+    kpiInspector: (pick('ma_nv') || [])
+      .filter((r) => 'so_phieu' in r)
+      .map((r) => {
+        const ma = String(r.ma_nv || '').trim();
+        const sn = scanTheoNv.get(ma) || { soPhieu: 0, daScan: 0, chuaScan: 0 };
+        const tongScan = sn.daScan + sn.chuaScan;
+        return {
+          ma_nv: ma,
+          ten_nv: String(r.ten_nv || '').trim(),
+          so_phieu: sn.soPhieu,   // moi voucher quy cho DUNG MOT nguoi
+          so_item: r.so_item || 0,
+          tong_sl: Math.round((Number(r.tong_sl) || 0) * 100) / 100,
+          da_scan: sn.daScan,
+          chua_scan: sn.chuaScan,
+          ty_le_scan: tongScan ? pct(sn.daScan, tongScan) : null,
+        };
+      })
+      .sort((a, b) => b.so_item - a.so_item),
     charts: {
       byStation: {
         labels: stationSorted.map(([k]) => k),

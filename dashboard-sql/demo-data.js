@@ -602,6 +602,63 @@ const REPAIR_LOCS = {
 const _repairDemoCache = new Map();
 
 /** Danh sach item dang nam o vi tri U/S (dung chung cho 2 bao cao). */
+/**
+ * KPI theo NHAN VIEN (dung chung cho hai tab):
+ *   'pickslip'  - thu kho xuat booking, gom theo booking_sign
+ *   'receiving' - inspector nhap kho,  gom theo created_by
+ * Demo tu bia TEN tu ma de kiem thu duoc cot ten (that thi lay SIGN.DESCRIPTION).
+ */
+function gomTheoNhanVien(rows, cot, kieu) {
+  const m = new Map();
+  const khoaPhieu = kieu === 'pickslip' ? 'picking_listno' : 'voucherno';
+  for (const r of rows) {
+    const ma = String(r[cot] || '').trim();
+    if (!ma) continue;
+    let g = m.get(ma);
+    if (!g) {
+      g = { ma_nv: ma, ten_nv: 'NV ' + ma.slice(-4), so_item: 0, tong_sl: 0,
+            phieu: new Set(), scan: new Map(),
+            so_cancel: 0, so_return: 0, so_khac: 0, so_huy: 0 };
+      m.set(ma, g);
+    }
+    g.so_item += 1;
+    g.tong_sl += Number(r.qty) || 0;
+    g.phieu.add(String(r[khoaPhieu]));
+    // Item cancel khong can scan -> khong dua vao mau so ty le scan
+    if (!(kieu === 'pickslip' && r.loai === 'CANCEL')) g.scan.set(String(r[khoaPhieu]), r.scan);
+    if (r.loai === 'CANCEL') g.so_cancel += 1;
+    else if (r.loai === 'RETURN') g.so_return += 1;
+    else if (r.loai === 'KHAC') g.so_khac += 1;
+    if (r.is_cancel) g.so_huy += 1;
+  }
+  const pct = (a, b) => (b ? Math.round((a / b) * 1000) / 10 : 0);
+  return [...m.values()].map((g) => {
+    const tt = [...g.scan.values()];
+    const da = tt.filter((v) => v === 'SCANNED').length;
+    const chua = tt.filter((v) => v === 'CHUA_SCAN').length;
+    const o = {
+      ma_nv: g.ma_nv, ten_nv: g.ten_nv,
+      so_phieu: g.phieu.size, so_item: g.so_item,
+      da_scan: da, chua_scan: chua, ty_le_scan: (da + chua) ? pct(da, da + chua) : null,
+    };
+    if (kieu === 'pickslip') {
+      o.so_xuat = g.so_item - g.so_huy;
+      o.so_cancel = g.so_cancel; o.so_return = g.so_return; o.so_khac = g.so_khac;
+      o.ty_le_huy = pct(g.so_huy, g.so_item);
+    } else {
+      o.tong_sl = Math.round(g.tong_sl * 100) / 100;
+    }
+    return o;
+  }).sort((a, b) => b.so_item - a.so_item);
+}
+
+// Doi ngu THU KHO (booking) va INSPECTOR (nhap kho) - CO CHU DINH la mot nhom
+// NHO: bang KPI theo nhan vien chi co y nghia khi moi nguoi lam nhieu phieu.
+// (Truoc do demo sinh moi dong mot ma nhan vien khac nhau -> bang KPI ra 260
+// nguoi moi nguoi 1 item, khong nhin ra duoc gi.)
+const THU_KHO = ['VAE10234', 'VAE10891', 'VAE12007', 'VAE13355', 'VAE14780', 'VAE15962'];
+const INSPECTOR = ['VAE20115', 'VAE20778', 'VAE21340', 'VAE22096', 'VAE23511'];
+
 function repairAdminItems(f) {
   const ck = JSON.stringify([[...((f && f.station) || [])].sort(), [...((f && f.store) || [])].sort()]);
   if (_repairDemoCache.has(ck)) return _repairDemoCache.get(ck);
@@ -654,7 +711,15 @@ function pickslip(range, f) {
   // dong dung chung. Trang thai scan gan THEO PHIEU (mot phieu = mot file PDF).
   const plPool = [];
   for (let i = 0; i < 70; i++) {
-    plPool.push({ no: rndInt(100000, 999999), scan: rndInt(0, 9) < 7 ? 'SCANNED' : 'CHUA_SCAN' });
+    // MOI PHIEU XUAT co DUNG MOT thu kho booking (giong AMOS: BOOKING_SIGN nam
+    // o PICKSLIP_HEADER, tuc mot phieu mot nguoi). Gan o day chu khong gan theo
+    // tung dong - neu khong, mot phieu se bi dem cho nhieu nguoi va tong cua
+    // bang KPI khong con khop voi KPI cua ca tab.
+    plPool.push({
+      no: rndInt(100000, 999999),
+      scan: rndInt(0, 9) < 7 ? 'SCANNED' : 'CHUA_SCAN',
+      thuKho: rnd(THU_KHO),
+    });
   }
   for (let i = 0; i < n; i++) {
     const d = baseDevice(i);
@@ -682,7 +747,7 @@ function pickslip(range, f) {
       // ve 00:00 giong that, neu khong se khong lo ra loi hien gio rac.
       pickslip_date: ngayTron(rndDate(range.from, range.to)),
       mech_sign: d.staff,
-      booking_sign: 'VAE' + rndInt(10000, 99999),
+      booking_sign: '',   // gan o vong duoi theo PHIEU (plPool.thuKho)
       department: rnd(DEPARTMENTS),
       receiver: rnd(RECEIVERS),
       remarks: huy ? rnd(['Sai part', 'Khong du hang', 'Doi phuong an', '']) : '',
@@ -696,6 +761,7 @@ function pickslip(range, f) {
     const pl = rnd(plPool);
     r.picking_listno = pl.no;
     r.scan = pl.scan; // moi dong cung phieu PHAI cung trang thai scan
+    r.booking_sign = pl.thuKho; // mot phieu = mot thu kho booking
 
     // Ngay GIO (demo): gio xuat kho / gio huy
     r.booked_time_vn = new Date(Date.parse(r.pickslip_date) + rndInt(7, 19) * 3600000).toISOString();
@@ -838,6 +904,7 @@ function pickslip(range, f) {
       returnDaScan: [...retScan.values()].filter((v) => v === 'SCANNED').length,
       returnChuaScan: [...retScan.values()].filter((v) => v === 'CHUA_SCAN').length,
     },
+    kpiThuKho: gomTheoNhanVien(kept, 'booking_sign', 'pickslip'),
     scanFolder: [
       { station: 'HAN', dir: '(DEMO) \\\\10.99.7.7\\picking list\\2026', ok: true, count: 1234, error: '', ms: 5 },
       { station: 'SGN', dir: '(DEMO) \\\\10.99.7.8\\picking list SGN\\2026', ok: true, count: 987, error: '', ms: 7 },
@@ -878,7 +945,14 @@ function receiving(range, f) {
   // Mot VOUCHER gom nhieu dong; trang thai scan gan THEO VOUCHER.
   const vcPool = [];
   for (let i = 0; i < 90; i++) {
-    vcPool.push({ no: 'R-' + rndInt(200000, 299999), scan: rndInt(0, 9) < 7 ? 'SCANNED' : 'CHUA_SCAN' });
+    // MOI VOUCHER co DUNG MOT inspector (giong HISTORY: CREATED_BY cua phieu
+    // nhap). Gan theo PHIEU chu khong theo tung dong - neu khong, mot voucher
+    // se bi dem cho nhieu nguoi va tong bang KPI khong khop KPI ca tab.
+    vcPool.push({
+      no: 'R-' + rndInt(200000, 299999),
+      scan: rndInt(0, 9) < 7 ? 'SCANNED' : 'CHUA_SCAN',
+      inspector: rnd(INSPECTOR),
+    });
   }
   for (let i = 0; i < n; i++) {
     const d = baseDevice(i);
@@ -902,7 +976,7 @@ function receiving(range, f) {
       // NGAY GIO NHAP KHO day du = MUTATION + MUTATION_TIME (giong server)
       receive_time_vn: new Date(del.getTime() + rndInt(7, 19) * 3600000).toISOString(),
       owner: rnd(['VNA', 'VAECO', '']),
-      created_by: d.staff,
+      created_by: '',   // gan o vong duoi theo VOUCHER (vcPool.inspector)
       // KHONG co 'department': phieu nhap kho thong ke theo Station/Store
       historyno: rndInt(4000000, 4999999),
       recdetailno: rndInt(500000, 599999),
@@ -911,6 +985,7 @@ function receiving(range, f) {
   rows.forEach((r) => {
     const v = rnd(vcPool);
     r.voucherno = v.no;
+    r.created_by = v.inspector;   // mot voucher = mot inspector
     // Ten file khac nhau theo station: SGN giu 'R-...', HAN bo tien to
     const giuR = (r.station || '').toUpperCase() === 'SGN';
     r.voucher_scan = v.scan === 'SCANNED'
@@ -962,6 +1037,7 @@ function receiving(range, f) {
       tyLeScan: pct(daScan, vc.size),
       daScanDong, chuaScanDong,
     },
+    kpiInspector: gomTheoNhanVien(kept, 'created_by', 'receiving'),
     scanFolder: [
       { station: 'HAN', dir: '(DEMO) \\\\10.99.7.7\\certificates\\2026', ok: true, count: 987, error: '', ms: 4 },
       { station: 'SGN', dir: '(DEMO) \\\\10.99.7.8\\certificates SGN\\2026', ok: true, count: 654, error: '', ms: 6 },

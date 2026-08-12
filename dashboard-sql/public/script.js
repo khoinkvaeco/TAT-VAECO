@@ -1363,6 +1363,60 @@ const reportSeqs = {};      // hostKey -> chong race RIENG tung cho
 /** Bang TONG HOP cua Repair Admin: dong = Station + Store + Vi tri,
  *  cot = < 30 ngay / >= 30 ngay / Khong ro ngay / Tong, kem dong TỔNG CỘNG.
  *  Dung tu CHINH danh sach dang hien -> khong bao gio lech voi bang duoi. */
+/**
+ * BANG KPI THEO NHAN VIEN - dung chung cho hai tab LGC:
+ *   pickslip  -> thu kho xuat booking (PICKSLIP_HEADER.BOOKING_SIGN)
+ *   receiving -> inspector nhap kho   (HISTORY.CREATED_BY)
+ *
+ * ⚠️ Ty le scan de `null` khi nguoi do KHONG co phieu nao can scan (vi du toan
+ * item cancel) - hien "—" chu KHONG hien 0%: 0% doc ra la "chua scan cai nao",
+ * oan cho nguoi ta.
+ */
+function veKpiNhanVien(sel, rows, kieu) {
+  const box = $(sel);
+  if (!box) return;
+  const ds = rows || [];
+  if (!ds.length) {
+    box.innerHTML = '<div class="nv-trong">Không có dữ liệu nhân viên trong kỳ này.</div>';
+    return;
+  }
+  const esc = (t) => String(t ?? '').replace(/[&<>"]/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const bar = (v) => {
+    if (v === null || v === undefined) return '<span style="color:var(--text-muted)">—</span>';
+    const cls = v >= 90 ? '' : (v >= 70 ? 'vua' : 'thap');
+    return `${v}%<span class="nv-bar ${cls}"><i style="width:${Math.max(0, Math.min(100, v))}%"></i></span>`;
+  };
+  const laXuat = kieu === 'pickslip';
+  const cot = laXuat
+    ? ['Mã NV', 'Tên', 'Số phiếu xuất', 'Item', 'Item xuất', 'Cancel', 'Return', 'Khác', 'Tỷ lệ hủy/trả', 'Phiếu đã scan', 'Tỷ lệ scan']
+    : ['Mã NV', 'Tên', 'Số phiếu receive', 'Item', 'Tổng SL', 'Phiếu đã scan', 'Tỷ lệ scan'];
+  const head = '<tr>' + cot.map((c, i) => `<th${i >= 2 ? ' class="ra-num"' : ''}>${c}</th>`).join('') + '</tr>';
+  const num = (v) => `<td class="ra-num">${v}</td>`;
+  const body = ds.map((r) => {
+    const chung = `<tr><td class="nv-ma">${esc(r.ma_nv)}</td><td class="nv-ten">${esc(r.ten_nv) || '—'}</td>`
+      + num(r.so_phieu) + num(r.so_item);
+    const duoi = num(`${r.da_scan}/${r.da_scan + r.chua_scan}`) + num(bar(r.ty_le_scan)) + '</tr>';
+    return laXuat
+      ? chung + num(r.so_xuat) + num(r.so_cancel) + num(r.so_return) + num(r.so_khac)
+        + num(`${r.ty_le_huy}%`) + duoi
+      : chung + num(r.tong_sl) + duoi;
+  }).join('');
+  const tong = (k) => ds.reduce((a, r) => a + (Number(r[k]) || 0), 0);
+  const scanTong = tong('da_scan');
+  const scanMau = tong('da_scan') + tong('chua_scan');
+  const foot = `<tr class="ra-total"><td colspan="2">TỔNG (${ds.length} người)</td>`
+    + num(tong('so_phieu')) + num(tong('so_item'))
+    + (laXuat
+      ? num(tong('so_xuat')) + num(tong('so_cancel')) + num(tong('so_return')) + num(tong('so_khac'))
+        + num(`${tong('so_item') ? Math.round((1000 * (tong('so_cancel') + tong('so_return') + tong('so_khac'))) / tong('so_item')) / 10 : 0}%`)
+      : num(Math.round(tong('tong_sl') * 100) / 100))
+    + num(`${scanTong}/${scanMau}`)
+    + num(scanMau ? `${Math.round((1000 * scanTong) / scanMau) / 10}%` : '—')
+    + '</tr>';
+  box.innerHTML = `<table class="ra-table"><thead>${head}</thead><tbody>${body}</tbody><tfoot>${foot}</tfoot></table>`;
+}
+
 function repairAdminSummary(rows) {
   const map = new Map();
   for (const r of rows || []) {
@@ -2717,6 +2771,7 @@ async function loadPickslip() {
     $('#rangeLabel').textContent = `${data.range.label}: ${fmtDateTime(data.range.from)} → ${fmtRangeEnd(data.range.to)}`;
     renderPickKpis(data.kpis);
     renderPickCharts(data.charts);
+    veKpiNhanVien('#pickKpiNv', data.kpiThuKho, 'pickslip');
     renderScanBar('#pickScanBar', data.scanFolder);
     $('#pickDesc').textContent =
       'PICKSLIP_BOOKED × PICKSLIP_HEADER. Kỳ theo PICKSLIP_DATE (ngày AMOS); đơn vị đếm là ITEM. '
@@ -2912,6 +2967,7 @@ async function loadReceiving() {
     $('#rangeLabel').textContent = `${data.range.label}: ${fmtDateTime(data.range.from)} → ${fmtRangeEnd(data.range.to)}`;
     renderRecvKpis(data.kpis);
     renderRecvCharts(data.charts);
+    veKpiNhanVien('#recvKpiNv', data.kpiInspector, 'receiving');
     renderScanBar('#recvScanBar', data.scanFolder);
     $('#recvDesc').textContent =
       'HISTORY với VM = B1 (phiếu receive), kỳ theo DEL_DATE (ngày AMOS); đơn vị đếm là ITEM. '

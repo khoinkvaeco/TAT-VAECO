@@ -112,7 +112,7 @@ Bật server ở chế độ **live** nhưng trỏ vào một địa chỉ DB kh
 - báo **lỗi kết nối** → ĐẠT (code chạy tốt)
 - báo **bất kỳ lỗi nào khác** → TRƯỢT, in rõ endpoint và thông báo lỗi
 
-Sau đó chạy tiếp **`tools/sqlcheck.js`** (soi câu SQL thật), **`tools/wpcheck.js`** (chốt các phép đổi đơn vị của trang `/wp` — xem §7j) và **`tools/build-assets.js --check`** (kiểm tra `public/vendor/` có còn khớp mã nguồn không — xem §7c).
+Sau đó chạy tiếp **`tools/sqlcheck.js`** (soi câu SQL thật), **`tools/wpcheck.js`** (chốt các phép đổi đơn vị của trang `/wp` — xem §7j), **`tools/kpicheck.js`** (chốt bảng KPI theo nhân viên khớp KPI cả tab — xem §5) và **`tools/build-assets.js --check`** (kiểm tra `public/vendor/` có còn khớp mã nguồn không — xem §7c).
 
 Cần thiết vì `DEMO_MODE=true` **không hề gọi** các hàm dựng câu SQL (chúng bị thay bằng dữ liệu mẫu), còn `node --check` chỉ kiểm cú pháp — nên lỗi kiểu *"Cannot access 'dept' before initialization"* lọt qua cả hai, đến lúc chạy thật mới vỡ.
 
@@ -193,6 +193,34 @@ một phía / hai phía).
 
 ⚠️ Dữ liệu mẫu trước đây sinh `STATUS` ra `'ON' / 'OFF' / 'RELEASED'` — **sai hẳn nghĩa** của cột
 này. Đã sửa theo đúng `0/1`.
+
+### KPI theo NHÂN VIÊN — thủ kho xuất booking & inspector nhập kho
+
+Mỗi tab LGC có thêm một bảng KPI theo người:
+
+| Bảng | Gom theo | Cột |
+|---|---|---|
+| **KPI thủ kho xuất booking** (tab *Quản lý xuất kho*) | `PICKSLIP_HEADER.BOOKING_SIGN` | số phiếu xuất · item · item xuất / cancel / return / khác · tỷ lệ hủy-trả · phiếu đã scan · **tỷ lệ scan** |
+| **KPI inspector nhập kho** (tab *Receiving*) | `HISTORY.CREATED_BY` | số phiếu receive · item · tổng SL · phiếu đã scan · **tỷ lệ scan** |
+
+Cả hai gom **trên bảng tạm đã kéo về** (`#ps`, `#hi`) nên **không tốn thêm lượt hỏi AMOS nào** —
+đây là lý do đặt ngay trong tab thay vì làm một trang riêng. Tên nhân viên lấy từ
+`SIGN.DESCRIPTION`, nay được cache thêm vào `SIGN_CACHE` (cột `TEN`) để không phải hỏi linked
+server mỗi lần; bản cache cũ thiếu cột đó sẽ tự bị dựng lại.
+
+**Ba điều dễ sai, đã chốt bằng `tools/kpicheck.js` (16 trường hợp):**
+
+1. **Mỗi phiếu quy cho ĐÚNG MỘT người.** Số phiếu và số phiếu đã scan lấy từ Node theo cùng một
+   quy tắc quy chủ (`MIN(booking_sign)` / `MIN(created_by)` của phiếu đó), **không** dùng
+   `COUNT(DISTINCT …)` mỗi bên một kiểu. Nếu để mỗi người từng chạm vào phiếu đều được tính thì
+   cộng cả bảng sẽ **lớn hơn** con số của cả tab — mà đây là số đánh giá **con người** nên lệch
+   kiểu đó rất nặng. *(Bài kiểm tra đã bắt đúng lỗi này khi mới viết: 180 phiếu so với 65 thật.)*
+2. **Cộng cả bảng phải ra đúng KPI của cả tab** — item, cancel, return, khác, phiếu đã scan, và
+   mẫu số tỷ lệ scan (đã trừ phiếu chỉ toàn item cancel).
+3. **Tỷ lệ scan để trống (`—`), không phải `0%`**, khi người đó không có phiếu nào cần scan.
+   `0%` đọc ra là *“chưa scan cái nào”* — oan cho người ta.
+
+Bộ lọc Station/Store/Trung tâm và kỳ báo cáo **ăn vào cả bảng KPI** (cũng được kiểm tra).
 
 ### 5b. Ngày GIỜ chính xác — cặp `MUTATION` + `MUTATION_TIME`
 
