@@ -2569,9 +2569,12 @@ async function loadRepairAdmin(f, ghi = () => {}) {
        JOIN [DWH_DB]..[STG_AMOS].[ROTABLES] r ON l.[locationno_i] = r.[locationno_i]
        JOIN [DWH_DB]..[STG_AMOS].[OD_DETAIL] d
          ON r.[psn] = d.[psn] AND r.[labelno] = d.[labelno]
-       -- Don hang cha (OD_HEADER) chi de lay [on_hold]. LEFT JOIN la BAT BUOC:
-       -- INNER JOIN se AM THAM lam mat nhung thiet bi khong tra ra dong header
-       -- (mat dong trong bao cao ton dong nguy hiem hon la thieu mot cot).
+       -- Don hang cha (OD_HEADER) - lay [on_hold] (tinh trang giu don).
+       -- ⚠️ INNER JOIN la LUA CHON CO CHU DINH cua nghiep vu: chi ke nhung
+       -- thiet bi tra ra duoc don hang cha. He qua phai biet: dong nao khong
+       -- co dong OD_HEADER tuong ung se BIEN MAT khoi bao cao (khong phai hien
+       -- ra voi cot Hold de trong). Neu thay so dong tut xuong bat thuong so
+       -- voi truoc, day la cho dau tien can xem.
         JOIN [DWH_DB]..[STG_AMOS].[OD_HEADER] h ON h.[orderno_i] = d.[orderno_i]
        ${where}`
     ));
