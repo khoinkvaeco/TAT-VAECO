@@ -625,6 +625,42 @@ thực ra đã có file. Đầu tab hiện **thanh cảnh báo vàng** kèm đư
 ⚠️ Tài khoản chạy service (Windows Service chạy dưới `LocalSystem` mặc định **không** có quyền
 mạng) phải **đọc được** đường dẫn UNC — nếu không sẽ luôn thấy lỗi *Không có quyền đọc thư mục*.
 
+### Mở CHÍNH file scan từ bảng dữ liệu
+
+Ô **“Đã scan ⤓”** trong cột *Scan* **bấm được** — mở luôn file PDF trên máy chủ (tab mới), không
+phải đi mò trong thư mục mạng. Có ở cả ba chỗ đang đối chiếu scan: *Quản lý xuất kho* (cột **Scan**
+và **Scaned return**) và *Receiving*.
+
+| Đường | Việc |
+|---|---|
+| `GET /api/scan/tim?loai=&station=&ma=` | liệt kê các file PDF ứng với phiếu (JSON) |
+| `GET /api/scan/file?loai=&station=&ma=&ten=` | trả về **chính file PDF** đó |
+
+**Vì sao hỏi trước rồi mới mở**, thay vì trỏ thẳng thẻ `<a>` vào `/api/scan/file`: một phiếu có
+thể có **nhiều file** (chế độ `prefix` cắt từ dấu `-` nên `649020-1.pdf` và `649020-2.pdf` cùng về
+khoá `649020` — phiếu scan làm nhiều lần). Mở đại một cái rồi giấu các cái còn lại là kiểu sai âm
+thầm: người dùng tưởng đã xem hết phiếu. Nhiều file → hiện **menu nhỏ** ngay dưới ô để tự chọn;
+gọi `/api/scan/file` mà không nói rõ `ten` thì server trả **409** chứ **không đoán bừa**.
+
+> #### ⚠️ Chống đọc file bất kỳ trên máy chủ (path traversal)
+>
+> Đây là **đường duy nhất** trong cả app cho phép người dùng chỉ ra một *tên file* rồi máy chủ đọc
+> file đó gửi về. Làm ẩu là thành lỗ hổng đọc `..\..\..\Windows\win.ini`. Hai lớp chặn **độc lập**:
+>
+> 1. **Danh sách trắng** — tên file phải nằm trong **danh sách thật** mà thư mục trả về
+>    (`timFileScan`). Tên do người dùng gửi **không bao giờ** được dùng để dựng đường dẫn. Lớp này
+>    **không phụ thuộc hệ điều hành** nên nó là lớp chính.
+> 2. **Chốt đường dẫn tuyệt đối** phải nằm trong thư mục scan (`path.resolve`), phòng khi lớp 1 bị
+>    một sửa đổi vô ý sau này làm thủng.
+>
+> `tools/scancheck.js` (**23 trường hợp**) chốt cả hai, trong đó có một mục chạy trên **thư mục PDF
+> thật** với một file “bí mật” đặt **ngoài** thư mục scan — vì ở `DEMO_MODE` server trả PDF giả và
+> thoát sớm nên **lớp 2 không hề được chạy**. Đã chứng minh bài kiểm bắt được lỗi: tháo lớp 1 →
+> **7/23 trượt**; tháo cả hai lớp → **10/23 trượt** và file bí mật lọt ra thật (HTTP 200).
+>
+> Hai đường này nằm **sau cổng LGC** (`isLgcPath`) y hệt dữ liệu sinh ra chúng — file scan là
+> **chứng từ thật có chữ ký**, để ngoài cổng thì ai trong mạng cũng tải về được.
+
 ## 6d. Cách đếm “đã scan / chưa scan” — theo PHIẾU và trên TOÀN KỲ
 
 Nghiệp vụ yêu cầu **scan phải đạt 100%**, nên con số này phải đúng tuyệt đối.
@@ -1262,6 +1298,8 @@ CREATE INDEX IX_SIGN_user ON [DWH_DB].[STG_AMOS].[SIGN] ([USER_SIGN]) INCLUDE ([
 | `GET /api/pickslip` | Tab *Quản lý xuất kho*: KPI + 4 biểu đồ + bảng chi tiết, kèm **đối chiếu file scan**, **phiếu trả** và **TAT return**. Trả thêm `scanFolder` (đường dẫn, số file PDF đọc được, lỗi nếu có). |
 | `GET /api/receiving` | Tab *Receiving*: phiếu nhập kho (`HISTORY` `VM='B1'`, đã loại phiếu hủy nhập `CR`) + đối chiếu file scan theo `VOUCHERNO`. Trả thêm `scanFolder`. |
 | `GET /api/scan-config` | Đường dẫn 2 thư mục file scan + **trạng thái thật** (đọc được bao nhiêu file PDF / lỗi gì) + `canEdit`. **Mọi máy xem được.** |
+| `GET /api/scan/tim` | Liệt kê file PDF ứng với một phiếu (`loai`, `station`, `ma`). **Sau cổng LGC.** |
+| `GET /api/scan/file` | Trả về chính file PDF (`loai`, `station`, `ma`, `ten`). Tên file phải nằm trong danh sách thật của thư mục — xem §6c. **Sau cổng LGC.** |
 | `POST /api/admin/scan-config` | Đổi đường dẫn thư mục file scan (body `{ picking, receiving }`, để trống = dùng mặc định). Lưu vào `data/scan-folders.json` trên máy backend. **Chỉ IP quản trị.** |
 | `GET /api/part-onoff` | Tra cứu Part On/Off (`WO_PART_ON_OFF`, linked server DWH_DB). 6 tham số riêng, khớp **chính xác**, kết hợp AND (bỏ trống = bỏ qua): `event`, `labelno` (số) · `partno`, `serialno`, `partnoOff`, `serialnoOff` (chữ). Giờ VN = ghép `MUTATION` (số ngày AMOS) + `MUTATION_TIME` (ms từ 0h) + 7h thành 1 cột; `CREATED_DATE` cũng là số ngày AMOS → chỉ có ngày (không giờ). |
 | `GET /api/wp/tim` | Tìm Work Package theo `station` + `wpStatus` (`112` IN PROGRESS · `11` PRELOAD · `-2` CLOSED) + `tuNgay=YYYY-MM-DD` (**bắt buộc khi CLOSED**). Trả `{ ds[] }` gồm `wpnoI`, `wp`, ngày bắt đầu/kết thúc, loại tàu, project, hangar. |

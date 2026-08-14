@@ -937,6 +937,30 @@ function scanStateNhieuKhoa(index, station, keys) {
   return { trangThai: 'CHUA_SCAN', khoaKhop: '' };
 }
 
+/**
+ * TIM FILE SCAN THAT cua mot dong: tra ve DANH SACH ten file da khop.
+ *
+ * Nhan NHIEU khoa vi ten file khac nhau theo station (receiving: 'R-259454'
+ * hay '259454') - giong scanStateNhieuKhoa().
+ *
+ * ⚠️ Ket qua cua ham nay la DANH SACH TRANG de mo file. Ten file do CHINH
+ * thu muc tra ve, khong phai do nguoi dung gui len - nho vay khong the ep
+ * server mo mot file ngoai thu muc scan.
+ *
+ * @returns {{ok:boolean, dir:string, files:string[], loi:string}}
+ */
+function timFileScan(index, station, keys) {
+  const folder = index[stationCode(station)] || index['*'];
+  if (!folder) return { ok: false, dir: '', files: [], loi: 'Chưa cấu hình thư mục scan cho station này.' };
+  if (!folder.ok) return { ok: false, dir: folder.dir, files: [], loi: folder.error || 'Không đọc được thư mục scan.' };
+  const ra = [];
+  for (const k of keys) {
+    const ds = folder.tenFile.get(String(k || '').trim());
+    if (ds) ra.push(...ds);
+  }
+  return { ok: true, dir: folder.dir, files: [...new Set(ra)], loi: '' };
+}
+
 /** Trang thai TAT CA thu muc de hien tren giao dien. */
 function scanIndexStatus(index, bang) {
   return [...SCAN_STATIONS, '*']
@@ -956,7 +980,13 @@ async function readScanFolder(dir, mode) {
   const key = `${dir}|${mode}`;
   const hit = _scanCache.get(key);
   if (hit && Date.now() - hit.at < SCAN_CACHE_MS) return hit;
-  const out = { at: Date.now(), dir, mode, ok: false, count: 0, keys: new Set(), error: '' };
+  // tenFile: khoa -> [ten file thuc te]. CAN vi khoa da bi cat got (mode
+  // 'prefix' bo phan sau dau '-') nen tu khoa KHONG dung nguoc lai ra ten file.
+  // Day cung la DANH SACH TRANG DUY NHAT de mo file: xem /api/scan/file.
+  const out = {
+    at: Date.now(), dir, mode, ok: false, count: 0,
+    keys: new Set(), tenFile: new Map(), error: '',
+  };
   if (!dir) {
     out.error = 'Chua cau hinh duong dan thu muc scan.';
     _scanCache.set(key, out);
@@ -968,8 +998,16 @@ async function readScanFolder(dir, mode) {
     for (const f of files) {
       if (!/\.pdf$/i.test(f)) continue;
       const name = f.slice(0, -4).trim();
-      out.keys.add(mode === 'prefix' ? name.split('-')[0].trim() : name);
+      const khoa = mode === 'prefix' ? name.split('-')[0].trim() : name;
+      out.keys.add(khoa);
+      // MOT khoa co the ung NHIEU file: che do 'prefix' cat tu dau '-' nen
+      // '649020-1.pdf' va '649020-2.pdf' cung ve khoa '649020' (phieu scan
+      // lam nhieu lan). Giu ca danh sach de nguoi dung tu chon, khong tu y
+      // lay mot cai roi giau cac cai con lai.
+      const ds = out.tenFile.get(khoa);
+      if (ds) ds.push(f); else out.tenFile.set(khoa, [f]);
     }
+    for (const ds of out.tenFile.values()) ds.sort((a, b) => a.localeCompare(b));
     out.ok = true;
     out.count = out.keys.size;
     out.ms = Date.now() - t0;
@@ -3145,6 +3183,7 @@ async function enrichPickslipRows(rows, allPicking = [], allReturns = [], ghi = 
     r.huytra_kieu = '';      // '' | 'RETURN' | 'CANCEL'
     r.huytra_exact = 0;
     r.return_scan = '';
+    r.return_key = '';
 
     // MOT cot "Gio huy / tra" cho CA hai loai - cancel va return ban chat gan
     // giong nhau (deu la hang quay nguoc ve kho), cot "Loai" da phan biet roi
@@ -3176,6 +3215,10 @@ async function enrichPickslipRows(rows, allPicking = [], allReturns = [], ghi = 
     r.huytra_kieu = 'RETURN';
     r.huytra_exact = r.return_exact;
     r.return_scan = scanStateTheoStation(index, r.station, base);
+    // Khoa de MO file scan phieu tra. Giu rieng thay vi cat duoi '-R' cua
+    // return_no o phia trinh duyet: cot do la de NGUOI doc, doi cach hien mot
+    // ti la nut mo file hong theo.
+    r.return_key = base;
     // MOT cot TAT duy nhat: so NGAY CHINH XAC tu ngay-gio xuat kho den
     // ngay-gio ve kho (khong con cap "tron ngay" + "theo gio" nua).
     r.tat_return = ngayChinhXac(
@@ -5122,6 +5165,9 @@ const authLgc = require('./auth-lgc')({
 /** Duong dan thuoc khu vuc LGC (trang + API chi LGC dung). */
 function isLgcPath(p) {
   if (/^\/(lgc|kho)(\.html)?\/?$/.test(p)) return true;
+  // File scan la CHUNG TU THAT (co chu ky) - phai sau cong LGC y het du lieu
+  // sinh ra no; de ngoai cong thi ai trong mang cung tai ve duoc.
+  if (p === '/api/scan/tim' || p === '/api/scan/file') return true;
   return p === '/api/pickslip' || p === '/api/receiving' || p === '/api/reports/repair-admin';
 }
 
@@ -6045,6 +6091,110 @@ app.post('/api/admin/scan-config', h(async (req, res) => {
   console.log(`[SCAN] IP ${ip} cap nhat thu muc scan:`
     + ` picking=${JSON.stringify(dirs.picking)} receiving=${JSON.stringify(dirs.receiving)}`);
   res.json({ ok: true, ...(await trangThaiScan()) });
+}));
+
+// ---------------------------------------------------------------------------
+// MO FILE SCAN THAT cua mot phieu (item da ra soat duoc phieu tren server)
+// ---------------------------------------------------------------------------
+//  /api/scan/tim   -> liet ke cac file PDF ung voi phieu (JSON)
+//  /api/scan/file  -> tra ve CHINH file PDF do
+//
+//  ⚠️ CHONG DI CHUYEN RA NGOAI THU MUC (path traversal) - day la diem nguy
+//  hiem nhat cua ca tinh nang: neu ghep thang ?ten= vao duong dan thi mot
+//  duong dan kieu '..\\..\\Windows\\win.ini' se doc duoc file BAT KY tren may
+//  chu. Vi vay ten file KHONG BAO GIO duoc dung de dung duong dan; no chi
+//  duoc dem so sanh voi DANH SACH THAT ma thu muc tra ve (timFileScan). Sau
+//  do van chot them mot lop nua: duong dan tuyet doi PHAI nam trong thu muc
+//  scan. Bai kiem tools/scancheck.js chung minh ca hai lop.
+// ---------------------------------------------------------------------------
+const SCAN_LOAI = {
+  picking: { mode: 'prefix', lay: (d) => d.picking },
+  receiving: { mode: 'full', lay: (d) => d.receiving },
+};
+
+/** Cac dang ten file co the co cua mot khoa (receiving co the co tien to R-). */
+function scanKhoaUngVien(loai, ma) {
+  const raw = String(ma || '').trim();
+  if (!raw) return [];
+  if (loai !== 'receiving') return [raw];
+  return [...new Set([raw, raw.replace(/^R-/i, '').trim()].filter(Boolean))];
+}
+
+/** Doc tham so chung cua hai API + tra ra danh sach file hop le. */
+async function timFileScanTheoYeuCau(q) {
+  const loai = String(q.loai || '').trim().toLowerCase();
+  const cf = SCAN_LOAI[loai];
+  if (!cf) return { http: 400, body: { error: true, message: 'Tham số "loai" phải là picking hoặc receiving.' } };
+  const khoa = scanKhoaUngVien(loai, q.ma);
+  if (!khoa.length) return { http: 400, body: { error: true, message: 'Thiếu tham số "ma" (số phiếu).' } };
+
+  if (CONFIG.demoMode) {
+    // DEMO: khong co thu muc that. Bia ra dung MOT file de chay thu duoc ca
+    // luong bam-mo-file ma khong can o dia mang.
+    return { demo: true, files: [`${khoa[0]}.pdf`], dir: '(demo)' };
+  }
+  const dirs = loadScanDirs();
+  const index = await loadScanIndex(cf.lay(dirs), cf.mode);
+  const kq = timFileScan(index, q.station, khoa);
+  if (!kq.ok) return { http: 404, body: { error: true, message: kq.loi, dir: kq.dir } };
+  return { dir: kq.dir, files: kq.files };
+}
+
+app.get('/api/scan/tim', h(async (req, res) => {
+  const kq = await timFileScanTheoYeuCau(req.query);
+  if (kq.http) return res.status(kq.http).json(kq.body);
+  res.json({ ok: true, demo: !!kq.demo, files: kq.files, soFile: kq.files.length });
+}));
+
+app.get('/api/scan/file', h(async (req, res) => {
+  const kq = await timFileScanTheoYeuCau(req.query);
+  if (kq.http) return res.status(kq.http).json(kq.body);
+
+  const ten = String(req.query.ten || '').trim();
+  // Khong gui ten -> chi mo duoc khi phieu co DUNG MOT file; nhieu file thi
+  // bat phia goi chon han mot cai (khong tu y doan giup).
+  const chon = ten || (kq.files.length === 1 ? kq.files[0] : '');
+  if (!chon) {
+    return res.status(kq.files.length ? 409 : 404).json({
+      error: true,
+      message: kq.files.length
+        ? `Phiếu này có ${kq.files.length} file scan — cần chỉ rõ tham số "ten".`
+        : 'Không tìm thấy file scan của phiếu này.',
+      files: kq.files,
+    });
+  }
+  // LOP 1: ten file phai NAM TRONG danh sach that ma thu muc tra ve.
+  if (!kq.files.includes(chon)) {
+    return res.status(404).json({ error: true, message: 'Không tìm thấy file scan của phiếu này.' });
+  }
+  if (CONFIG.demoMode) {
+    // File PDF hop le be nhat co the, du de trinh duyet mo duoc.
+    const pdf = Buffer.from(
+      '%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n'
+      + '2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n'
+      + '3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 100]>>endobj\n'
+      + 'trailer<</Root 1 0 R>>\n%%EOF\n', 'latin1');
+    res.set('Content-Type', 'application/pdf');
+    res.set('Content-Disposition', `inline; filename="${chon.replace(/[^\w.\-]/g, '_')}"`);
+    return res.send(pdf);
+  }
+  // LOP 2 (chot lai): duong dan tuyet doi PHAI nam trong thu muc scan.
+  // Lop 1 da du, nhung mot thay doi vo y o timFileScan() sau nay co the lam
+  // thung no - lop nay khong phu thuoc vao lop kia nen van chan duoc.
+  const goc = path.resolve(kq.dir);
+  const abs = path.resolve(goc, chon);
+  if (abs !== goc && !abs.startsWith(goc + path.sep)) {
+    console.warn(`[SCAN] CHAN duong dan ra ngoai thu muc scan: ${abs}`);
+    return res.status(400).json({ error: true, message: 'Tên file không hợp lệ.' });
+  }
+  res.set('Content-Type', 'application/pdf');
+  res.set('Content-Disposition', `inline; filename="${path.basename(abs).replace(/[^\w.\-]/g, '_')}"`);
+  res.sendFile(abs, (e) => {
+    if (e && !res.headersSent) {
+      console.warn(`[SCAN] Khong gui duoc file ${abs}: ${e.message}`);
+      res.status(404).json({ error: true, message: 'Không mở được file scan.' });
+    }
+  });
 }));
 
 // --- Bang du lieu chi tiet TAT theo don vi (van giu endpoint rieng) ---

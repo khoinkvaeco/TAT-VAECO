@@ -2282,11 +2282,27 @@ function escapeHtml(s) {
   ));
 }
 
-function fmtScanCell(cell) {
+/**
+ * O cot "Scan". Rieng trang thai DA SCAN thi bam duoc de MO CHINH FILE PDF
+ * tren may chu - xem moFileScan().
+ *
+ * formatterParams: { loai: 'picking'|'receiving', khoa: '<ten truong khoa>' }
+ * Thieu formatterParams thi o van hien binh thuong, chi la khong bam duoc -
+ * mot bang quen khai bao KHONG duoc lam hong ca bang.
+ */
+function fmtScanCell(cell, params) {
   const v = cell.getValue();
   const mau = { SCANNED: '--good', CHUA_SCAN: '--critical' }[v];
   if (mau) {
     const c = cssVar(mau);
+    const d = cell.getRow().getData();
+    const ma = params && params.khoa ? d[params.khoa] : '';
+    if (v === 'SCANNED' && params && params.loai && ma) {
+      return `<button type="button" class="tat-badge scan-mo" data-scan-mo`
+        + ` data-loai="${escapeHtml(params.loai)}" data-station="${escapeHtml(d.station || '')}"`
+        + ` data-ma="${escapeHtml(ma)}" style="background:${c}22;color:${c}"`
+        + ` title="Bấm để mở file scan của phiếu ${escapeHtml(ma)}">${SCAN_LABEL[v]} ⤓</button>`;
+    }
     return `<span class="tat-badge" style="background:${c}22;color:${c}">${SCAN_LABEL[v]}</span>`;
   }
   // Item cancel: hang khong ra khoi kho nen khong co phieu de ky va luu.
@@ -2298,6 +2314,70 @@ function fmtScanCell(cell) {
   }
   return '<span style="color:var(--text-muted)" title="Không đọc được thư mục scan">—</span>';
 }
+
+/**
+ * MO FILE SCAN THAT cua mot phieu.
+ *
+ * Hoi server truoc (/api/scan/tim) roi moi mo, thay vi tro thang the <a> vao
+ * /api/scan/file: MOT phieu co the co NHIEU file (phieu scan lam nhieu lan,
+ * '649020-1.pdf' + '649020-2.pdf'). Mo dai mot cai roi giau cac cai con lai
+ * la kieu sai am tham - nguoi dung tuong da xem het phieu.
+ */
+async function moFileScan(nut) {
+  const { loai, station, ma } = nut.dataset;
+  const q = `loai=${encodeURIComponent(loai)}&station=${encodeURIComponent(station)}`
+    + `&ma=${encodeURIComponent(ma)}`;
+  const cu = nut.textContent;
+  nut.textContent = '…';
+  try {
+    const r = await fetch(`/api/scan/tim?${q}`);
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.ok) throw new Error(j.message || `Lỗi ${r.status}`);
+    if (!j.files.length) throw new Error('Không tìm thấy file scan của phiếu này.');
+    if (j.files.length === 1) {
+      window.open(`/api/scan/file?${q}&ten=${encodeURIComponent(j.files[0])}`, '_blank', 'noopener');
+      return;
+    }
+    menuFileScan(nut, q, j.files);
+  } catch (e) {
+    nutBaoLoi(nut, e.message);
+  } finally {
+    if (nut.textContent === '…') nut.textContent = cu;
+  }
+}
+
+/** Bao loi ngay tai nut (khong dung alert - dang chen giua bang du lieu). */
+function nutBaoLoi(nut, msg) {
+  nut.title = msg;
+  nut.classList.add('scan-loi');
+  setTimeout(() => nut.classList.remove('scan-loi'), 2500);
+}
+
+/** Phieu co nhieu file -> menu nho ngay duoi nut de nguoi dung tu chon. */
+function menuFileScan(nut, q, files) {
+  document.querySelectorAll('.scan-menu').forEach((x) => x.remove());
+  const box = document.createElement('div');
+  box.className = 'scan-menu';
+  box.innerHTML = `<div class="scan-menu-tit">${files.length} file scan</div>`
+    + files.map((f) => `<a target="_blank" rel="noopener"
+        href="/api/scan/file?${q}&ten=${encodeURIComponent(f)}">${escapeHtml(f)}</a>`).join('');
+  const r = nut.getBoundingClientRect();
+  box.style.top = `${r.bottom + window.scrollY + 4}px`;
+  box.style.left = `${Math.min(r.left + window.scrollX, window.innerWidth - 260)}px`;
+  document.body.appendChild(box);
+  setTimeout(() => document.addEventListener('click', function dong(ev) {
+    if (box.contains(ev.target)) return;
+    box.remove();
+    document.removeEventListener('click', dong);
+  }), 0);
+}
+
+// Bat su kien o CAP TAI LIEU: Tabulator ve lai o moi khi cuon/loc nen gan
+// listener vao tung nut se mat sau lan ve lai dau tien.
+document.addEventListener('click', (e) => {
+  const nut = e.target.closest('[data-scan-mo]');
+  if (nut) moFileScan(nut);
+});
 
 const SCAN_HEADER_FILTER = {
   headerFilter: 'list',
@@ -2380,8 +2460,9 @@ const COLS_PICKSLIP = [
     title: 'Scan', field: 'scan', hozAlign: 'center', width: 105, ...SCAN_HEADER_FILTER,
     headerTooltip: 'Có file <PICKING_LISTNO_I>-….pdf trong thư mục scan hay chưa. '
       + 'Item CANCEL ghi “không cần” — hàng không ra khỏi kho thì không có phiếu để ký và lưu. '
-      + '“—” = không đọc được thư mục.',
+      + '“—” = không đọc được thư mục. Ô “Đã scan” BẤM ĐƯỢC để mở chính file PDF trên máy chủ.',
     formatter: fmtScanCell,
+    formatterParams: { loai: 'picking', khoa: 'picking_listno' },
   },
   { title: 'Part No', field: 'partno', headerFilter: 'input' },
   { title: 'Serial / Batch', field: 'serialno', headerFilter: 'input' },
@@ -2449,8 +2530,10 @@ const COLS_PICKSLIP = [
   },
   {
     title: 'Scaned return', field: 'return_scan', hozAlign: 'center',  ...SCAN_HEADER_FILTER,
-    headerTooltip: 'Có file <HISTORYNO_I>-….pdf trong thư mục scan hay chưa.',
+    headerTooltip: 'Có file <HISTORYNO_I>-….pdf trong thư mục scan hay chưa. '
+      + 'Ô “Đã scan” BẤM ĐƯỢC để mở chính file PDF trên máy chủ.',
     formatter: fmtScanCell,
+    formatterParams: { loai: 'picking', khoa: 'return_key' },
   },
   { title: 'Station', field: 'station', headerFilter: 'input', },
   { title: 'Store', field: 'store', headerFilter: 'input', },
@@ -2824,8 +2907,10 @@ const COLS_RECEIVING = [
   {
     title: 'Scan', field: 'scan', hozAlign: 'center', width: 105, ...SCAN_HEADER_FILTER,
     headerTooltip: 'Có file PDF trùng VOUCHERNO trong thư mục scan hay chưa. Chấp nhận CẢ HAI cách đặt tên: '
-      + 'giữ nguyên “R-259454.pdf” (SGN) hoặc bỏ tiền tố “259454.pdf” (HAN). “—” = không đọc được thư mục.',
+      + 'giữ nguyên “R-259454.pdf” (SGN) hoặc bỏ tiền tố “259454.pdf” (HAN). “—” = không đọc được thư mục. '
+      + 'Ô “Đã scan” BẤM ĐƯỢC để mở chính file PDF trên máy chủ.',
     formatter: fmtScanCell,
+    formatterParams: { loai: 'receiving', khoa: 'voucherno' },
   },
   {
     title: 'Ngày giờ', field: 'receive_time_vn', 
