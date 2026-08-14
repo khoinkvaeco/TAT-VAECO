@@ -298,22 +298,43 @@ async function buoc(ghi, ten, fn) {
 // ---------------------------------------------------------------------------
 let signCacheReady = false;
 
+// Ho ten nhan vien = SIGN.LASTNAME + SIGN.FIRSTNAME (thu tu Viet Nam: HO truoc).
+// Truoc day lay SIGN.DESCRIPTION - cot do khong phai ho ten.
+// CAST cung mot do rong o MOI noi dung: cot [TEN] cua SIGN_CACHE duoc tao bang
+// SELECT INTO nen do rong lay tu chinh bieu thuc nay; doi bieu thuc ma khong
+// doi TEN_BYTES thi ban cache cu se khong bi bo di va INSERT se tran.
+const TEN_NVARCHAR = 200;
+const TEN_BYTES = TEN_NVARCHAR * 2;
+const hoTen = (a) => {
+  const c = (t) => `LTRIM(RTRIM(ISNULL(${a ? `${a}.` : ''}[${t}], '')))`;
+  return `CAST(LTRIM(RTRIM(${c('LASTNAME')} + ' ' + ${c('FIRSTNAME')})) AS nvarchar(${TEN_NVARCHAR}))`;
+};
+
 async function refreshSignCache() {
   if (CONFIG.demoMode || !CONFIG.signCache) return;
   try {
     await query(`
-      -- Cache them [TEN] (= SIGN.DESCRIPTION) de bang KPI theo nhan vien hien
-      -- duoc TEN chu khong chi ma - doc "VAE52863" thi khong biet la ai.
+      -- Cache them [TEN] de bang KPI theo nhan vien hien duoc TEN chu khong chi
+      -- ma - doc "VAE52863" thi khong biet la ai.
+      -- Buoc 1 chi keo COT THO ve #sign_raw: ghep chuoi bang '+' la cu phap
+      -- T-SQL, KHONG phai Oracle - de nguyen trong cau hoi linked server thi
+      -- rui ro bi day xuong AMOS. Ghep o buoc 2, luc du lieu da nam tai cho.
       SELECT [USER_SIGN], MAX([DEPARTMENT]) AS [DEPARTMENT],
-             MAX(LTRIM(RTRIM([DESCRIPTION]))) AS [TEN]
-      INTO #sign_new
+             MAX([LASTNAME]) AS [LASTNAME], MAX([FIRSTNAME]) AS [FIRSTNAME]
+      INTO #sign_raw
       FROM [DWH_DB]..[STG_AMOS].[SIGN]
       GROUP BY [USER_SIGN];
 
-      -- Ban cache CU (tao truoc khi co cot TEN) -> bo di de tao lai dung cau
-      -- truc. An toan: day thuan tuy la cache, moi chu ky deu dung lai tu SIGN.
+      SELECT [USER_SIGN], [DEPARTMENT], ${hoTen('')} AS [TEN]
+      INTO #sign_new FROM #sign_raw;
+      DROP TABLE #sign_raw;
+
+      -- Ban cache CU (chua co cot TEN, hoac cot TEN dung ban cu tu DESCRIPTION
+      -- nen HEP hon ho ten ghep) -> bo di de tao lai dung cau truc; giu lai se
+      -- vo INSERT vi tran do dai. An toan: day thuan tuy la cache, moi chu ky
+      -- deu dung lai tu SIGN.
       IF OBJECT_ID('[NQT].[dbo].[SIGN_CACHE]', 'U') IS NOT NULL
-         AND COL_LENGTH('[NQT].[dbo].[SIGN_CACHE]', 'TEN') IS NULL
+         AND ISNULL(COL_LENGTH('[NQT].[dbo].[SIGN_CACHE]', 'TEN'), 0) <> ${TEN_BYTES}
         DROP TABLE [NQT].[dbo].[SIGN_CACHE];
 
       IF OBJECT_ID('[NQT].[dbo].[SIGN_CACHE]', 'U') IS NULL
@@ -426,12 +447,36 @@ function signJoin(staffCol, alias) {
   if (signCacheReady) {
     return `LEFT JOIN [NQT].[dbo].[SIGN_CACHE] ${alias} ON ${alias}.[USER_SIGN] = ${staffCol}`;
   }
+  // GROUP BY o lop TRONG (day duoc xuong AMOS), ghep ho ten o lop NGOAI (tai
+  // cho) - xem giai thich o refreshSignCache().
   return `LEFT JOIN (
-      SELECT [USER_SIGN], MAX([DEPARTMENT]) AS [DEPARTMENT],
-             MAX(LTRIM(RTRIM([DESCRIPTION]))) AS [TEN]
-      FROM [DWH_DB]..[STG_AMOS].[SIGN]
-      GROUP BY [USER_SIGN]
+      SELECT s0.[USER_SIGN], s0.[DEPARTMENT], ${hoTen('s0')} AS [TEN]
+      FROM (
+        SELECT [USER_SIGN], MAX([DEPARTMENT]) AS [DEPARTMENT],
+               MAX([LASTNAME]) AS [LASTNAME], MAX([FIRSTNAME]) AS [FIRSTNAME]
+        FROM [DWH_DB]..[STG_AMOS].[SIGN]
+        GROUP BY [USER_SIGN]
+      ) s0
     ) ${alias} ON ${alias}.[USER_SIGN] = ${staffCol}`;
+}
+
+/**
+ * Nhom vat tu tu HISTORY.MAT_CLASS -> 'R' (repairable) / 'C' (consumable) / 'K'.
+ *
+ * Chi xet CHU CAI DAU va khong phan biet hoa thuong, nen chiu duoc ca ban ghi
+ * ghi tat ('R', 'C') lan ghi day ('ROT', 'CON').
+ *
+ * ⚠️ MOI gia tri khong bat dau bang R/C deu roi vao 'K' va duoc HIEN RA thanh
+ * cot "SL khac" - CO CHU DINH. Neu AMOS dung ma khac han thi so lieu se don het
+ * vao cot do va nhin thay ngay, chu KHONG am tham bien mat khoi bang KPI.
+ * @param {string} col  bieu thuc cot (vd 'x.mat_class')
+ */
+/** So luong -> lam tron 2 chu so (SUM(float) hay ra 12.000000000000002). */
+const lam2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
+
+function nhomMatClass(col) {
+  const c = `UPPER(LEFT(LTRIM(ISNULL(${col}, '')), 1))`;
+  return `CASE WHEN ${c} = 'R' THEN 'R' WHEN ${c} = 'C' THEN 'C' ELSE 'K' END`;
 }
 
 /** Ten nhan vien tu bang SIGN (da join bang signJoin). Rong -> chuoi rong. */
@@ -2941,14 +2986,6 @@ async function fetchReturnHistory(seqnos) {
   return out;
 }
 
-/** So NGAY tron giua 2 moc (b - a). Tra null neu thieu mot dau. */
-function dayDiff(a, b) {
-  const da = a instanceof Date ? a : (a ? new Date(a) : null);
-  const db = b instanceof Date ? b : (b ? new Date(b) : null);
-  if (!da || !db || isNaN(da) || isNaN(db)) return null;
-  return Math.round((db - da) / 86400000);
-}
-
 /**
  * So NGAY CHINH XAC giua 2 moc (b - a), 2 chu so thap phan.
  * Moi moc thoi gian cua LGC (xuat kho, cancel, return, receive) deu co DU ngay
@@ -3012,7 +3049,6 @@ async function enrichPickslipRows(rows, allPicking = [], allReturns = [], ghi = 
   const st = {
     daScan: 0, chuaScan: 0, tongPhieu: 0, phieuMienScan: 0,
     daScanDong: 0, chuaScanDong: 0,
-    returnCoPhieu: 0, returnKhongPhieu: 0,
     returnDaScan: 0, returnChuaScan: 0,
     tatReturnAvg: null, tatReturnMax: null,
   };
@@ -3053,9 +3089,10 @@ async function enrichPickslipRows(rows, allPicking = [], allReturns = [], ghi = 
   const theoTt = new Map(); // Trung tam -> { so, tongGio, maxGio }
   const retScanDone = new Set(); // moi phieu tra chi dem MOT lan
   for (const r of allReturns) {
+    // Khong tra duoc phieu tra -> bo qua dong nay (cot "Phieu tra" ghi
+    // NOT FOUND o bang chi tiet; khong con dem thanh KPI rieng nua).
     const h = hist.get(idStr(r.seq_ret));
-    if (!h) { st.returnKhongPhieu += 1; continue; }
-    st.returnCoPhieu += 1;
+    if (!h) continue;
     const base = idStr(h.historyno);
     if (!retScanDone.has(base)) {
       retScanDone.add(base);
@@ -3335,8 +3372,6 @@ async function qPickslip(range, f, ghi = () => {}) {
       daScanDong: sc.daScanDong,
       chuaScanDong: sc.chuaScanDong,
       // Phieu tra + TAT return
-      returnCoPhieu: sc.returnCoPhieu,
-      returnKhongPhieu: sc.returnKhongPhieu,
       tatReturnAvg: sc.tatReturnAvg,
       tatReturnMax: sc.tatReturnMax,
       phieuMienScan: sc.phieuMienScan,
@@ -3530,11 +3565,18 @@ async function qReceiving(range, f, ghi = () => {}) {
     -- [4] KPI INSPECTOR NHAP KHO - gom theo HISTORY.CREATED_BY (nguoi lap
     --     phieu nhap). Chay tren #hi da o local nen KHONG ton them luot hoi
     --     AMOS nao. Join SIGN chi de lay TEN (bang cache local neu co).
+    --     SL nhap R / C tach theo MAT_CLASS - xem nhomMatClass().
     SELECT x.created_by AS ma_nv,
            MAX(${tenNhanVien('si')}) AS ten_nv,
            COUNT(*) AS so_item,
            COUNT(DISTINCT x.voucherno) AS so_phieu,
-           SUM(TRY_CONVERT(float, x.qty)) AS tong_sl
+           SUM(TRY_CONVERT(float, x.qty)) AS tong_sl,
+           SUM(CASE WHEN ${nhomMatClass('x.mat_class')} = 'R'
+                    THEN TRY_CONVERT(float, x.qty) ELSE 0 END) AS sl_r,
+           SUM(CASE WHEN ${nhomMatClass('x.mat_class')} = 'C'
+                    THEN TRY_CONVERT(float, x.qty) ELSE 0 END) AS sl_c,
+           SUM(CASE WHEN ${nhomMatClass('x.mat_class')} = 'K'
+                    THEN TRY_CONVERT(float, x.qty) ELSE 0 END) AS sl_khac
     FROM #hi x ${signJoin('x.[created_by]', 'si')}
     WHERE ${conLai} ${w}
     GROUP BY x.created_by;
@@ -3649,7 +3691,10 @@ async function qReceiving(range, f, ghi = () => {}) {
           ten_nv: String(r.ten_nv || '').trim(),
           so_phieu: sn.soPhieu,   // moi voucher quy cho DUNG MOT nguoi
           so_item: r.so_item || 0,
-          tong_sl: Math.round((Number(r.tong_sl) || 0) * 100) / 100,
+          tong_sl: lam2(r.tong_sl),
+          sl_r: lam2(r.sl_r),
+          sl_c: lam2(r.sl_c),
+          sl_khac: lam2(r.sl_khac),
           da_scan: sn.daScan,
           chua_scan: sn.chuaScan,
           ty_le_scan: tongScan ? pct(sn.daScan, tongScan) : null,
@@ -4118,149 +4163,9 @@ function buildDashboardFromAgg(range, agg, f) {
   };
 }
 
-// ---------------------------------------------------------------------------
-// 6. TONG HOP KPI + DU LIEU BIEU DO
-// ---------------------------------------------------------------------------
-
-/** Trung binh so hoc, bo qua null. */
-function avg(arr, sel) {
-  const vals = arr.map(sel).filter((v) => typeof v === 'number' && isFinite(v));
-  if (!vals.length) return 0;
-  return vals.reduce((a, b) => a + b, 0) / vals.length;
-}
-
-/** Tong hop KPI + du lieu bieu do tu cac ket qua truy van. */
-function buildDashboard(range, dept, cuvt, retStore, issuedNI, notRec, returned) {
-  // --- KPI cards ---
-  const kpis = {
-    tatDeptAvg: round1(avg(dept, (d) => d.tat_days)),
-    tatCuvtAvg: round1(avg(cuvt, (d) => d.tat_days)),
-    tatReturnStoreAvg: round1(avg(retStore, (d) => d.tat_days)),
-    countIssued: dept.length + notRec.length, // tong so thiet bi xuat kho (da/chua doi ung)
-    countNotReconciled: notRec.length,
-    countIssuedNotInstalled: issuedNI.length,
-    reconcileRate:
-      dept.length + notRec.length > 0
-        ? round1((dept.length / (dept.length + notRec.length)) * 100)
-        : 0,
-  };
-
-  // --- Bieu do cot: TAT trung binh theo tung don vi ---
-  const byDept = groupAvg(dept, 'department', 'tat_days');
-  const barDept = {
-    labels: byDept.map((x) => x.key),
-    values: byDept.map((x) => round1(x.avg)),
-    counts: byDept.map((x) => x.count),
-  };
-
-  // --- TAT hoan kho trung binh theo Trung tam ---
-  const byRet = groupAvg(retStore, 'department', 'tat_days');
-  const retStoreDept = {
-    labels: byRet.map((x) => x.key),
-    values: byRet.map((x) => round1(x.avg)),
-    counts: byRet.map((x) => x.count),
-  };
-
-  // --- Bieu do tron: phan bo thiet bi theo station (gom HAN/SGN/DAD + Khac) ---
-  const stMap = new Map(MAIN_STATIONS.map((s) => [s, 0]));
-  stMap.set('OTHER', 0);
-  for (const r of dept) {
-    const k = normalizeStation(r.station);
-    stMap.set(k, (stMap.get(k) || 0) + 1);
-  }
-  const pieOrder = [...MAIN_STATIONS, 'OTHER'];
-  const pieStation = {
-    groupBy: 'station',
-    labels: pieOrder.map((s) => (s === 'OTHER' ? 'Khác' : s)),
-    values: pieOrder.map((s) => stMap.get(s) || 0),
-  };
-
-  // --- Bieu do cot XEP CHONG: SO LUONG XUAT KHO theo Trung tam ---
-  //     daTra (da doi ung) + chuaTra (chua doi ung) = tong xuat kho.
-  const daTraCnt = new Map();
-  for (const r of dept) {
-    const k = r.department || 'PA';
-    daTraCnt.set(k, (daTraCnt.get(k) || 0) + 1);
-  }
-  const chuaTraCnt = new Map();
-  for (const r of notRec) {
-    const k = r.department || 'PA';
-    chuaTraCnt.set(k, (chuaTraCnt.get(k) || 0) + 1);
-  }
-  const returnedCnt = new Map();
-  for (const r of returned || []) {
-    const k = r.department || 'PA';
-    returnedCnt.set(k, (returnedCnt.get(k) || 0) + 1);
-  }
-  const tong = (k) => (daTraCnt.get(k) || 0) + (chuaTraCnt.get(k) || 0);
-  const volLabels = [...new Set([...daTraCnt.keys(), ...chuaTraCnt.keys()])].sort(
-    (a, b) => tong(b) - tong(a)
-  );
-  const deptVolume = {
-    labels: volLabels,
-    daTra: volLabels.map((k) => daTraCnt.get(k) || 0),
-    chuaTra: volLabels.map((k) => chuaTraCnt.get(k) || 0),
-    issued: volLabels.map(tong),
-    returned: volLabels.map((k) => returnedCnt.get(k) || 0),
-  };
-
-  return {
-    range: { from: range.from, to: range.to, label: range.label },
-    kpis,
-    charts: { barDept, pieStation, deptVolume, retStoreDept },
-  };
-}
-
+/** Lam tron 1 chu so thap phan (dung khap cac KPI dang "so ngay"). */
 function round1(n) {
   return Math.round((Number(n) || 0) * 10) / 10;
-}
-
-/** Nhom + trung binh 1 truong theo key. */
-function groupAvg(arr, keyField, valField) {
-  const m = new Map();
-  for (const r of arr) {
-    const k = r[keyField] || '(trong)';
-    if (!m.has(k)) m.set(k, { sum: 0, count: 0 });
-    const g = m.get(k);
-    const v = Number(r[valField]);
-    if (isFinite(v)) {
-      g.sum += v;
-      g.count += 1;
-    }
-  }
-  return [...m.entries()]
-    .map(([key, g]) => ({ key, avg: g.count ? g.sum / g.count : 0, count: g.count }))
-    .sort((a, b) => b.avg - a.avg);
-}
-
-/** Dem so luong theo key. */
-function groupCount(arr, keyField) {
-  const m = new Map();
-  for (const r of arr) {
-    const k = r[keyField] || '(trong)';
-    m.set(k, (m.get(k) || 0) + 1);
-  }
-  return [...m.entries()].map(([key, count]) => ({ key, count })).sort((a, b) => b.count - a.count);
-}
-
-/** Nhom trung binh theo ngay (yyyy-mm-dd) tu 1 cot datetime. */
-function groupAvgByDay(arr, dateField, valField) {
-  const m = new Map();
-  for (const r of arr) {
-    const d = r[dateField] ? new Date(r[dateField]) : null;
-    if (!d || isNaN(d)) continue;
-    const key = d.toISOString().slice(0, 10);
-    if (!m.has(key)) m.set(key, { sum: 0, count: 0 });
-    const g = m.get(key);
-    const v = Number(r[valField]);
-    if (isFinite(v)) {
-      g.sum += v;
-      g.count += 1;
-    }
-  }
-  return [...m.entries()]
-    .map(([key, g]) => ({ key, avg: g.count ? g.sum / g.count : 0 }))
-    .sort((a, b) => a.key.localeCompare(b.key));
 }
 
 // ---------------------------------------------------------------------------

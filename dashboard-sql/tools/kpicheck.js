@@ -102,6 +102,24 @@ async function main() {
       cong(ins, 'da_scan') + cong(ins, 'chua_scan') === kr.tongPhieuScan,
       `${cong(ins, 'da_scan') + cong(ins, 'chua_scan')} vs ${kr.tongPhieuScan}`);
     kiemTra('Không có mã nhân viên rỗng', ins.every((r) => String(r.ma_nv || '').trim()));
+    // SL nhap R / C / khac phai PHU HET tong SL: neu MAT_CLASS co ma la ma bi
+    // bo qua thay vi don vao 'khac' thi tong ba cot se HUT so voi Tong SL.
+    const gan = (a, b) => Math.abs(a - b) < 0.01;
+    kiemTra('SL nhập R + C + khác = Tổng SL ở TỪNG người',
+      ins.every((r) => gan((r.sl_r || 0) + (r.sl_c || 0) + (r.sl_khac || 0), r.tong_sl)));
+    // Tinh LAI R/C doc lap tu bang chi tiet (cot mat_class) roi so bang - bat
+    // duoc ca truong hop gom nham nhom lan bo sot dong.
+    const nhom = (v) => {
+      const c = String(v || '').trim().toUpperCase().charAt(0);
+      return c === 'R' || c === 'C' ? c : 'K';
+    };
+    const lai = { R: 0, C: 0, K: 0 };
+    for (const r of rc.rows || []) lai[nhom(r.mat_class)] += Number(r.qty) || 0;
+    kiemTra('SL nhập R / C tính lại từ bảng chi tiết khớp bảng KPI',
+      !rc.truncated && gan(cong(ins, 'sl_r'), lai.R) && gan(cong(ins, 'sl_c'), lai.C)
+        && gan(cong(ins, 'sl_khac'), lai.K),
+      `R ${cong(ins, 'sl_r')} vs ${lai.R} · C ${cong(ins, 'sl_c')} vs ${lai.C}`
+      + ` · khác ${cong(ins, 'sl_khac')} vs ${lai.K}`);
 
     // --- 3. Bo loc phai an vao ca bang KPI -----------------------------------
     const ps2 = await fetch(`${BASE}/api/pickslip?nocache=1&station=HAN`).then((r) => r.json());

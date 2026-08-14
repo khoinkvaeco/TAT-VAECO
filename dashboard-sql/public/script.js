@@ -49,13 +49,6 @@ function fmtRangeEnd(v) {
   return fmtDateTime(new Date(d.getTime() - 60000).toISOString());
 }
 
-/** Dinh dang so gio TAT. */
-function fmtHours(v) {
-  const n = Number(v);
-  if (!isFinite(n)) return '';
-  return n.toFixed(1);
-}
-
 // --------------------------------------------------------------------------
 // 1. Trang thai ung dung
 // --------------------------------------------------------------------------
@@ -797,25 +790,6 @@ const fmtIntCell = (cell) => {
   const n = Number(cell.getValue());
   return isFinite(n) ? String(Math.round(n)) : (cell.getValue() ?? '');
 };
-/** O DEM cua bang pivot: 0 hien nhat de mat tap trung vao o co so lieu.
- *  Dong TONG CONG (isTotal) luon in dam. */
-const fmtCountCell = (cell) => {
-  const v = Number(cell.getValue()) || 0;
-  const bold = cell.getRow().getData().isTotal ? 'font-weight:700;' : '';
-  if (!v) return `<span style="color:var(--text-muted);${bold}">0</span>`;
-  return `<span style="${bold}">${v}</span>`;
-};
-/** Nhu fmtCountCell nhung to mau canh bao (cot "tu 30 ngay tro len"). */
-const fmtCountWarnCell = (cell) => {
-  const v = Number(cell.getValue()) || 0;
-  const bold = cell.getRow().getData().isTotal ? 'font-weight:700;' : '';
-  if (!v) return `<span style="color:var(--text-muted);${bold}">0</span>`;
-  const c = cssVar('--warning');
-  return `<span class="tat-badge" style="background:${c}22;color:${c};${bold}">${v}</span>`;
-};
-/** Cot TONG - luon in dam. */
-const fmtCountBoldCell = (cell) => `<b>${Number(cell.getValue()) || 0}</b>`;
-
 /** Chi hien NGAY (dd/mm/yyyy) - cho cot chi co ngay, khong co gio. */
 const fmtDateOnlyCell = (cell) => {
   const s = fmtDateTime(cell.getValue());
@@ -1392,9 +1366,16 @@ function veKpiNhanVien(sel, rows, kieu) {
     return `${v}%<span class="nv-bar ${cls}"><i style="width:${Math.max(0, Math.min(100, v))}%"></i></span>`;
   };
   const laXuat = kieu === 'pickslip';
+  const tong = (k) => ds.reduce((a, r) => a + (Number(r[k]) || 0), 0);
+  const lam2 = (v) => Math.round(v * 100) / 100;
+  // Cot "SL khác" CHI hien khi ky nay THUC SU co vat tu ngoai R/C - khong bay
+  // mot cot toan so 0 (giong cach lam cua cot "Đang hold" o Repair Admin).
+  // Co no tuc la MAT_CLASS co gia tri la, phai nhin thay chu khong am tham bo.
+  const coKhac = !laXuat && tong('sl_khac') > 0;
   const cot = laXuat
     ? ['Mã NV', 'Tên', 'Số phiếu xuất', 'Item xuất', 'Phiếu đã scan', 'Tỷ lệ scan']
-    : ['Mã NV', 'Tên', 'Số phiếu receive', 'Item', 'Tổng SL', 'Phiếu đã scan', 'Tỷ lệ scan'];
+    : ['Mã NV', 'Tên', 'Số phiếu receive', 'Item', 'Tổng SL', 'SL nhập R', 'SL nhập C',
+      ...(coKhac ? ['SL khác'] : []), 'Phiếu đã scan', 'Tỷ lệ scan'];
   const head = '<tr>' + cot.map((c, i) => `<th${i >= 2 ? ' class="ra-num"' : ''}>${c}</th>`).join('') + '</tr>';
   const num = (v) => `<td class="ra-num">${v}</td>`;
   const body = ds.map((r) => {
@@ -1403,16 +1384,18 @@ function veKpiNhanVien(sel, rows, kieu) {
     const duoi = num(`${r.da_scan}/${r.da_scan + r.chua_scan}`) + num(bar(r.ty_le_scan)) + '</tr>';
     return laXuat
       ? chung + num(r.so_xuat) + duoi
-      : chung + num(r.so_item) + num(r.tong_sl) + duoi;
+      : chung + num(r.so_item) + num(r.tong_sl) + num(r.sl_r ?? 0) + num(r.sl_c ?? 0)
+        + (coKhac ? num(r.sl_khac ?? 0) : '') + duoi;
   }).join('');
-  const tong = (k) => ds.reduce((a, r) => a + (Number(r[k]) || 0), 0);
   const scanTong = tong('da_scan');
   const scanMau = tong('da_scan') + tong('chua_scan');
   const foot = `<tr class="ra-total"><td colspan="2">TỔNG (${ds.length} người)</td>`
     + num(tong('so_phieu'))
     + (laXuat
       ? num(tong('so_xuat'))
-      : num(tong('so_item')) + num(Math.round(tong('tong_sl') * 100) / 100))
+      : num(tong('so_item')) + num(lam2(tong('tong_sl')))
+        + num(lam2(tong('sl_r'))) + num(lam2(tong('sl_c')))
+        + (coKhac ? num(lam2(tong('sl_khac'))) : ''))
     + num(`${scanTong}/${scanMau}`)
     + num(scanMau ? `${Math.round((1000 * scanTong) / scanMau) / 10}%` : '—')
     + '</tr>';
@@ -2275,15 +2258,19 @@ let pickLoadSeq = 0;
 //   Cancel      - huy truoc khi hang ra khoi kho
 //   Return      - hang da ra kho roi quay ve
 //   Receive     - nhap kho (tab Receiving)
+// THU TU O DAY LA THU TU HIEN TRONG BO LOC cot "Loại" (duoc trai thang bang
+// spread) - de NORMAL len dau cho dung thu tu doc.
 const PICK_LOAI_LABEL = {
-  CANCEL: 'Cancel', RETURN: 'Return',
-  KHAC: 'Hủy/trả khác', NORMAL: 'Phiếu xuất',
+  NORMAL: 'Phiếu xuất', CANCEL: 'Cancel',
+  RETURN: 'Return', KHAC: 'Hủy/trả khác',
 };
 
 // --- Doi chieu FILE SCAN PDF (dung chung cho tab Xuat kho va tab Receiving) ---
 // Gia tri '' = KHONG doc duoc thu muc -> hien '—' chu KHONG bao "chua scan"
 // (bao nham se khien nguoi dung di tim file khong ton tai van de).
-const SCAN_LABEL = { SCANNED: 'Đã scan', CHUA_SCAN: 'Chưa scan' };
+// Mot nguon duy nhat cho nhan trang thai scan: badge tren bang, bo loc dau cot
+// va bang KPI deu doc tu day.
+const SCAN_LABEL = { SCANNED: 'Đã scan', CHUA_SCAN: 'Chưa scan', KHONG_CAN: 'không cần' };
 
 /** Cac kho bi loai khi tich "Bo qua cac kho CAB" (giong CAB_STORES o server). */
 const CAB_STORES = ['CAB', 'CAB-TD', 'P-THA', 'P-SAF', 'P-PAN'];
@@ -2297,20 +2284,17 @@ function escapeHtml(s) {
 
 function fmtScanCell(cell) {
   const v = cell.getValue();
-  if (v === 'SCANNED') {
-    const c = cssVar('--good');
-    return `<span class="tat-badge" style="background:${c}22;color:${c}">Đã scan</span>`;
-  }
-  if (v === 'CHUA_SCAN') {
-    const c = cssVar('--critical');
-    return `<span class="tat-badge" style="background:${c}22;color:${c}">Chưa scan</span>`;
+  const mau = { SCANNED: '--good', CHUA_SCAN: '--critical' }[v];
+  if (mau) {
+    const c = cssVar(mau);
+    return `<span class="tat-badge" style="background:${c}22;color:${c}">${SCAN_LABEL[v]}</span>`;
   }
   // Item cancel: hang khong ra khoi kho nen khong co phieu de ky va luu.
   // Phai noi RO "khong can" thay vi de trong hay hien "Chua scan" - de trong
   // thi nguoi doc tuong thieu du lieu, con "Chua scan" la buoc toan oan.
   if (v === 'KHONG_CAN') {
     return '<span style="color:var(--text-muted)" title="Item cancel — hàng không ra khỏi kho '
-      + 'nên không có phiếu để ký và lưu">không cần</span>';
+      + `nên không có phiếu để ký và lưu">${SCAN_LABEL.KHONG_CAN}</span>`;
   }
   return '<span style="color:var(--text-muted)" title="Không đọc được thư mục scan">—</span>';
 }
@@ -2318,9 +2302,7 @@ function fmtScanCell(cell) {
 const SCAN_HEADER_FILTER = {
   headerFilter: 'list',
   headerFilterParams: {
-    values: {
-      '': 'Tất cả', SCANNED: 'Đã scan', CHUA_SCAN: 'Chưa scan', KHONG_CAN: 'Không cần',
-    },
+    values: { '': 'Tất cả', ...SCAN_LABEL },
   },
 };
 
@@ -2356,19 +2338,20 @@ const COLS_PICKSLIP = [
     title: 'Loại', field: 'loai', hozAlign: 'center', width: 110,
     headerTooltip: 'Mốc là QTY_CANCELED ≠ 0. Rồi dò ĐUÔI của PICKSLIP_TEXT: …cancel / …cancel booking → Cancel; '
       + '…return → Return; không có từ khóa nào → “Hủy/trả khác” (VẪN tính là hủy/trả, chỉ là chưa phân loại được).',
+    // Nhan lay TU PICK_LOAI_LABEL - mot nguon duy nhat cho thuat ngu, de doi
+    // ten mot cho la ca badge lan bo loc deu doi theo (truoc day chep tay 3 noi).
     formatter: (cell) => {
       const v = cell.getValue();
-      if (v === 'CANCEL') return `<span class="tat-badge" style="background:${cssVar('--warning')}22;color:${cssVar('--warning')}">Cancel</span>`;
-      if (v === 'RETURN') return `<span class="tat-badge" style="background:${cssVar('--series-4')}22;color:${cssVar('--series-4')}">Return</span>`;
-      if (v === 'KHAC') return `<span class="tat-badge" style="background:${cssVar('--series-5')}22;color:${cssVar('--series-5')}" title="QTY_CANCELED ≠ 0 nhưng PICKSLIP_TEXT không có từ khóa cancel/return">Hủy/trả khác</span>`;
-      return '<span style="color:var(--text-muted)">Phiếu xuất</span>';
+      const mau = { CANCEL: '--warning', RETURN: '--series-4', KHAC: '--series-5' }[v];
+      if (!mau) return `<span style="color:var(--text-muted)">${PICK_LOAI_LABEL.NORMAL}</span>`;
+      const c = cssVar(mau);
+      const tip = v === 'KHAC'
+        ? ' title="QTY_CANCELED ≠ 0 nhưng PICKSLIP_TEXT không có từ khóa cancel/return"' : '';
+      return `<span class="tat-badge" style="background:${c}22;color:${c}"${tip}>${PICK_LOAI_LABEL[v]}</span>`;
     },
     headerFilter: 'list',
     headerFilterParams: {
-      values: {
-        '': 'Tất cả', NORMAL: 'Phiếu xuất', CANCEL: 'Cancel',
-        RETURN: 'Return', KHAC: 'Hủy/trả khác',
-      },
+      values: { '': 'Tất cả', ...PICK_LOAI_LABEL },
     },
   },
   // MOT cot thoi gian xuat kho duy nhat: co gio that thi hien ngay + gio, khong
@@ -2550,12 +2533,6 @@ function renderPickKpis(k) {
     {
       label: 'TAT return lâu nhất', value: n(k.tatReturnMax), unit: 'ngày', accent: '--warning',
       title: 'Item return có thời gian nằm ngoài kho lâu nhất trong kỳ.',
-    },
-    {
-      label: 'Return có phiếu trả', value: `${n(k.returnCoPhieu)}/${(k.returnCoPhieu || 0) + (k.returnKhongPhieu || 0)}`,
-      unit: 'item', accent: '--series-4',
-      title: 'Số item return tra được số phiếu trả trong HISTORY (VM ∈ EA, TC), toàn kỳ. '
-        + 'Không tra được thì cột "Phiếu trả" ghi NOT FOUND — khi đó không kiểm được scan của phiếu trả.',
     },
     {
       label: 'Phiếu trả chưa scan', value: n(k.returnChuaScan), unit: 'phiếu',

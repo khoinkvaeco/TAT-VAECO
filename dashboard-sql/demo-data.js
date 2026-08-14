@@ -606,8 +606,17 @@ const _repairDemoCache = new Map();
  * KPI theo NHAN VIEN (dung chung cho hai tab):
  *   'pickslip'  - thu kho xuat booking, gom theo booking_sign
  *   'receiving' - inspector nhap kho,  gom theo created_by
- * Demo tu bia TEN tu ma de kiem thu duoc cot ten (that thi lay SIGN.DESCRIPTION).
+ * Demo tu bia TEN tu ma de kiem thu duoc cot ten (that thi ghep
+ * SIGN.LASTNAME + SIGN.FIRSTNAME).
  */
+const lam2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
+
+/** R / C / K tu MAT_CLASS - PHAI khop nhomMatClass() ben server.js. */
+const nhomMc = (v) => {
+  const c = String(v || '').trim().toUpperCase().charAt(0);
+  return c === 'R' || c === 'C' ? c : 'K';
+};
+
 function gomTheoNhanVien(rows, cot, kieu) {
   const m = new Map();
   const khoaPhieu = kieu === 'pickslip' ? 'picking_listno' : 'voucherno';
@@ -617,11 +626,13 @@ function gomTheoNhanVien(rows, cot, kieu) {
     let g = m.get(ma);
     if (!g) {
       g = { ma_nv: ma, ten_nv: 'NV ' + ma.slice(-4), so_item: 0, so_huy: 0,
-            tong_sl: 0, phieu: new Set(), scan: new Map() };
+            tong_sl: 0, sl: { R: 0, C: 0, K: 0 }, phieu: new Set(), scan: new Map() };
       m.set(ma, g);
     }
     g.so_item += 1;
     g.tong_sl += Number(r.qty) || 0;
+    // Tach SL nhap theo MAT_CLASS - giong nhomMatClass() ben server.js
+    if (kieu === 'receiving') g.sl[nhomMc(r.mat_class)] += Number(r.qty) || 0;
     g.phieu.add(String(r[khoaPhieu]));
     if (r.is_cancel) g.so_huy += 1;
     // Item cancel khong can scan -> khong dua vao mau so ty le scan
@@ -639,7 +650,11 @@ function gomTheoNhanVien(rows, cot, kieu) {
     // Ben thu kho: chi ra "item xuat" (= tong item tru so item huy/tra, DUNG
     // cong thuc cu), khong ra cancel/return/khac.
     if (kieu === 'pickslip') o.so_xuat = g.so_item - g.so_huy;
-    else { o.so_item = g.so_item; o.tong_sl = Math.round(g.tong_sl * 100) / 100; }
+    else {
+      o.so_item = g.so_item;
+      o.tong_sl = lam2(g.tong_sl);
+      o.sl_r = lam2(g.sl.R); o.sl_c = lam2(g.sl.C); o.sl_khac = lam2(g.sl.K);
+    }
     return o;
   }).sort((a, b) => (kieu === 'pickslip' ? b.so_xuat - a.so_xuat : b.so_item - a.so_item));
 }
@@ -886,8 +901,6 @@ function pickslip(range, f) {
       tongPhieuScan: daScan + chuaScan,
       tyLeScan: pct(daScan, daScan + chuaScan),
       daScanDong, chuaScanDong,
-      returnCoPhieu: kept.filter((r) => r.loai === 'RETURN' && r.return_no && r.return_no !== 'NOT FOUND').length,
-      returnKhongPhieu: kept.filter((r) => r.return_no === 'NOT FOUND').length,
       tatReturnAvg: tats.length ? Math.round((tats.reduce((a, b) => a + b, 0) / tats.length) * 100) / 100 : null,
       tatReturnMax: tats.length ? Math.round(Math.max(...tats) * 100) / 100 : null,
       phieuMienScan,

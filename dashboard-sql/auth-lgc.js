@@ -10,7 +10,9 @@
  *       khoan, va mat khau lan dau PHAI la chinh ma nhan vien VIET HOA.
  *    3. Lap xong -> BAT BUOC doi mat khau ngay (co doi_mk = 1). Chua doi thi
  *       chua vao duoc trang LGC.
- *    4. Ten nhan vien lay tu cot [DESCRIPTION] cua bang SIGN.
+ *    4. Ho ten nhan vien = [LASTNAME] + [FIRSTNAME] cua bang SIGN (thu tu
+ *       Viet Nam: HO truoc). Truoc day lay [DESCRIPTION] - cot do khong phai
+ *       ho ten.
  *
  *  LUU BANG SQL (khong dung file JSON): bang [NQT].[dbo].[TAT_USER], app tu
  *  tao neu chua co.
@@ -132,8 +134,9 @@ module.exports = function taoAuthLgc({ query, dataDir, logDir, demoMode }) {
     }
     const rows = await query(
       `SELECT TOP 1
-              LTRIM(RTRIM([DEPARTMENT]))  AS department,
-              LTRIM(RTRIM([DESCRIPTION])) AS ten
+              LTRIM(RTRIM([DEPARTMENT])) AS department,
+              LTRIM(RTRIM(LTRIM(RTRIM(ISNULL([LASTNAME], '')))
+                          + ' ' + LTRIM(RTRIM(ISNULL([FIRSTNAME],''))))) AS ten
        FROM [DWH_DB]..[STG_AMOS].[SIGN]
        WHERE LTRIM(RTRIM([USER_SIGN])) = @ma`,
       { ma }

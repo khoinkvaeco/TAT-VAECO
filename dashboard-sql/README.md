@@ -215,12 +215,24 @@ cũ**, chỉ bỏ cột đi:
 Số liệu cancel / return / khác **vẫn còn đầy đủ** ở thẻ KPI và biểu đồ của cả tab, chỉ bỏ khỏi
 bảng đánh giá con người.
 
-Cả hai gom **trên bảng tạm đã kéo về** (`#ps`, `#hi`) nên **không tốn thêm lượt hỏi AMOS nào** —
-đây là lý do đặt ngay trong tab thay vì làm một trang riêng. Tên nhân viên lấy từ
-`SIGN.DESCRIPTION`, nay được cache thêm vào `SIGN_CACHE` (cột `TEN`) để không phải hỏi linked
-server mỗi lần; bản cache cũ thiếu cột đó sẽ tự bị dựng lại.
+Bảng inspector có thêm **`SL nhập R`** / **`SL nhập C`**, tách theo `HISTORY.MAT_CLASS` — chỉ xét
+**chữ cái đầu**, không phân biệt hoa thường, nên chịu được cả bản ghi viết tắt (`R`, `C`) lẫn viết
+đủ (`ROT`, `CON`). ⚠️ Mọi giá trị **không** bắt đầu bằng R/C rơi vào cột **`SL khác`** — cột này
+chỉ hiện khi kỳ đó thực sự có, và đó là **có chủ đích**: nếu AMOS dùng mã khác hẳn thì số liệu dồn
+hết vào đó và **nhìn thấy ngay**, chứ không âm thầm biến mất khỏi bảng.
 
-**Bốn điều dễ sai, đã chốt bằng `tools/kpicheck.js` (14 trường hợp):**
+Cả hai gom **trên bảng tạm đã kéo về** (`#ps`, `#hi`) nên **không tốn thêm lượt hỏi AMOS nào** —
+đây là lý do đặt ngay trong tab thay vì làm một trang riêng.
+
+**Họ tên nhân viên = `SIGN.LASTNAME` + `SIGN.FIRSTNAME`** (thứ tự Việt Nam: **họ trước**).
+*Trước đây lấy `SIGN.DESCRIPTION` — cột đó không phải họ tên.* Tên được cache vào `SIGN_CACHE`
+(cột `TEN`) để không phải hỏi linked server mỗi lần. Ghép chuỗi làm ở **lớp ngoài, tại chỗ**:
+`+` là cú pháp T-SQL chứ không phải Oracle, để nguyên trong câu hỏi linked server thì rủi ro bị
+đẩy xuống AMOS. Bản cache cũ (chưa có `TEN`, hoặc `TEN` còn hẹp theo `DESCRIPTION`) **tự bị bỏ đi
+và dựng lại** — giữ lại sẽ vỡ `INSERT` vì tràn độ dài. Trang đăng nhập LGC cũng lấy tên từ đúng
+hai cột này.
+
+**Năm điều dễ sai, đã chốt bằng `tools/kpicheck.js` (16 trường hợp):**
 
 1. **Mỗi phiếu quy cho ĐÚNG MỘT người.** Số phiếu và số phiếu đã scan lấy từ Node theo cùng một
    quy tắc quy chủ (`MIN(booking_sign)` / `MIN(created_by)` của phiếu đó), **không** dùng
@@ -236,6 +248,9 @@ server mỗi lần; bản cache cũ thiếu cột đó sẽ tự bị dựng l�
    **chứng minh là bắt được lỗi**: cố tình gán `booking_sign` theo *dòng* thay vì theo *phiếu* →
    `201` so với `69`, trượt ngay. Bài cũng chốt luôn **không được có lại** các cột cancel /
    return / khác trong bảng này.
+5. **`SL nhập R` / `C` / `khác` phải PHỦ HẾT `Tổng SL`** ở từng người, và được **tính lại độc
+   lập** từ cột `mat_class` của bảng chi tiết. Bắt được cả *gom nhầm nhóm* lẫn *bỏ sót dòng*: cố
+   tình dồn hết phần còn lại vào `C` → `C 749` so với `351`, `khác 0` so với `398`, trượt ngay.
 
 Bộ lọc Station/Store/Trung tâm và kỳ báo cáo **ăn vào cả bảng KPI** (cũng được kiểm tra).
 
@@ -411,7 +426,7 @@ hỏi mã nhân viên (không mật khẩu) — đó là **nhận diện**, ai b
    mật khẩu lần đầu **phải là chính mã nhân viên VIẾT HOA**.
 3. Lập xong → **bắt buộc đổi mật khẩu ngay**. Chưa đổi thì **chưa xem được dữ liệu** —
    không phải chỉ là màn hình nhắc nhở; `lgcGuard` chặn thật cả trang lẫn API.
-4. **Tên nhân viên** lấy từ cột **`[DESCRIPTION]`** của bảng `SIGN`, hiện ở lời chào
+4. **Họ tên nhân viên** = **`[LASTNAME]` + `[FIRSTNAME]`** của bảng `SIGN`, hiện ở lời chào
    *“Xin chào &lt;tên&gt;”* trên thanh đầu, kèm nút **Thoát**.
 
 ### Quy tắc mật khẩu và chống dò
