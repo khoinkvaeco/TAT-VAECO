@@ -1284,6 +1284,67 @@ CREATE INDEX IX_SIGN_user ON [DWH_DB].[STG_AMOS].[SIGN] ([USER_SIGN]) INCLUDE ([
 
 > Lưu ý: tên schema `STG_AMOS` — nếu là database khác schema, chỉnh lại cho đúng. Nếu bảng do hệ thống khác đồng bộ (không được phép tạo index), có thể tạo **indexed view** hoặc bảng trung gian refresh định kỳ.
 
+## 7k. Trang *BETA* (`/beta`) — phân tích chuyên sâu + chuẩn giao diện
+
+### ⚠️ Mục tiêu TAT = **2 ngày**, đo trên chặng **xuất kho → trả US/service**
+
+Nghiệp vụ chốt. Cột dùng để chấm là **`tat_days`** (`DATEDIFF(issue_time, del_time)`).
+
+> *Trước đây trang beta chấm SLA trên `tat_install_days` (**xuất kho → lắp lên tàu**) — chặng
+> **ngắn hơn hẳn** nên tỷ lệ đạt luôn ra 100% và trang nhìn rất đẹp trong khi không đo đúng thứ
+> nghiệp vụ quan tâm. Sau khi đổi sang chặng đúng, cùng dữ liệu mẫu tỷ lệ đạt rớt về ~35%.*
+
+Thanh trượt mục tiêu **không** phải để đổi chuẩn, mà để thử *"nếu siết còn 1 ngày thì bao nhiêu %
+đạt"*. Giá trị chọn được nhớ trong `localStorage`; mọi thẻ KPI, biểu đồ phân phối, mốc aging và
+bảng Trung tâm **đều tính lại tại trình duyệt**, không hỏi lại server.
+
+### Thẻ KPI: có ngưỡng màu, có so kỳ trước, có sparkline
+
+Sáu thẻ, mỗi thẻ một **viền trạng thái bên trái** (xanh đạt · vàng cảnh báo · đỏ không đạt) để
+liếc 2 giây là biết chỗ cần can thiệp, thay vì phải đọc từng con số.
+
+⚠️ **Chỉ thẻ nào có lịch sử THẬT mới có mũi tên và sparkline.** Chuỗi `/api/trend` có
+`notReconciled` và `reconcileRate` theo tháng → hai thẻ đó có so sánh; các thẻ còn lại (tỷ lệ đạt,
+P90, quá hạn) **không có** số kỳ trước nên **để trống** chứ không bịa ra mũi tên.
+
+### Bốn lỗi trình bày đã sửa
+
+| Lỗi | Vì sao là lỗi | Cách sửa |
+|---|---|---|
+| Cột *tồn đọng* nuốt mất đường TAT | Cột chạy tới 40 ở trục phải, đường TAT chỉ 0.3–2.5 ở trục trái → đường bị ép xuống 20% dưới cùng: **thứ cần nhìn lại là thứ khó nhìn nhất** | Trục phải giới hạn **gấp đôi** cột cao nhất (cột chỉ chạm ~50% khung) + cột hạ xuống nền mờ; thêm **vạch đứt mục tiêu** |
+| Gọi là *Pareto* nhưng không có đường luỹ kế | Pareto **định nghĩa** là cột + **% luỹ kế**; thiếu nó thì chỉ là bảng xếp hạng. Bản cũ liệt kê 10 thiết bị riêng lẻ, 10 cột dài gần bằng nhau nên không chỉ ra được gì | Gom theo **Part No** (câu hỏi thật là *xử lý nhóm nào*), thêm **% luỹ kế tính trên TOÀN BỘ** thiết bị trong kỳ + **vạch 80%** |
+| Bảng Trung tâm trên điện thoại co còn `T… S… T…` | Không đọc nổi tiêu đề cột nào — mà điện thoại mới là nơi quản lý thực sự xem | `responsiveLayout: 'collapse'` + **cột nút `responsiveCollapse`**. ⚠️ Thiếu cột nút thì Tabulator vẫn giấu cột nhưng **không có nút nào để xổ ra** — dữ liệu bị giấu luôn |
+| Khối giới thiệu chiếm chỗ đắt nhất | Là lời trao đổi nội bộ, nhưng ai mở trang cũng phải đọc trước khi thấy số liệu | Thu vào `<details>` ở **cuối** trang |
+
+### Ngôn ngữ màu — khai một chỗ, mọi biểu đồ đọc từ đó
+
+Trước đó mỗi biểu đồ một bảng màu riêng nên **màu không mang nghĩa gì**: xanh lá ở biểu đồ này là
+"tốt", ở biểu đồ kia chỉ là "cột thứ nhất". Nay chốt trong `:root` của trang:
+
+| Token | Dùng cho |
+|---|---|
+| `--c-tat` | mọi thứ đo **thời gian chờ** |
+| `--c-backlog` | mọi thứ đo **tồn đọng** |
+| `--c-good` / `--c-warn` / `--c-bad` | **chỉ** dùng cho **trạng thái** (đạt / cảnh báo / không đạt) |
+
+### Mốc aging bám theo mục tiêu
+
+Dải đầu tiên là `≤ mục tiêu` thay vì `0-7 ngày` cố định — với mục tiêu 2 ngày thì cả nhóm quá hạn
+vẫn nằm gọn trong cột xanh đầu tiên, tức là biểu đồ **giấu mất** đúng thứ cần thấy.
+
+### `public/favicon.svg`
+
+Không có thẻ `<link rel="icon">` thì trình duyệt tự đòi `/favicon.ico` → **404 ở mọi lần mở
+trang**, và tab hiện biểu tượng trắng. Mới thêm cho `/beta`; các trang khác (`index`, `lgc`,
+`wp`, `admin`) thêm đúng một dòng đó là xong.
+
+### Dữ liệu mẫu: số tồn đọng nay THAY ĐỔI theo tháng
+
+`notReconciled` trước đây luôn sinh đúng 40 dòng nên biểu đồ xu hướng và sparkline vẽ ra **đường
+thẳng tuyệt đối** — nhìn vào tưởng tính năng hỏng, trong khi thật ra dữ liệu mẫu không hề đổi. Nay
+`soTonDongTheoThang()` cho 28–52 dòng, **cố định theo tháng** (không ngẫu nhiên mỗi lần gọi) nên
+xu hướng ổn định giữa các lần tải.
+
 ## 8. API
 
 | Endpoint | Mô tả |

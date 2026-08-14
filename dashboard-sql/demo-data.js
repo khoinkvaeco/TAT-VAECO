@@ -231,9 +231,22 @@ function returnedUnservice(range, f) {
   return applyFilter(rows, f);
 }
 
+/**
+ * So dong THAY DOI THEO THANG va co dinh theo thang (khong ngau nhien moi lan
+ * goi). Truoc day luon dung 40 dong nen bieu do xu huong va sparkline "ton
+ * dong" o trang beta ve ra ĐUONG THANG TUYET DOI - nhin vao tuong tinh nang
+ * hong, trong khi that ra du lieu mau khong he doi.
+ */
+function soTonDongTheoThang(range) {
+  const d = new Date(range.from);
+  const moc = d.getUTCFullYear() * 12 + d.getUTCMonth();
+  return 28 + ((moc * 7) % 25);   // 28..52
+}
+
 function notReconciled(range, f) {
   const rows = [];
-  for (let i = 0; i < 40; i++) {
+  const n = soTonDongTheoThang(range);
+  for (let i = 0; i < n; i++) {
     const d = baseDevice(i);
     rows.push({
       ...d,

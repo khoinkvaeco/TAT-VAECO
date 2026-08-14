@@ -4,6 +4,10 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Dashboard TAT · BETA (đề xuất cải tiến)</title>
+  <!-- Khong co the nay thi trinh duyet tu doi /favicon.ico -> 404 o MOI lan mo
+       trang, va tab hien bieu tuong trang tron. Mot dong, nhung la thu nguoi
+       dung nhin thay moi ngay khi ghim tab. -->
+  <link rel="icon" href="favicon.svg" type="image/svg+xml" />
   <!-- Thư viện để ngay trên máy backend (xem tools/build-assets.js) -->
   <link href="vendor/tabulator.min.css" rel="stylesheet" />
   <script src="vendor/chart.umd.js"></script>
@@ -12,20 +16,67 @@
   <!-- tailwind.css nạp SAU style.css - xem giải thích ở index.html -->
   <link rel="stylesheet" href="vendor/tailwind.css" />
   <style>
+    /* =====================================================================
+       NGON NGU MAU CUA TRANG (chi khai o day, moi bieu do deu doc tu day).
+       Truoc do moi bieu do mot bang mau rieng nen MAU KHONG MANG NGHIA GI:
+       xanh la o bieu do nay la "tot", o bieu do kia chi la "cot thu 1".
+       Quy uoc:
+         --c-tat      : moi thu do THOI GIAN CHO (TAT)
+         --c-backlog  : moi thu do TON DONG
+         good/warn/bad: CHI dung cho TRANG THAI (dat / canh bao / khong dat)
+       ===================================================================== */
+    :root {
+      --c-tat: var(--series-1);
+      --c-backlog: var(--series-5);
+      --c-good: var(--good);
+      --c-warn: var(--warning);
+      --c-bad: var(--critical);
+    }
     body { background: var(--bg-plane, #f4f7f8); }
     .wrap { max-width: 1400px; margin: 0 auto; padding: 0 20px; }
     .beta-badge { background:#7c3aed; color:#fff; font-size:11px; font-weight:700; padding:2px 8px; border-radius:999px; }
-    .kbox { background:var(--surface-1); border:1px solid var(--hair); border-radius:14px; padding:14px 16px; }
+
+    /* --- The KPI: co VIEN TRANG THAI ben trai + so sanh + sparkline --- */
+    .kbox {
+      background:var(--surface-1); border:1px solid var(--hair); border-radius:14px;
+      padding:14px 16px; border-left:4px solid var(--k, var(--hair));
+      display:flex; flex-direction:column; gap:2px;
+    }
     .kbig { font-size:26px; font-weight:800; line-height:1.1; }
     .klabel { font-size:12px; color:var(--text-muted); }
-    .delta-good { color:#16a34a; } .delta-bad { color:#dc2626; }
+    .ksub { font-size:12px; margin-top:2px; }
+    .kfoot { display:flex; align-items:flex-end; justify-content:space-between; gap:8px; margin-top:auto; }
+    .delta-good { color: var(--c-good); font-weight:700; }
+    .delta-bad  { color: var(--c-bad);  font-weight:700; }
+    .delta-flat { color: var(--text-muted); }
+    .spark { display:block; }
+
     .card2 { background:var(--surface-1); border:1px solid var(--hair); border-radius:14px; padding:16px; }
     .card2 h3 { font-size:14px; font-weight:700; margin:0 0 2px; }
     .card2 .sub { font-size:12px; color:var(--text-muted); margin-bottom:10px; }
     .chart-h { position:relative; height:280px; }
-    .note-box { background:#f5f3ff; border:1px solid #ddd6fe; color:#5b21b6; border-radius:12px; padding:12px 16px; font-size:13px; line-height:1.6; }
-    @media (prefers-color-scheme: dark) { .note-box { background:#241b3a; border-color:#4c1d95; color:#c4b5fd; } }
-    .pill { display:inline-block; font-size:11px; padding:2px 8px; border-radius:999px; border:1px solid var(--hair); color:var(--text-muted); }
+
+    /* Khoi gioi thieu: thu vao <details> - truoc day no chiem cho DAT NHAT
+       cua trang de noi chuyen noi bo, ai mo trang cung phai doc truoc khi
+       thay so lieu. */
+    .about { background:var(--surface-1); border:1px solid var(--hair); border-radius:12px; font-size:13px; }
+    .about > summary { cursor:pointer; padding:10px 14px; font-weight:600; list-style:none; }
+    .about > summary::-webkit-details-marker { display:none; }
+    .about > summary::before { content:'▸ '; color:var(--text-muted); }
+    .about[open] > summary::before { content:'▾ '; }
+    .about .about-body { padding:0 14px 12px; line-height:1.65; color:var(--text-secondary); }
+
+    .sla-hint { font-size:11px; color:var(--text-muted); }
+
+    /* ------------------------- DIEN THOAI -------------------------------
+       Man hinh nho la noi quan ly thuc su xem. Truoc do bang "Hieu suat theo
+       Trung tam" co lai con "T… S… T… T…" - khong doc noi tieu de cot nao. */
+    @media (max-width: 700px) {
+      .wrap { padding: 0 12px; }
+      .chart-h { height: 230px; }
+      .kbig { font-size: 22px; }
+      .card2 { padding: 12px; border-radius: 12px; }
+    }
   </style>
 </head>
 <body class="text-primary min-h-screen">
@@ -36,47 +87,43 @@
       </div>
       <div>
         <h1 class="text-lg font-bold leading-tight">Dashboard TAT <span class="beta-badge">BETA</span></h1>
-        <p class="text-xs brand-sub">Đề xuất cải tiến — phân tích chuyên sâu cho MRO vật tư khí tài</p>
+        <p class="text-xs brand-sub">Phân tích chuyên sâu cho MRO vật tư khí tài</p>
       </div>
       <a href="/" class="ml-auto text-xs underline">← Dashboard hiện tại</a>
     </div>
   </header>
 
   <main class="wrap py-5">
-    <div class="note-box mb-5">
-      <b>Trang thử nghiệm để anh xem &amp; góp ý.</b> Bổ sung 5 hướng phân tích mà dashboard hiện tại chưa có:
-      (1) <b>Xu hướng theo tháng</b> — TAT có đang cải thiện? tồn đọng có phình ra?;
-      (2) <b>Phân phối &amp; percentile</b> — vì trung bình bị vài ca ngoại lệ kéo lệch, xem P50/P90 + % đạt mục tiêu (SLA);
-      (3) <b>Aging tồn đọng</b> — thiết bị chưa đối ứng đang "già" bao lâu;
-      (4) <b>Top ca xấu (Pareto)</b>; (5) <b>Bảng hiệu suất theo Trung tâm</b>. Dữ liệu lấy theo bộ lọc đang lưu ở dashboard chính.
-    </div>
-
+    <!-- Bo loc: dat NGAY DAU trang, truoc so lieu -->
     <div class="flex items-end gap-3 flex-wrap mb-4">
       <div>
         <label class="klabel block">Tháng</label>
         <input id="month" type="month" class="finput" />
       </div>
       <div>
-        <label class="klabel block">Mục tiêu TAT install (SLA) — <b><span id="tgtVal">7</span> ngày</b></label>
-        <input id="target" type="range" min="1" max="30" value="7" class="w-56 align-middle" />
+        <label class="klabel block">
+          Mục tiêu TAT — <b><span id="tgtVal">2</span> ngày</b>
+        </label>
+        <input id="target" type="range" min="1" max="30" value="2" class="w-56 align-middle" />
+        <div class="sla-hint">từ lúc <b>xuất kho</b> đến lúc <b>trả US/service</b></div>
       </div>
       <button id="reload" class="btn-accent">↻ Tải lại</button>
       <span id="status" class="text-xs text-muted"></span>
     </div>
 
     <!-- KPI band -->
-    <div id="kpis" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 mb-5"></div>
+    <div id="kpis" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3 mb-5"></div>
 
     <!-- Row 1: Trend + Distribution -->
     <div class="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-4">
       <div class="card2">
         <h3>Xu hướng TAT &amp; tồn đọng theo tháng</h3>
-        <div class="sub">Đường: TAT install / US return (ngày, trục trái) · Cột: số thiết bị chưa đối ứng (trục phải). Xem TAT có cải thiện và backlog có tăng.</div>
+        <div class="sub">Đường: TAT theo chặng (ngày, trục trái) · Cột mờ phía sau: số thiết bị chưa đối ứng (trục phải). Vạch đứt = mục tiêu.</div>
         <div class="chart-h"><canvas id="cTrend"></canvas></div>
       </div>
       <div class="card2">
-        <h3>Phân phối TAT install (vì sao "trung bình" gây hiểu nhầm)</h3>
-        <div class="sub">Cột: số thiết bị theo dải TAT · Vạch: P50 (trung vị), P90, và mục tiêu SLA. Kéo thanh mục tiêu để xem % đạt.</div>
+        <h3>Phân phối TAT (vì sao "trung bình" gây hiểu nhầm)</h3>
+        <div class="sub">Cột: số thiết bị theo dải TAT xuất kho → trả US. Cột đỏ = đã vượt mục tiêu. Kéo thanh mục tiêu để xem % đạt đổi theo.</div>
         <div class="chart-h"><canvas id="cDist"></canvas></div>
       </div>
     </div>
@@ -85,34 +132,49 @@
     <div class="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-4">
       <div class="card2">
         <h3>Aging tồn đọng — thiết bị CHƯA đối ứng theo tuổi</h3>
-        <div class="sub">Nhóm theo số ngày kể từ khi xuất kho. Vùng &gt;90 ngày là rủi ro cần xử lý ưu tiên.</div>
+        <div class="sub">Nhóm theo số ngày kể từ khi xuất kho, mốc đầu bám theo mục tiêu đang chọn. Vùng &gt;90 ngày là rủi ro cần xử lý ưu tiên.</div>
         <div class="chart-h"><canvas id="cAging"></canvas></div>
       </div>
       <div class="card2">
-        <h3>Top 10 thiết bị TAT cao nhất (Pareto)</h3>
-        <div class="sub">Tập trung xử lý nhóm nhỏ gây phần lớn thời gian chờ.</div>
+        <h3>Pareto — nhóm nhỏ nào gây phần lớn thời gian chờ</h3>
+        <div class="sub">Cột: tổng số ngày chờ của từng Part No (15 mã cao nhất) · Đường: <b>% luỹ kế trên TOÀN BỘ</b> thiết bị trong kỳ. Vạch 80% cho biết cần xử lý bao nhiêu mã là đủ.</div>
         <div class="chart-h"><canvas id="cPareto"></canvas></div>
       </div>
     </div>
 
     <!-- Row 3: Center performance table -->
-    <div class="card2 mb-6">
+    <div class="card2 mb-5">
       <h3>Hiệu suất theo Trung tâm</h3>
-      <div class="sub">TAT trung bình, P90 (đuôi chậm), số thiết bị, và % đạt mục tiêu SLA. Sắp xếp theo cột để tìm điểm nghẽn.</div>
+      <div class="sub">TAT trung bình, P90 (đuôi chậm), số thiết bị, và % đạt mục tiêu. Sắp xếp theo cột để tìm điểm nghẽn. Trên điện thoại, bấm <b>+</b> để xem hết cột.</div>
       <div id="centerTable"></div>
     </div>
 
-    <div class="note-box mb-8">
-      <b>Câu hỏi để anh tư vấn thêm:</b> (a) Mục tiêu SLA thực tế cho TAT install / US return là bao nhiêu ngày?
-      (b) Có ngưỡng "quá hạn" cho tồn đọng (vd &gt;30 ngày phải cảnh báo)?  (c) Muốn xem theo <i>tuần</i> hay <i>tháng</i> là chính?
-      (d) Có cần tách theo <i>ATA chapter</i> / loại khí tài không? (e) Cần <i>cảnh báo tự động</i> khi TAT vượt ngưỡng?
-    </div>
+    <details class="about mb-8">
+      <summary>ⓘ Về trang này &amp; các câu còn cần chốt</summary>
+      <div class="about-body">
+        Trang thử nghiệm, bổ sung 5 hướng phân tích mà dashboard hiện tại chưa có:
+        (1) <b>Xu hướng theo tháng</b> — TAT có đang cải thiện? tồn đọng có phình ra?;
+        (2) <b>Phân phối &amp; percentile</b> — vì trung bình bị vài ca ngoại lệ kéo lệch, xem P50/P90 + % đạt mục tiêu;
+        (3) <b>Aging tồn đọng</b> — thiết bị chưa đối ứng đang "già" bao lâu;
+        (4) <b>Pareto</b> — nhóm nhỏ nào gây phần lớn thời gian chờ;
+        (5) <b>Bảng hiệu suất theo Trung tâm</b>. Dữ liệu lấy theo bộ lọc đang lưu ở dashboard chính.
+        <br /><br />
+        <b>Mục tiêu TAT = 2 ngày</b> (nghiệp vụ chốt) đo trên chặng <b>xuất kho → trả US/service</b>
+        (<code>tat_days</code>). <i>Trước đây trang này đo nhầm trên chặng <code>tat_install</code>
+        (xuất kho → lắp lên tàu) — chặng ngắn hơn hẳn nên tỷ lệ đạt luôn đẹp.</i>
+        <br /><br />
+        <b>Còn cần chốt:</b> (a) ngưỡng "quá hạn" cho tồn đọng (vd &gt;30 ngày phải cảnh báo)?
+        (b) xem theo <i>tuần</i> hay <i>tháng</i> là chính? (c) có cần tách theo <i>ATA chapter</i> /
+        loại khí tài? (d) cần <i>cảnh báo tự động</i> (Teams/email) khi TAT vượt ngưỡng?
+      </div>
+    </details>
   </main>
 
   <script>
     const $ = (s) => document.querySelector(s);
     const charts = {};
     const cssVar = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+    const laDienThoai = () => window.matchMedia('(max-width: 700px)').matches;
 
     // ---- Bo loc: lay tu localStorage (dashboard chinh) + thang tren trang ----
     function savedFilters() { try { return JSON.parse(localStorage.getItem('tat-filters-v1') || 'null') || {}; } catch { return {}; } }
@@ -136,64 +198,170 @@
     const pct = (a, p) => { if (!a.length) return 0; const s = [...a].sort((x, y) => x - y); const i = Math.min(s.length - 1, Math.ceil(p * s.length) - 1); return s[Math.max(0, i)]; };
     const r1 = (n) => Math.round(n * 10) / 10;
 
+    /**
+     * TAT CUA CHANG "XUAT KHO -> TRA US/SERVICE" = cot tat_days.
+     * ⚠️ KHONG phai tat_install_days (xuat kho -> lap len tau) - chang do NGAN
+     * hon han nen ty le dat luon dep, xem thi tuong dang rat tot. Muc tieu 2
+     * ngay cua nghiep vu la cho chang NAY.
+     * Bo CUVT giong cach dashboard chinh tinh trung binh TAT (CUVT do rieng).
+     */
+    const tatXuatTraUS = (rows) =>
+      nums(rows.filter((r) => (r.department || '').toUpperCase() !== 'CUVT'), (r) => r.tat_days);
+
+    // ---- Sparkline: SVG noi tuyen, khong can thu vien ----
+    function sparkline(vals, mau) {
+      const v = vals.map(Number).filter((x) => isFinite(x));
+      if (v.length < 2) return '';
+      const w = 68, h = 22, lo = Math.min(...v), hi = Math.max(...v), dai = hi - lo || 1;
+      const pts = v.map((x, i) => `${(i / (v.length - 1)) * w},${h - ((x - lo) / dai) * (h - 4) - 2}`).join(' ');
+      const [cx, cy] = pts.split(' ').pop().split(',');
+      return `<svg class="spark" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-hidden="true">
+        <polyline points="${pts}" fill="none" stroke="${mau}" stroke-width="1.6"
+          stroke-linejoin="round" stroke-linecap="round" opacity=".85" />
+        <circle cx="${cx}" cy="${cy}" r="2.2" fill="${mau}" /></svg>`;
+    }
+
+    /**
+     * So voi ky truoc. `tot` = 'thap' nghia la GIAM thi tot (TAT, ton dong).
+     * Tra chuoi rong khi KHONG co so ky truoc - KHONG bia ra mui ten.
+     */
+    function delta(nay, truoc, donVi, tot) {
+      if (!isFinite(Number(truoc)) || !isFinite(Number(nay))) return '';
+      const d = r1(Number(nay) - Number(truoc));
+      if (d === 0) return `<span class="delta-flat">▬ không đổi</span>`;
+      const giam = d < 0;
+      const hay = (tot === 'thap') ? giam : !giam;
+      return `<span class="${hay ? 'delta-good' : 'delta-bad'}">${giam ? '▼' : '▲'} ${Math.abs(d)}${donVi}</span>`
+        + ` <span class="text-muted">so tháng trước</span>`;
+    }
+
+    /** Mau trang thai theo nguong -> dung cho VIEN TRAI cua the KPI. */
+    const mauNguong = (v, dat, canhBao, tot) => {
+      if (!isFinite(Number(v))) return cssVar('--hair');
+      const x = Number(v);
+      const ok = (tot === 'thap') ? x <= dat : x >= dat;
+      const vua = (tot === 'thap') ? x <= canhBao : x >= canhBao;
+      return ok ? cssVar('--c-good') : vua ? cssVar('--c-warn') : cssVar('--c-bad');
+    };
+
     // ---- KPI band ----
-    function renderKPIs(dash, rows, target) {
-      const inst = nums(rows.filter((r) => (r.department || '').toUpperCase() !== 'CUVT'), (r) => r.tat_install_days);
-      const within = inst.filter((x) => x <= target).length;
-      const sla = inst.length ? Math.round((within / inst.length) * 100) : 0;
+    function renderKPIs(dash, rows, target, series) {
+      const tat = tatXuatTraUS(rows);
+      const dat = tat.filter((x) => x <= target).length;
+      const quaHan = tat.length - dat;
+      const sla = tat.length ? Math.round((dat / tat.length) * 100) : 0;
+      const tbTat = r1(avg(tat));
+      const p90 = r1(pct(tat, 0.9));
       const k = dash.kpis;
-      const tatI = k.tatInstallAvg || 0;
-      const delta = r1(tatI - target);
+      // Lich su CHI lay tu chuoi thang co that; chi so nao khong co lich su thi
+      // KHONG ve sparkline va KHONG hien mui ten - tha thieu con hon bia.
+      const s = series || [];
+      const truoc = s.length >= 2 ? s[s.length - 2] : null;
+      const cot = (f) => s.map((x) => x[f]);
+
       const cards = [
-        { label: `TAT install (mục tiêu ${target}n)`, big: `${tatI} <span class="text-sm">ngày</span>`,
-          sub: `<span class="${delta <= 0 ? 'delta-good' : 'delta-bad'}">${delta <= 0 ? '▼' : '▲'} ${Math.abs(delta)} ngày so mục tiêu</span>` },
-        { label: `SLA đạt (install ≤ ${target}n)`, big: `${sla}<span class="text-sm">%</span>`,
-          sub: `${within}/${inst.length} thiết bị đạt` },
-        { label: 'TAT install P90 (đuôi chậm)', big: `${r1(pct(inst, 0.9))} <span class="text-sm">ngày</span>`,
-          sub: `P50 (trung vị): ${r1(pct(inst, 0.5))} ngày` },
-        { label: 'Tồn đọng (chưa đối ứng)', big: `${k.countNotReconciled ?? 0}`,
-          sub: `Tỷ lệ đối ứng: ${k.reconcileRate ?? 0}%` },
-        { label: 'Nhịp vào/ra (xuất vs trả US)', big: `${k.countIssued ?? 0}<span class="text-sm">/${k.cntDel ?? 0}</span>`,
-          sub: (k.cntDel && k.countIssued) ? `tỷ lệ trả/xuất: ${Math.round((k.cntDel / k.countIssued) * 100)}%` : '' },
+        {
+          label: `TAT xuất kho → trả US`,
+          big: `${tbTat} <span class="text-sm">ngày</span>`,
+          mau: mauNguong(tbTat, target, target * 1.5, 'thap'),
+          sub: `Mục tiêu <b>${target} ngày</b> · ${tbTat <= target
+            ? `<span class="delta-good">đạt (dư ${r1(target - tbTat)} ngày)</span>`
+            : `<span class="delta-bad">vượt ${r1(tbTat - target)} ngày</span>`}`,
+        },
+        {
+          label: `Tỷ lệ đạt mục tiêu`,
+          big: `${sla}<span class="text-sm">%</span>`,
+          mau: mauNguong(sla, 90, 70, 'cao'),
+          sub: `${dat}/${tat.length} thiết bị trong ${target} ngày`,
+        },
+        {
+          label: `Quá hạn (&gt; ${target} ngày)`,
+          big: `${quaHan}`,
+          mau: quaHan ? cssVar('--c-bad') : cssVar('--c-good'),
+          sub: quaHan ? 'thiết bị cần xem lại' : 'không có ca nào quá hạn',
+        },
+        {
+          label: 'P90 — đuôi chậm',
+          big: `${p90} <span class="text-sm">ngày</span>`,
+          mau: mauNguong(p90, target, target * 2, 'thap'),
+          sub: `P50 (trung vị): ${r1(pct(tat, 0.5))} ngày`,
+        },
+        {
+          label: 'Tồn đọng (chưa đối ứng)',
+          big: `${k.countNotReconciled ?? 0}`,
+          mau: mauNguong(k.reconcileRate ?? 0, 90, 75, 'cao'),
+          sub: delta(k.countNotReconciled, truoc && truoc.notReconciled, ' thiết bị', 'thap'),
+          spark: sparkline(cot('notReconciled'), cssVar('--c-backlog')),
+        },
+        {
+          label: 'Tỷ lệ đối ứng',
+          big: `${k.reconcileRate ?? 0}<span class="text-sm">%</span>`,
+          mau: mauNguong(k.reconcileRate ?? 0, 90, 75, 'cao'),
+          sub: delta(k.reconcileRate, truoc && truoc.reconcileRate, '%', 'cao'),
+          spark: sparkline(cot('reconcileRate'), cssVar('--c-tat')),
+        },
       ];
       $('#kpis').innerHTML = cards.map((c) => `
-        <div class="kbox"><div class="klabel">${c.label}</div><div class="kbig">${c.big}</div><div class="text-xs mt-1">${c.sub}</div></div>`).join('');
+        <div class="kbox" style="--k:${c.mau}">
+          <div class="klabel">${c.label}</div>
+          <div class="kbig">${c.big}</div>
+          <div class="kfoot"><div class="ksub">${c.sub || ''}</div>${c.spark || ''}</div>
+        </div>`).join('');
     }
 
     // ---- Trend ----
-    function renderTrend(series) {
+    function renderTrend(series, target) {
       const grid = cssVar('--hair'), tick = cssVar('--text-muted');
       if (charts.t) charts.t.destroy();
+      const bars = series.map((x) => Number(x.notReconciled) || 0);
+      const lines = series.flatMap((x) => [x.tatTotal, x.tatInstall, x.tatUsReturn]).map(Number).filter(isFinite);
+      // ⚠️ Cot ton dong chay toi 40 o truc phai, con duong TAT chi 0.3-2.5 o truc
+      // trai -> de mac dinh thi cot cao kin khung con duong bi ep xuong 20% duoi
+      // cung, tuc la thu CAN NHIN lai la thu KHO NHIN nhat. Gioi han truc phai
+      // gap doi cot cao nhat (cot chi cham ~50% chieu cao) va ha do dam cua cot
+      // xuong con nen mo.
+      const maxBar = Math.max(1, ...bars);
+      const maxLine = Math.max(target, ...lines);
       charts.t = new Chart($('#cTrend'), {
         data: {
           labels: series.map((x) => x.month),
           datasets: [
-            { type: 'bar', label: 'Chưa đối ứng', data: series.map((x) => x.notReconciled), yAxisID: 'y1', backgroundColor: cssVar('--series-6') + '99', order: 3 },
-            { type: 'line', label: 'TAT tổng (3 chặng)', data: series.map((x) => x.tatTotal), yAxisID: 'y', borderColor: cssVar('--series-4'), backgroundColor: cssVar('--series-4'), borderWidth: 3, tension: .3, order: 0 },
-            { type: 'line', label: 'TAT install', data: series.map((x) => x.tatInstall), yAxisID: 'y', borderColor: cssVar('--series-1'), backgroundColor: cssVar('--series-1'), tension: .3, order: 1 },
-            { type: 'line', label: 'TAT US return', data: series.map((x) => x.tatUsReturn), yAxisID: 'y', borderColor: cssVar('--series-8'), backgroundColor: cssVar('--series-8'), tension: .3, order: 2 },
+            { type: 'bar', label: 'Chưa đối ứng', data: bars, yAxisID: 'y1',
+              backgroundColor: cssVar('--c-backlog') + '33', borderColor: cssVar('--c-backlog') + '55',
+              borderWidth: 1, order: 9 },
+            { type: 'line', label: 'TAT tổng (3 chặng)', data: series.map((x) => x.tatTotal), yAxisID: 'y',
+              borderColor: cssVar('--c-tat'), backgroundColor: cssVar('--c-tat'), borderWidth: 3, tension: .3, order: 0 },
+            { type: 'line', label: 'TAT install', data: series.map((x) => x.tatInstall), yAxisID: 'y',
+              borderColor: cssVar('--c-tat'), backgroundColor: cssVar('--c-tat'), borderWidth: 1.6,
+              borderDash: [5, 3], tension: .3, order: 1 },
+            { type: 'line', label: 'TAT US return', data: series.map((x) => x.tatUsReturn), yAxisID: 'y',
+              borderColor: cssVar('--series-8'), backgroundColor: cssVar('--series-8'), borderWidth: 1.6, tension: .3, order: 2 },
+            { type: 'line', label: `Mục tiêu ${target} ngày`, data: series.map(() => target), yAxisID: 'y',
+              borderColor: cssVar('--c-bad'), borderWidth: 1.5, borderDash: [4, 4], pointRadius: 0, tension: 0, order: 3 },
           ],
         },
         options: { responsive: true, maintainAspectRatio: false,
-          plugins: { legend: { labels: { color: cssVar('--text-secondary') } } },
+          plugins: { legend: { labels: { color: cssVar('--text-secondary'), boxWidth: 12, font: { size: 11 } } } },
           scales: {
-            x: { grid: { color: grid }, ticks: { color: tick } },
-            y: { position: 'left', title: { display: true, text: 'TAT (ngày)', color: tick }, grid: { color: grid }, ticks: { color: tick }, beginAtZero: true },
-            y1: { position: 'right', title: { display: true, text: 'SL chưa đối ứng', color: tick }, grid: { drawOnChartArea: false }, ticks: { color: tick }, beginAtZero: true },
+            x: { grid: { color: grid }, ticks: { color: tick, maxRotation: 0, autoSkip: true } },
+            y: { position: 'left', title: { display: !laDienThoai(), text: 'TAT (ngày)', color: tick },
+                 grid: { color: grid }, ticks: { color: tick }, beginAtZero: true, suggestedMax: maxLine * 1.25 },
+            y1: { position: 'right', title: { display: !laDienThoai(), text: 'SL chưa đối ứng', color: tick },
+                  grid: { drawOnChartArea: false }, ticks: { color: tick }, beginAtZero: true, max: maxBar * 2 },
           } },
       });
     }
 
     // ---- Distribution (histogram + P50/P90/target) ----
     function renderDist(rows, target) {
-      const data = nums(rows.filter((r) => (r.department || '').toUpperCase() !== 'CUVT'), (r) => r.tat_install_days);
+      const data = tatXuatTraUS(rows);
       const edges = [0, 1, 2, 3, 5, 7, 10, 14, 21, 30, 9999];
       const labels = ['0-1', '1-2', '2-3', '3-5', '5-7', '7-10', '10-14', '14-21', '21-30', '>30'];
       const bins = new Array(labels.length).fill(0);
       data.forEach((v) => { for (let i = 0; i < edges.length - 1; i++) { if (v >= edges[i] && v < edges[i + 1]) { bins[i]++; break; } } });
       const p50 = pct(data, 0.5), p90 = pct(data, 0.9);
-      const binOf = (val) => { for (let i = 0; i < edges.length - 1; i++) if (val >= edges[i] && val < edges[i + 1]) return i; return labels.length - 1; };
-      const colorFor = (i) => (edges[i] >= target ? cssVar('--critical') + 'cc' : cssVar('--series-3') + 'cc');
+      // Dai nao BAT DAU tu muc tieu tro di la da vuot muc tieu -> to do.
+      const colorFor = (i) => (edges[i] >= target ? cssVar('--c-bad') + 'cc' : cssVar('--c-good') + 'cc');
       if (charts.d) charts.d.destroy();
       charts.d = new Chart($('#cDist'), {
         type: 'bar',
@@ -202,39 +370,88 @@
           plugins: {
             legend: { display: false },
             subtitle: { display: true, color: cssVar('--text-muted'),
-              text: `P50=${r1(p50)}n · P90=${r1(p90)}n · Mục tiêu=${target}n (cột đỏ = vượt mục tiêu)` },
+              text: `P50=${r1(p50)}n · P90=${r1(p90)}n · Mục tiêu=${target}n` },
           },
-          scales: { x: { grid: { color: cssVar('--hair') }, ticks: { color: cssVar('--text-muted') }, title: { display: true, text: 'Dải TAT install (ngày)', color: cssVar('--text-muted') } },
+          scales: { x: { grid: { color: cssVar('--hair') }, ticks: { color: cssVar('--text-muted'), maxRotation: 0, autoSkip: true },
+                         title: { display: !laDienThoai(), text: 'Dải TAT xuất kho → trả US (ngày)', color: cssVar('--text-muted') } },
                     y: { grid: { color: cssVar('--hair') }, ticks: { color: cssVar('--text-muted') }, beginAtZero: true } } },
       });
     }
 
     // ---- Aging ton dong ----
-    function renderAging(rows) {
-      const buckets = [{ l: '0-7 ngày', n: 0, c: '--good' }, { l: '8-30', n: 0, c: '--warning' }, { l: '31-90', n: 0, c: '--series-6' }, { l: '>90', n: 0, c: '--critical' }];
-      nums(rows, (r) => r.tat_days).forEach((v) => { if (v <= 7) buckets[0].n++; else if (v <= 30) buckets[1].n++; else if (v <= 90) buckets[2].n++; else buckets[3].n++; });
+    function renderAging(rows, target) {
+      // Moc dau BAM THEO MUC TIEU dang chon: "0-7 ngay" co dinh la vo nghia khi
+      // muc tieu chi 2 ngay - ca nhom qua han van nam gon trong cot xanh dau tien.
+      const t = Math.max(1, target);
+      const buckets = [
+        { l: `≤ ${t} ngày`, max: t, n: 0, c: '--c-good' },
+        { l: `${t + 1}-7`, max: 7, n: 0, c: '--c-warn' },
+        { l: '8-30', max: 30, n: 0, c: '--c-warn' },
+        { l: '31-90', max: 90, n: 0, c: '--c-backlog' },
+        { l: '>90', max: Infinity, n: 0, c: '--c-bad' },
+      ].filter((b, i, a) => i === 0 || b.max > a[i - 1].max);   // muc tieu > 7 thi bo dai trung
+      nums(rows, (r) => r.tat_days).forEach((v) => {
+        const b = buckets.find((x) => v <= x.max) || buckets[buckets.length - 1];
+        b.n += 1;
+      });
       if (charts.a) charts.a.destroy();
       charts.a = new Chart($('#cAging'), {
         type: 'bar',
         data: { labels: buckets.map((b) => b.l), datasets: [{ label: 'Thiết bị chưa đối ứng', data: buckets.map((b) => b.n), backgroundColor: buckets.map((b) => cssVar(b.c) + 'cc'), borderRadius: 4 }] },
         options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } },
-          scales: { x: { grid: { color: cssVar('--hair') }, ticks: { color: cssVar('--text-muted') } }, y: { grid: { color: cssVar('--hair') }, ticks: { color: cssVar('--text-muted') }, beginAtZero: true } } },
+          scales: { x: { grid: { color: cssVar('--hair') }, ticks: { color: cssVar('--text-muted'), maxRotation: 0, autoSkip: false } },
+                    y: { grid: { color: cssVar('--hair') }, ticks: { color: cssVar('--text-muted') }, beginAtZero: true } } },
       });
     }
 
-    // ---- Pareto top 10 ----
+    // ---- Pareto (co DUONG LUY KE - khong co no thi khong phai Pareto) ----
     function renderPareto(rows) {
-      const top = [...rows].filter((r) => isFinite(Number(r.tat_days)))
-        .sort((a, b) => b.tat_days - a.tat_days).slice(0, 10);
+      // Gom theo PART NO chu khong liet ke tung thiet bi: cau hoi Pareto la
+      // "xu ly nhom nao thi cat duoc phan lon thoi gian cho", ma nhom o day la
+      // MA VAT TU. (Ban cu liet ke 10 thiet bi rieng le, 10 cot dai gan bang
+      // nhau nen khong chi ra duoc dieu gi.)
+      const m = new Map();
+      rows.forEach((r) => {
+        const v = Number(r.tat_days);
+        if (!isFinite(v)) return;
+        const k = r.partno || '(trống)';
+        m.set(k, (m.get(k) || 0) + v);
+      });
+      const all = [...m.entries()].map(([pn, ngay]) => ({ pn, ngay })).sort((a, b) => b.ngay - a.ngay);
+      const tong = all.reduce((s, x) => s + x.ngay, 0) || 1;
+      const N = Math.min(15, all.length);
+      const top = all.slice(0, N);
+      // Luy ke tinh tren TOAN BO danh sach, chi HIEN N cot dau -> con so % noi
+      // dung su that "N ma nay chiem X% tong thoi gian cho".
+      let dong = 0;
+      const luyKe = top.map((x) => { dong += x.ngay; return Math.round((dong / tong) * 1000) / 10; });
       if (charts.p) charts.p.destroy();
       charts.p = new Chart($('#cPareto'), {
-        type: 'bar',
         data: {
-          labels: top.map((r) => `${r.partno || ''}/${r.serialno || ''}`.slice(0, 22)),
-          datasets: [{ label: 'TAT (ngày)', data: top.map((r) => r1(r.tat_days)), backgroundColor: cssVar('--series-2') + 'cc', borderRadius: 4 }],
+          labels: top.map((x) => x.pn),
+          datasets: [
+            { type: 'bar', label: 'Tổng ngày chờ', data: top.map((x) => r1(x.ngay)), yAxisID: 'y',
+              backgroundColor: cssVar('--c-tat') + 'cc', borderRadius: 4, order: 2 },
+            { type: 'line', label: '% luỹ kế', data: luyKe, yAxisID: 'y1',
+              borderColor: cssVar('--c-warn'), backgroundColor: cssVar('--c-warn'),
+              borderWidth: 2, tension: .25, pointRadius: 2, order: 1 },
+            { type: 'line', label: 'Mốc 80%', data: top.map(() => 80), yAxisID: 'y1',
+              borderColor: cssVar('--c-bad'), borderWidth: 1.5, borderDash: [4, 4], pointRadius: 0, order: 0 },
+          ],
         },
-        options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } },
-          scales: { x: { grid: { color: cssVar('--hair') }, ticks: { color: cssVar('--text-muted') }, beginAtZero: true }, y: { grid: { display: false }, ticks: { color: cssVar('--text-muted'), font: { size: 10 } } } } },
+        options: { responsive: true, maintainAspectRatio: false,
+          plugins: {
+            legend: { labels: { color: cssVar('--text-secondary'), boxWidth: 12, font: { size: 11 } } },
+            subtitle: { display: true, color: cssVar('--text-muted'),
+              text: `${N}/${all.length} mã vật tư chiếm ${luyKe[luyKe.length - 1] || 0}% tổng thời gian chờ` },
+          },
+          scales: {
+            x: { grid: { display: false }, ticks: { color: cssVar('--text-muted'), font: { size: 10 }, maxRotation: 60, minRotation: 45 } },
+            y: { position: 'left', grid: { color: cssVar('--hair') }, ticks: { color: cssVar('--text-muted') },
+                 beginAtZero: true, title: { display: !laDienThoai(), text: 'Tổng ngày chờ', color: cssVar('--text-muted') } },
+            y1: { position: 'right', min: 0, max: 100, grid: { drawOnChartArea: false },
+                  ticks: { color: cssVar('--text-muted'), callback: (v) => v + '%' } },
+          } },
       });
     }
 
@@ -244,31 +461,53 @@
       const m = new Map();
       rows.forEach((r) => {
         const d = r.department || '(trống)';
-        if (!m.has(d)) m.set(d, { dep: d, inst: [], us: [], n: 0 });
+        if ((d || '').toUpperCase() === 'CUVT') return;   // giong cach tinh TAT trung binh
+        if (!m.has(d)) m.set(d, { dep: d, tat: [], n: 0 });
         const g = m.get(d); g.n++;
-        if (isFinite(Number(r.tat_install_days))) g.inst.push(Number(r.tat_install_days));
-        if (isFinite(Number(r.tat_usreturn_days))) g.us.push(Number(r.tat_usreturn_days));
+        if (isFinite(Number(r.tat_days))) g.tat.push(Number(r.tat_days));
       });
       const data = [...m.values()].map((g) => ({
         dep: g.dep, n: g.n,
-        avgInst: r1(avg(g.inst)), p90Inst: r1(pct(g.inst, 0.9)), avgUs: r1(avg(g.us)),
-        sla: g.inst.length ? Math.round((g.inst.filter((x) => x <= target).length / g.inst.length) * 100) : null,
-      })).sort((a, b) => b.p90Inst - a.p90Inst);
+        avgTat: r1(avg(g.tat)), p90: r1(pct(g.tat, 0.9)),
+        quaHan: g.tat.filter((x) => x > target).length,
+        sla: g.tat.length ? Math.round((g.tat.filter((x) => x <= target).length / g.tat.length) * 100) : null,
+      })).sort((a, b) => b.p90 - a.p90);
+      const soDo = (c) => {
+        const v = c.getValue();
+        if (v == null) return '—';
+        const col = v >= 90 ? cssVar('--c-good') : v >= 70 ? cssVar('--c-warn') : cssVar('--c-bad');
+        return `<b style="color:${col}">${v}%</b>`;
+      };
+      // responsiveLayout 'collapse': man hinh hep thi cot thua GOM vao dong xo
+      // ra (bam dau +) thay vi bop tieu de con "T… S… T…" nhu truoc.
+      // `responsive`: so CANG LON cang bi giau SOM khi man hinh hep. Hai cot
+      // dau de 0 = KHONG BAO GIO giau (ten Trung tam va % dat - thieu hai cai
+      // do thi bang vo nghia).
+      // ⚠️ Cot dau `responsiveCollapse` la BAT BUOC: khong co no thi Tabulator
+      // van giau cot nhung KHONG co nut nao de xo ra - du lieu bi giau luon.
       const cols = [
-        { title: 'Trung tâm', field: 'dep', headerFilter: 'input' },
-        { title: 'SL thiết bị', field: 'n', hozAlign: 'right', sorter: 'number' },
-        { title: 'TAT install TB', field: 'avgInst', hozAlign: 'right', sorter: 'number' },
-        { title: 'TAT install P90', field: 'p90Inst', hozAlign: 'right', sorter: 'number' },
-        { title: 'TAT US return TB', field: 'avgUs', hozAlign: 'right', sorter: 'number' },
-        { title: `SLA đạt (%)`, field: 'sla', hozAlign: 'right', sorter: 'number',
-          formatter: (c) => { const v = c.getValue(); if (v == null) return '—'; const col = v >= 80 ? '#16a34a' : v >= 50 ? '#d97706' : '#dc2626'; return `<b style="color:${col}">${v}%</b>`; } },
+        { formatter: 'responsiveCollapse', width: 34, minWidth: 34, hozAlign: 'center',
+          resizable: false, headerSort: false },
+        { title: 'Trung tâm', field: 'dep', headerFilter: 'input', minWidth: 110, responsive: 0 },
+        { title: 'SLA đạt (%)', field: 'sla', hozAlign: 'right', sorter: 'number', formatter: soDo, minWidth: 95, responsive: 0 },
+        { title: 'TAT TB (ngày)', field: 'avgTat', hozAlign: 'right', sorter: 'number', minWidth: 110, responsive: 1 },
+        { title: 'P90 (ngày)', field: 'p90', hozAlign: 'right', sorter: 'number', minWidth: 100, responsive: 2 },
+        { title: `Quá hạn (>${target}n)`, field: 'quaHan', hozAlign: 'right', sorter: 'number', minWidth: 110, responsive: 3,
+          formatter: (c) => (Number(c.getValue()) ? `<b style="color:${cssVar('--c-bad')}">${c.getValue()}</b>` : '0') },
+        { title: 'SL thiết bị', field: 'n', hozAlign: 'right', sorter: 'number', minWidth: 100, responsive: 4 },
       ];
-      if (!centerTable) centerTable = new Tabulator('#centerTable', { data, columns: cols, layout: 'fitColumns', height: '320px', pagination: false });
-      else centerTable.replaceData(data);
+      if (centerTable) { centerTable.destroy(); centerTable = null; }
+      centerTable = new Tabulator('#centerTable', {
+        // maxHeight (khong phai height): it dong thi bang CO LAI, khong de mot
+        // mang trang lon phia duoi trong nhu trang dung do dang.
+        data, columns: cols, layout: 'fitColumns', maxHeight: laDienThoai() ? '340px' : '360px',
+        pagination: false, responsiveLayout: 'collapse', responsiveLayoutCollapseStartOpen: false,
+        placeholder: 'Không có dữ liệu Trung tâm trong kỳ này.',
+      });
     }
 
     // ---- Orchestrate ----
-    let lastDash = null, lastNotRec = [];
+    let lastDash = null, lastNotRec = [], lastSeries = [];
     async function loadAll() {
       $('#status').textContent = 'Đang tải…';
       try {
@@ -277,22 +516,31 @@
           api('/api/reports/not-reconciled'),
           api('/api/beta/trend', { months: 6 }),
         ]);
-        lastDash = dash; lastNotRec = notRec.rows || [];
-        const target = parseInt($('#target').value, 10);
-        renderKPIs(dash, dash.rows || [], target);
-        renderTrend(trend.series || []);
-        renderDist(dash.rows || [], target);
-        renderAging(lastNotRec);
-        renderPareto(dash.rows || []);
-        renderCenter(dash.rows || [], target);
+        lastDash = dash; lastNotRec = notRec.rows || []; lastSeries = trend.series || [];
+        veTatCa();
         $('#status').textContent = `Cập nhật ${new Date().toLocaleTimeString('vi')}`;
       } catch (e) { $('#status').textContent = 'Lỗi: ' + e.message; }
     }
-    // Doi muc tieu -> tinh lai nhanh cac phan phu thuoc target (khong goi API lai)
-    function recomputeTarget() {
+
+    /** Ve lai moi thu tu du lieu DA CO (khong goi API) - dung khi doi muc tieu. */
+    function veTatCa() {
+      if (!lastDash) return;
+      const target = parseInt($('#target').value, 10);
+      const rows = lastDash.rows || [];
+      renderKPIs(lastDash, rows, target, lastSeries);
+      renderTrend(lastSeries, target);
+      renderDist(rows, target);
+      renderAging(lastNotRec, target);
+      renderPareto(rows);
+      renderCenter(rows, target);
+    }
+
+    const LUU_TARGET = 'tat-beta-target';
+    function doiTarget() {
       const target = parseInt($('#target').value, 10);
       $('#tgtVal').textContent = target;
-      if (lastDash) { renderKPIs(lastDash, lastDash.rows || [], target); renderDist(lastDash.rows || [], target); renderCenter(lastDash.rows || [], target); }
+      try { localStorage.setItem(LUU_TARGET, String(target)); } catch (_) { /* rieng tu */ }
+      veTatCa();
     }
 
     // Init
@@ -300,9 +548,17 @@
       const s = savedFilters();
       const now = new Date();
       $('#month').value = s.month || `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-      $('#target').addEventListener('input', recomputeTarget);
+      // Muc tieu 2 ngay la so NGHIEP VU CHOT (xuat kho -> tra US/service);
+      // thanh truot chi de thu "neu siet/noi muc tieu thi ty le doi the nao".
+      const luu = parseInt(localStorage.getItem(LUU_TARGET) || '', 10);
+      if (Number.isFinite(luu) && luu >= 1 && luu <= 30) $('#target').value = String(luu);
+      $('#tgtVal').textContent = $('#target').value;
+      $('#target').addEventListener('input', doiTarget);
       $('#month').addEventListener('change', loadAll);
       $('#reload').addEventListener('click', loadAll);
+      // Xoay ngang / doi co man hinh -> ve lai (tieu de truc va bang doi theo)
+      let hen = null;
+      window.addEventListener('resize', () => { clearTimeout(hen); hen = setTimeout(veTatCa, 250); });
       loadAll();
     })();
   </script>
