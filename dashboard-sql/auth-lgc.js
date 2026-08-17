@@ -308,6 +308,84 @@ module.exports = function taoAuthLgc({ query, dataDir, logDir, demoMode }) {
     return { ok: true };
   }
 
+  // -------------------------------------------------------------------------
+  // QUAN TRI TAI KHOAN (goi tu /api/admin/... - da qua adminGuard theo IP)
+  // -------------------------------------------------------------------------
+
+  /** Danh sach tai khoan LGC + trang thai khoa, de trang /admin xu ly. */
+  async function danhSachUser() {
+    if (demoMode) {
+      return [...demo.values()].map((u) => ({
+        ma_nv: u.ma_nv, ten: u.ten || '', department: u.department || '',
+        doi_mk: !!u.doi_mk, sai_lien: u.sai_lien || 0,
+        khoa_den: u.khoa_den || null, dn_cuoi: u.dn_cuoi || null, tao_luc: u.tao_luc || null,
+      }));
+    }
+    if (!sanSang) return [];
+    // KHONG lay [mk_hash] / [mk_muoi]: bam mat khau khong co viec gi phai roi
+    // ra khoi may chu, ke ca cho trang quan tri.
+    const rows = await query(
+      `SELECT [ma_nv], [ten], [department], [doi_mk], [sai_lien], [khoa_den], [dn_cuoi], [tao_luc]
+       FROM [NQT].[dbo].[TAT_USER] ORDER BY [ma_nv]`
+    );
+    return rows.map((u) => ({ ...u, doi_mk: !!u.doi_mk }));
+  }
+
+  /**
+   * MO KHOA: chi xoa trang thai khoa, GIU NGUYEN mat khau.
+   * Dung cho nguoi go sai vai lan roi bi khoa 15 phut nhung van nho mat khau -
+   * khong co ly do gi bat ho dat lai mat khau.
+   */
+  async function moKhoaUser(maRaw) {
+    const ma = String(maRaw || '').trim().toUpperCase();
+    if (!ma) return { ok: false, message: 'Thiếu mã nhân viên.' };
+    if (demoMode) {
+      const u = demo.get(ma);
+      if (!u) return { ok: false, message: `Không có tài khoản “${ma}”.` };
+      u.sai_lien = 0; u.khoa_den = null;
+      return { ok: true, ma };
+    }
+    const r = await query(
+      `UPDATE [NQT].[dbo].[TAT_USER] SET [sai_lien] = 0, [khoa_den] = NULL
+       WHERE [ma_nv] = @ma;
+       SELECT @@ROWCOUNT AS n;`, { ma }
+    );
+    const n = (r[0] || {}).n || 0;
+    if (!n) return { ok: false, message: `Không có tài khoản “${ma}”.` };
+    return { ok: true, ma };
+  }
+
+  /**
+   * DAT LAI MAT KHAU ve chinh MA NHAN VIEN VIET HOA - dung quy tac cua lan
+   * dang nhap dau tien, nen khong phai bay ra mot mat khau tam roi tim cach
+   * bao cho nguoi ta.
+   * ⚠️ BAT BUOC dat [doi_mk] = 1: neu khong, nguoi dung co the dung mai mat
+   * khau bang chinh ma nhan vien minh - ai cung doan ra.
+   * Cung xoa luon trang thai khoa (dat lai xong ma van bi khoa thi vo nghia).
+   */
+  async function datLaiMatKhau(maRaw) {
+    const ma = String(maRaw || '').trim().toUpperCase();
+    if (!ma) return { ok: false, message: 'Thiếu mã nhân viên.' };
+    const muoi = crypto.randomBytes(16);
+    const hash = bam(ma, muoi);
+    if (demoMode) {
+      const u = demo.get(ma);
+      if (!u) return { ok: false, message: `Không có tài khoản “${ma}”.` };
+      u.mk_hash = hash; u.mk_muoi = muoi; u.doi_mk = true; u.sai_lien = 0; u.khoa_den = null;
+      return { ok: true, ma, mkMoi: ma };
+    }
+    const r = await query(
+      `UPDATE [NQT].[dbo].[TAT_USER]
+       SET [mk_hash] = @hash, [mk_muoi] = @muoi, [doi_mk] = 1,
+           [sai_lien] = 0, [khoa_den] = NULL
+       WHERE [ma_nv] = @ma;
+       SELECT @@ROWCOUNT AS n;`, { ma, hash, muoi }
+    );
+    const n = (r[0] || {}).n || 0;
+    if (!n) return { ok: false, message: `Không có tài khoản “${ma}”.` };
+    return { ok: true, ma, mkMoi: ma };
+  }
+
   /** Nguoi dung hien tai (da dang nhap va KHONG con phai doi mat khau). */
   async function aiDangDung(req) {
     const ma = docVe(req);
@@ -320,6 +398,7 @@ module.exports = function taoAuthLgc({ query, dataDir, logDir, demoMode }) {
   return {
     COOKIE, TTL_MS, DEPTS, MK_TOI_THIEU,
     khoiTao, dangNhap, doiMatKhau, aiDangDung, docVe, taoVe, ghiLog, layUser,
+    danhSachUser, moKhoaUser, datLaiMatKhau, SAI_TOI_DA, KHOA_PHUT,
     trangThai: () => ({ sanSang, loiTaoBang }),
   };
 };

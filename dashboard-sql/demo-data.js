@@ -632,20 +632,27 @@ const nhomMc = (v) => {
 
 function gomTheoNhanVien(rows, cot, kieu) {
   const m = new Map();
-  const khoaPhieu = kieu === 'pickslip' ? 'picking_listno' : 'voucherno';
+  // Phieu tra danh so bang HISTORYNO_I chu khong phai VOUCHERNO -> dung
+  // phieu_khoa (server tra ve san) de dem "so phieu" cho dung ca hai loai.
+  const khoaPhieu = kieu === 'pickslip' ? 'picking_listno' : 'phieu_khoa';
   for (const r of rows) {
     const ma = String(r[cot] || '').trim();
     if (!ma) continue;
     let g = m.get(ma);
     if (!g) {
       g = { ma_nv: ma, ten_nv: 'NV ' + ma.slice(-4), so_item: 0, so_huy: 0,
+            so_receive: 0, so_return: 0,
             tong_sl: 0, sl: { R: 0, C: 0, K: 0 }, phieu: new Set(), scan: new Map() };
       m.set(ma, g);
     }
     g.so_item += 1;
     g.tong_sl += Number(r.qty) || 0;
     // Tach SL nhap theo MAT_CLASS - giong nhomMatClass() ben server.js
-    if (kieu === 'receiving') g.sl[nhomMc(r.mat_class)] += Number(r.qty) || 0;
+    if (kieu === 'receiving') {
+      g.sl[nhomMc(r.mat_class)] += Number(r.qty) || 0;
+      // Tra lai kho CUNG LA mot lan nhap kho -> inspector duoc tinh cong
+      if (r.loai === 'RETURN') g.so_return += 1; else g.so_receive += 1;
+    }
     g.phieu.add(String(r[khoaPhieu]));
     if (r.is_cancel) g.so_huy += 1;
     // Item cancel khong can scan -> khong dua vao mau so ty le scan
@@ -665,6 +672,7 @@ function gomTheoNhanVien(rows, cot, kieu) {
     if (kieu === 'pickslip') o.so_xuat = g.so_item - g.so_huy;
     else {
       o.so_item = g.so_item;
+      o.so_receive = g.so_receive; o.so_return = g.so_return;
       o.tong_sl = lam2(g.tong_sl);
       o.sl_r = lam2(g.sl.R); o.sl_c = lam2(g.sl.C); o.sl_khac = lam2(g.sl.K);
     }
@@ -966,8 +974,13 @@ function receiving(range, f) {
     // MOI VOUCHER co DUNG MOT inspector (giong HISTORY: CREATED_BY cua phieu
     // nhap). Gan theo PHIEU chu khong theo tung dong - neu khong, mot voucher
     // se bi dem cho nhieu nguoi va tong bang KPI khong khop KPI ca tab.
+    // ~25% so phieu la PHIEU TRA (hang nhap lai kho, VM = EA/TC). Phieu tra
+    // danh so bang HISTORYNO_I va file scan nam o thu muc PICKING LIST -
+    // giong het server that.
+    const laTra = rndInt(0, 99) < 25;
     vcPool.push({
-      no: 'R-' + rndInt(200000, 299999),
+      loai: laTra ? 'RETURN' : 'RECEIVE',
+      no: laTra ? String(rndInt(4000000, 4999999)) : 'R-' + rndInt(200000, 299999),
       scan: rndInt(0, 9) < 7 ? 'SCANNED' : 'CHUA_SCAN',
       inspector: rnd(INSPECTOR),
     });
@@ -1002,21 +1015,33 @@ function receiving(range, f) {
   }
   rows.forEach((r) => {
     const v = rnd(vcPool);
-    r.voucherno = v.no;
-    r.created_by = v.inspector;   // mot voucher = mot inspector
-    // Ten file khac nhau theo station: SGN giu 'R-...', HAN bo tien to
-    const giuR = (r.station || '').toUpperCase() === 'SGN';
-    r.voucher_scan = v.scan === 'SCANNED'
-      ? (giuR ? v.no : v.no.replace(/^R-/i, ''))
-      : `${v.no} hoặc ${v.no.replace(/^R-/i, '')}`;
-    r.scan = v.scan; // moi dong cung voucher PHAI cung trang thai scan
+    r.loai = v.loai;
+    r.phieu_khoa = v.no;
+    r.created_by = v.inspector;   // mot phieu = mot inspector
+    if (v.loai === 'RETURN') {
+      // Phieu tra: so phieu la HISTORYNO_I, file scan o thu muc picking list
+      r.voucherno = '';
+      r.historyno = Number(v.no);
+      r.voucher_scan = v.no;
+      r.scan_loai = 'picking';
+    } else {
+      r.voucherno = v.no;
+      // Ten file khac nhau theo station: SGN giu 'R-...', HAN bo tien to
+      const giuR = (r.station || '').toUpperCase() === 'SGN';
+      r.voucher_scan = v.scan === 'SCANNED'
+        ? (giuR ? v.no : v.no.replace(/^R-/i, ''))
+        : `${v.no} hoặc ${v.no.replace(/^R-/i, '')}`;
+      r.scan_loai = 'receiving';
+    }
+    r.scan_key = v.loai === 'RETURN' ? v.no : r.voucherno;
+    r.scan = v.scan; // moi dong cung phieu PHAI cung trang thai scan
   });
   // Chi loc theo station/store - giong server (nhap kho khong theo Trung tam)
   const kept = applyFilter(rows, { station: f.station, store: f.store });
   const pct = (a, b) => (b ? Math.round((a / b) * 1000) / 10 : 0);
   // Dem scan theo PHIEU (distinct voucher) - giong server that
   const vc = new Map();
-  kept.forEach((r) => vc.set(r.voucherno, r));
+  kept.forEach((r) => vc.set(r.phieu_khoa, r));
   const daScan = [...vc.values()].filter((r) => r.scan === 'SCANNED').length;
   const chuaScan = vc.size - daScan;
   const daScanDong = kept.filter((r) => r.scan === 'SCANNED').length;
@@ -1046,10 +1071,13 @@ function receiving(range, f) {
     range: { from: range.from, to: range.to, label: range.label },
     kpis: {
       soDong: kept.length,
-      soPhieu: new Set(kept.map((r) => r.voucherno)).size,
-      b1Tho: kept.length + 24,
+      soPhieu: vc.size,
+      soDongReceive: kept.filter((r) => r.loai === 'RECEIVE').length,
+      soDongReturn: kept.filter((r) => r.loai === 'RETURN').length,
+      b1Tho: kept.filter((r) => r.loai === 'RECEIVE').length + 24,
       crHuy: 24,
       b1BiHuy: 24,
+      retTho: kept.filter((r) => r.loai === 'RETURN').length,
       daScan, chuaScan,
       tongPhieuScan: vc.size,
       tyLeScan: pct(daScan, vc.size),

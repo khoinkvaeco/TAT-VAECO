@@ -102,6 +102,23 @@ async function main() {
       cong(ins, 'da_scan') + cong(ins, 'chua_scan') === kr.tongPhieuScan,
       `${cong(ins, 'da_scan') + cong(ins, 'chua_scan')} vs ${kr.tongPhieuScan}`);
     kiemTra('Không có mã nhân viên rỗng', ins.every((r) => String(r.ma_nv || '').trim()));
+    // TRA LAI KHO CUNG LA MOT LAN NHAP KHO -> phai co trong bang inspector.
+    // Neu ai do lo bo VM='EA'/'TC' khoi cau truy van thi so_return se ve 0 het.
+    kiemTra('Có dòng RETURN trong tab Receiving (trả lại kho cũng là nhập kho)',
+      cong(ins, 'so_return') > 0, `${cong(ins, 'so_return')} item return`);
+    kiemTra('Receive + Return = Item ở TỪNG người',
+      ins.every((r) => (r.so_receive || 0) + (r.so_return || 0) === r.so_item));
+    kiemTra('Tổng Receive/Return khớp KPI cả tab',
+      cong(ins, 'so_receive') === kr.soDongReceive && cong(ins, 'so_return') === kr.soDongReturn,
+      `receive ${cong(ins, 'so_receive')}/${kr.soDongReceive} · return ${cong(ins, 'so_return')}/${kr.soDongReturn}`);
+    // Phieu tra doi chieu o THU MUC PICKING LIST, phieu receive o thu muc
+    // receiving - tra nham thu muc thi moi phieu tra deu bao "chua scan" oan.
+    const dongTra = (rc.rows || []).filter((r) => r.loai === 'RETURN');
+    kiemTra('Dòng RETURN chỉ đúng thư mục scan picking list',
+      dongTra.length > 0 && dongTra.every((r) => r.scan_loai === 'picking'),
+      `${dongTra.length} dòng return`);
+    kiemTra('Dòng RECEIVE chỉ đúng thư mục scan receiving',
+      (rc.rows || []).filter((r) => r.loai === 'RECEIVE').every((r) => r.scan_loai === 'receiving'));
     // SL nhap R / C / khac phai PHU HET tong SL: neu MAT_CLASS co ma la ma bi
     // bo qua thay vi don vao 'khac' thi tong ba cot se HUT so voi Tong SL.
     const gan = (a, b) => Math.abs(a - b) < 0.01;

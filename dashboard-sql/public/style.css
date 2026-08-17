@@ -271,6 +271,26 @@ body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
 
 .tat-badge { padding: 1px 8px; border-radius: 999px; font-variant-numeric: tabular-nums; font-weight: 700; }
 
+/* ===== THE KPI "PHAN TICH CHUYEN SAU" (truoc nam trong <style> cua beta.html)
+   Chuyen ra day khi khoi phan tich do doi sang Dashboard - de trong file rieng
+   thi hai trang se troi mau moi luc mot khac.
+   Vien TRAI mang mau TRANG THAI (xanh dat / vang canh bao / do khong dat) de
+   liec 2 giay la biet cho can can thiep, khong phai doc tung con so.        */
+.kbox {
+  background: var(--surface-1); border: 1px solid var(--hair); border-radius: 14px;
+  padding: 14px 16px; border-left: 4px solid var(--k, var(--hair));
+  display: flex; flex-direction: column; gap: 2px;
+}
+.kbig { font-size: 26px; font-weight: 800; line-height: 1.1; }
+.klabel { font-size: 12px; color: var(--text-muted); }
+.ksub { font-size: 12px; margin-top: 2px; }
+.kfoot { display: flex; align-items: flex-end; justify-content: space-between; gap: 8px; margin-top: auto; }
+.delta-good { color: var(--good); font-weight: 700; }
+.delta-bad  { color: var(--critical); font-weight: 700; }
+.delta-flat { color: var(--text-muted); }
+.spark { display: block; }
+@media (max-width: 700px) { .kbig { font-size: 22px; } }
+
 /* --- Nut mo FILE SCAN that (o cot Scan, trang thai "Da scan") --- */
 /*  Dung <button> chu khong phai <a href>: mot phieu co the co NHIEU file nen
     phai hoi server truoc roi moi biet mo cai nao (xem moFileScan()).        */

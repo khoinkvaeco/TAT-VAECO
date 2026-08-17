@@ -1345,6 +1345,88 @@ thẳng tuyệt đối** — nhìn vào tưởng tính năng hỏng, trong khi t
 `soTonDongTheoThang()` cho 28–52 dòng, **cố định theo tháng** (không ngẫu nhiên mỗi lần gọi) nên
 xu hướng ổn định giữa các lần tải.
 
+## 7l. Mục tiêu KPI đặt ở `/admin` · Reset tài khoản LGC · Return vào Receiving
+
+### Mục tiêu KPI (SLA) — một con số duy nhất, đặt ở trang admin
+
+Trước đây là **thanh trượt trên trang beta**: mỗi máy tự kéo một kiểu nên hai người mở **cùng một
+tháng** lại đọc ra **hai tỷ lệ “đạt” khác nhau** mà không ai biết vì sao. Nay lưu trong
+`data/kpi-targets.json` **trên máy backend**, cùng quy tắc với thư mục scan (§6b): **mọi máy đều
+XEM được** (`GET /api/kpi-config`), **chỉ máy quản trị SỬA được** (`POST /api/admin/kpi-config`).
+
+| Mục tiêu | Mặc định | Dùng ở đâu |
+|---|---|---|
+| `tatTargetDays` — xuất kho → trả US/service | **2 ngày** | tỷ lệ đạt · số ca quá hạn · vạch mục tiêu · màu trạng thái thẻ KPI · mốc đầu của aging |
+| `backlogWarnDays` — tồn đọng quá hạn | 30 ngày | mốc “quá hạn” của biểu đồ aging |
+
+⚠️ Giá trị vô lý (0, âm, chuỗi chữ, quá lớn) bị **từ chối 400** chứ không nhận bừa — một mục tiêu
+`= 0` sẽ làm **mọi** tỷ lệ “đạt” thành 0% mà không có gì báo là sai. Đọc file cũng lùi về mặc định
+nếu giá trị trong file hỏng.
+
+### Khối *Phân tích chuyên sâu* đã chuyển từ `/beta` sang Dashboard
+
+`/beta` nay **chuyển hướng 301 về `/`** — giữ đường dẫn cũ cho ai đã ghim link, nhưng **không để
+một bản sao thứ hai** trôi dần lệch với bản chính. Bốn phần dùng dữ liệu `/api/dashboard` **đã tải
+sẵn** (thẻ KPI · phân phối · Pareto · bảng Trung tâm) vẽ ngay; hai phần cần thêm truy vấn nặng
+(*xu hướng* + *aging*) nằm sau nút **▶ Nạp xu hướng & tồn đọng**, giống cách khối *So sánh các
+tháng* đang làm.
+
+> ⚠️ **Lỗi đã gặp và sửa — mũi tên so sánh bịa đặt.** `sauDelta(nay, truoc, …)` chỉ kiểm
+> `Number.isFinite()`, mà `Number(null) === 0` và `Number('') === 0` đều hữu hạn → khi **chưa có**
+> số kỳ trước, “không có dữ liệu” biến thành “kỳ trước bằng 0” và thẻ bay ra **▲ 36 thiết bị so
+> tháng trước**. Nay loại `null`/`undefined`/`''` **trước** khi gọi `Number()`.
+
+### Reset tài khoản LGC (quên mật khẩu / bị khoá)
+
+Hai việc **tách riêng có chủ đích**:
+
+| Việc | Làm gì | Dùng khi |
+|---|---|---|
+| **Mở khoá** | chỉ gỡ `khoa_den` + `sai_lien`, **GIỮ NGUYÊN mật khẩu** | gõ sai vài lần bị khoá 15 phút nhưng vẫn nhớ mật khẩu — không có lý do bắt đặt lại |
+| **Đặt lại mật khẩu** | về chính **mã nhân viên VIẾT HOA** + **bắt buộc `doi_mk = 1`** | quên hẳn mật khẩu |
+
+Đặt lại dùng đúng quy tắc của lần đăng nhập đầu tiên nên **không phải nghĩ ra mật khẩu tạm rồi tìm
+cách báo cho người ta**. `doi_mk = 1` là **bắt buộc**: thiếu nó thì người dùng có thể dùng mãi mật
+khẩu bằng chính mã nhân viên mình — ai cũng đoán ra. Danh sách trả về **không có** `mk_hash` /
+`mk_muoi`: băm mật khẩu không có việc gì phải rời khỏi máy chủ, kể cả cho trang quản trị. Mọi thao
+tác ghi vào nhật ký đăng nhập LGC kèm IP máy quản trị.
+
+**`tools/admincheck.js` (26 trường hợp)** chốt cả hai. Điều bất biến quan trọng nhất: đặt một mật
+khẩu **thật**, reset, rồi thử lại **chính mật khẩu đó** — phải hỏng. Đã chứng minh bài kiểm bắt
+được lỗi: bỏ phần đổi `mk_hash` trong `datLaiMatKhau()` (chỉ gỡ khoá) → **3/26 trượt**, mật khẩu cũ
+vẫn đăng nhập được `HTTP 200`.
+
+### Return vào tab Receiving — “trả lại kho cũng là một lần nhập kho”
+
+`qReceiving` nay kéo `VM IN ('B1','CR','EA','TC')` và thêm cột **`loai`**: `RECEIVE` (VM = B1) ·
+`RETURN` (VM = EA/TC — **cùng bộ mã** mà tab *Quản lý xuất kho* dùng để tra phiếu trả). Gộp chung
+một bảng, cột *Loại* lọc được; KPI inspector cộng cả hai và tách cột **Receive / Return**.
+
+Ba chỗ dễ sai, đều đã xử lý:
+
+1. **Hai loại đánh số khác nhau** — receive theo `VOUCHERNO`, return theo `HISTORYNO_I`. Thêm cột
+   `phieu_khoa` gộp về một khoá, nếu không thì “số phiếu” đếm sai.
+2. **Hai THƯ MỤC SCAN khác nhau** — phiếu return nằm trong thư mục **picking list** (`<HISTORYNO_I>-….pdf`),
+   phiếu receive trong thư mục **receiving** (`<VOUCHERNO>.pdf`). Tra nhầm thư mục thì **mọi phiếu
+   trả đều báo “chưa scan” oan**. Server trả kèm `scan_loai` / `scan_key` cho từng dòng để nút mở
+   file biết tìm ở đâu.
+3. **Phiếu CR chỉ huỷ dòng B1** — AMOS không huỷ phiếu trả bằng cơ chế `RECDETAILNO_I`, nên điều
+   kiện “còn hiệu lực” chỉ áp `NOT EXISTS(CR)` cho B1.
+
+> ⚠️ **Bộ lọc `CONDITION NOT LIKE '%us%'` áp cho CẢ HAI loại** (nghiệp vụ chọn). Hệ quả phải biết:
+> dòng return có `CONDITION` là **US sẽ không xuất hiện** và **không vào KPI inspector** — mà hàng
+> trả về kho phần lớn là unserviceable, nên đây là một bộ phận đáng kể. Muốn xem hết thì bỏ điều
+> kiện đó trong biến `w` của `qReceiving`.
+
+`tools/kpicheck.js` thêm 5 trường hợp: có dòng RETURN thật · `Receive + Return = Item` ở **từng
+người** · tổng khớp KPI cả tab · dòng RETURN chỉ đúng thư mục `picking` · dòng RECEIVE chỉ đúng
+thư mục `receiving`.
+
+### `favicon.svg` cho mọi trang
+
+Trước đó **mọi trang** đều để trình duyệt tự đòi `/favicon.ico` → **404 mỗi lần mở**, tab hiện biểu
+tượng trắng. Nay `index` · `admin` · `lgc-login` · `wp` đều trỏ vào `public/favicon.svg`.
+
 ## 8. API
 
 | Endpoint | Mô tả |
@@ -1361,6 +1443,11 @@ xu hướng ổn định giữa các lần tải.
 | `GET /api/scan-config` | Đường dẫn 2 thư mục file scan + **trạng thái thật** (đọc được bao nhiêu file PDF / lỗi gì) + `canEdit`. **Mọi máy xem được.** |
 | `GET /api/scan/tim` | Liệt kê file PDF ứng với một phiếu (`loai`, `station`, `ma`). **Sau cổng LGC.** |
 | `GET /api/scan/file` | Trả về chính file PDF (`loai`, `station`, `ma`, `ten`). Tên file phải nằm trong danh sách thật của thư mục — xem §6c. **Sau cổng LGC.** |
+| `GET /api/kpi-config` | Mục tiêu KPI đang dùng + `canEdit`. Ai cũng xem được. |
+| `POST /api/admin/kpi-config` | Đặt mục tiêu (`tatTargetDays`, `backlogWarnDays`). Lưu `data/kpi-targets.json`. **Chỉ IP quản trị.** |
+| `GET /api/admin/lgc-users` | Danh sách tài khoản LGC + trạng thái khoá (KHÔNG kèm hash mật khẩu). **Chỉ IP quản trị.** |
+| `POST /api/admin/lgc-users/mo-khoa` | Gỡ khoá, giữ nguyên mật khẩu (body `{ ma }`). **Chỉ IP quản trị.** |
+| `POST /api/admin/lgc-users/dat-lai-mk` | Đặt lại mật khẩu về mã NV viết hoa + bắt buộc đổi (body `{ ma }`). **Chỉ IP quản trị.** |
 | `POST /api/admin/scan-config` | Đổi đường dẫn thư mục file scan (body `{ picking, receiving }`, để trống = dùng mặc định). Lưu vào `data/scan-folders.json` trên máy backend. **Chỉ IP quản trị.** |
 | `GET /api/part-onoff` | Tra cứu Part On/Off (`WO_PART_ON_OFF`, linked server DWH_DB). 6 tham số riêng, khớp **chính xác**, kết hợp AND (bỏ trống = bỏ qua): `event`, `labelno` (số) · `partno`, `serialno`, `partnoOff`, `serialnoOff` (chữ). Giờ VN = ghép `MUTATION` (số ngày AMOS) + `MUTATION_TIME` (ms từ 0h) + 7h thành 1 cột; `CREATED_DATE` cũng là số ngày AMOS → chỉ có ngày (không giờ). |
 | `GET /api/wp/tim` | Tìm Work Package theo `station` + `wpStatus` (`112` IN PROGRESS · `11` PRELOAD · `-2` CLOSED) + `tuNgay=YYYY-MM-DD` (**bắt buộc khi CLOSED**). Trả `{ ds[] }` gồm `wpnoI`, `wp`, ngày bắt đầu/kết thúc, loại tàu, project, hangar. |

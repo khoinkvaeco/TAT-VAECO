@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Admin · Chatbot — Dashboard TAT</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml" />
   <!-- Thư viện để ngay trên máy backend (xem tools/build-assets.js) -->
   <link href="vendor/tabulator.min.css" rel="stylesheet" />
   <script src="vendor/tabulator.min.js"></script>
@@ -100,6 +101,61 @@
         <code>REPORT_PERIOD</code> (<code>week</code>/<code>month</code>). ⚠️ Gửi = số liệu <b>tổng hợp</b> lên cloud M365.
       </div>
       <div id="rptOut" style="font-size:13px;margin-top:8px"></div>
+    </div>
+
+    <!-- ===== MUC TIEU KPI (SLA) ===== -->
+    <div class="panel" style="margin-bottom:14px">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <b style="font-size:14px">🎯 Mục tiêu KPI (SLA)</b>
+        <span id="kpiUpdated" style="font-size:13px;color:var(--muted)">…</span>
+        <span style="margin-left:auto;display:flex;gap:6px">
+          <button id="kpiReload" class="ghost">↻ Tải lại</button>
+          <button id="kpiSave" class="act">💾 Lưu mục tiêu</button>
+        </span>
+      </div>
+      <div class="note" style="margin-top:8px">
+        Con số này dùng cho <b>toàn bộ dashboard</b>: tỷ lệ đạt, số ca quá hạn, vạch mục tiêu trên
+        biểu đồ, và màu trạng thái của các thẻ KPI.
+        <b>Trước đây nó là thanh trượt trên trang beta</b> — mỗi máy tự kéo một kiểu nên hai người
+        mở cùng một tháng lại đọc ra hai tỷ lệ “đạt” khác nhau mà không ai biết vì sao. Nay là
+        <b>một con số duy nhất</b> lưu trong <code>data/kpi-targets.json</code> trên máy chủ.
+        Chỉ máy quản trị sửa được; máy khác vẫn xem được.
+      </div>
+      <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:10px">
+        <label style="font-size:13px">
+          <div style="color:var(--muted);margin-bottom:4px">TAT — xuất kho → trả US/service (ngày)</div>
+          <input id="kpiTat" type="number" min="0.1" max="365" step="0.1" style="width:140px" />
+        </label>
+        <label style="font-size:13px">
+          <div style="color:var(--muted);margin-bottom:4px">Tồn đọng quá hạn khi quá (ngày)</div>
+          <input id="kpiBacklog" type="number" min="1" max="3650" step="1" style="width:140px" />
+        </label>
+      </div>
+      <div id="kpiOut" style="font-size:13px;margin-top:8px"></div>
+    </div>
+
+    <!-- ===== TAI KHOAN LGC: quen mat khau / bi khoa ===== -->
+    <div class="panel" style="margin-bottom:14px">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <b style="font-size:14px">🔑 Tài khoản LGC — quên mật khẩu / bị khoá</b>
+        <span id="usrCount" style="font-size:13px;color:var(--muted)">…</span>
+        <span style="margin-left:auto;display:flex;gap:6px">
+          <input id="usrSearch" type="text" placeholder="Tìm mã / tên…" style="min-width:180px" />
+          <button id="usrReload" class="ghost">↻ Tải lại</button>
+        </span>
+      </div>
+      <div class="note" style="margin-top:8px">
+        <b>Mở khoá</b> chỉ gỡ trạng thái khoá, <b>giữ nguyên mật khẩu</b> — dùng khi người ta gõ sai
+        vài lần bị khoá nhưng vẫn nhớ mật khẩu.<br>
+        <b>Đặt lại mật khẩu</b> đưa mật khẩu về chính <b>mã nhân viên VIẾT HOA</b> (đúng quy tắc lần
+        đăng nhập đầu tiên) và <b>bắt buộc đổi ngay</b> ở lần đăng nhập tới — nên không phải nghĩ ra
+        mật khẩu tạm rồi tìm cách báo cho người ta.<br>
+        Mọi thao tác đều <b>ghi vào nhật ký đăng nhập LGC</b> kèm IP máy quản trị.
+      </div>
+      <div style="overflow-x:auto;margin-top:10px">
+        <table id="usrTable" style="width:100%;border-collapse:collapse;font-size:12.5px"></table>
+      </div>
+      <div id="usrOut" style="font-size:13px;margin-top:8px"></div>
     </div>
 
     <!-- ===== Thu muc FILE SCAN PDF (picking list / receiving) ===== -->
@@ -589,6 +645,127 @@
       } catch (e) { $('#scanOut').textContent = 'Lỗi: ' + e.message; }
     });
     loadScanCfg();
+
+    // ---------------------- MUC TIEU KPI (SLA) ----------------------------
+    function apKpi(d) {
+      $('#kpiTat').value = d.tatTargetDays;
+      $('#kpiBacklog').value = d.backlogWarnDays;
+      $('#kpiUpdated').textContent = d.updatedAt
+        ? `sửa lần cuối ${d.updatedAt.slice(0, 16).replace('T', ' ')} từ IP ${d.updatedBy || '?'}`
+        : `đang dùng mặc định (${d.macDinh.tatTargetDays} ngày / ${d.macDinh.backlogWarnDays} ngày)`;
+      if (d.canEdit === false) {
+        $('#kpiSave').disabled = true;
+        $('#kpiSave').title = 'Máy này không có quyền sửa (chỉ máy quản trị).';
+        $('#kpiTat').readOnly = true; $('#kpiBacklog').readOnly = true;
+      }
+    }
+    async function loadKpiCfg() {
+      $('#kpiOut').textContent = '';
+      try { apKpi(await getJSON('/api/kpi-config')); }
+      catch (e) { $('#kpiOut').textContent = 'Lỗi: ' + e.message; }
+    }
+    $('#kpiReload').addEventListener('click', loadKpiCfg);
+    $('#kpiSave').addEventListener('click', async () => {
+      $('#kpiOut').textContent = 'Đang lưu…';
+      try {
+        const res = await fetch('/api/admin/kpi-config', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            tatTargetDays: $('#kpiTat').value,
+            backlogWarnDays: $('#kpiBacklog').value,
+          }),
+        });
+        const d = await res.json();
+        if (!res.ok || d.error) throw new Error(d.message || 'Lưu thất bại');
+        apKpi(d);
+        $('#kpiOut').textContent = '✔ Đã lưu. Dashboard dùng mục tiêu mới ngay lần tải kế tiếp.';
+      } catch (e) { $('#kpiOut').textContent = 'Lỗi: ' + e.message; }
+    });
+    loadKpiCfg();
+
+    // ------------------- TAI KHOAN LGC (reset / mo khoa) ------------------
+    let USERS = [];
+    const ngayGio = (v) => (v ? String(v).slice(0, 16).replace('T', ' ') : '—');
+
+    function veUsers() {
+      const q = ($('#usrSearch').value || '').trim().toLowerCase();
+      const ds = q
+        ? USERS.filter((u) => `${u.ma_nv} ${u.ten || ''}`.toLowerCase().includes(q))
+        : USERS;
+      const t = $('#usrTable');
+      if (!ds.length) {
+        t.innerHTML = '<tr><td style="padding:10px;color:var(--muted)">Chưa có tài khoản nào'
+          + (q ? ' khớp từ khoá.' : '. Tài khoản được lập ở lần đăng nhập đầu tiên.') + '</td></tr>';
+        return;
+      }
+      const th = (x, w) => `<th style="padding:6px;text-align:left${w ? `;width:${w}` : ''}">${x}</th>`;
+      t.innerHTML = `<tr style="background:var(--hover)">${th('Mã NV', '110px')}${th('Họ tên')}`
+        + `${th('Trung tâm', '90px')}${th('Trạng thái', '190px')}${th('Đăng nhập cuối', '140px')}`
+        + `${th('', '210px')}</tr>`
+        + ds.map((u) => {
+          const tt = u.dangKhoa
+            ? `<b style="color:var(--bad,#d03b3b)">🔒 Đang khoá</b> đến ${ngayGio(u.khoa_den)}`
+            : u.doi_mk
+              ? '<span style="color:var(--warn,#e08a00)">⚠ Phải đổi mật khẩu</span>'
+              : `<span style="color:var(--muted)">Bình thường</span>`
+                + (u.sai_lien ? ` · sai ${u.sai_lien} lần` : '');
+          return `<tr style="border-bottom:1px dashed var(--hair)">
+            <td style="padding:6px;font-weight:600">${esc(u.ma_nv)}</td>
+            <td style="padding:6px">${esc(u.ten || '—')}</td>
+            <td style="padding:6px">${esc(u.department || '—')}</td>
+            <td style="padding:6px">${tt}</td>
+            <td style="padding:6px;color:var(--muted)">${ngayGio(u.dn_cuoi)}</td>
+            <td style="padding:6px;white-space:nowrap">
+              <button class="ghost" data-viec="mo-khoa" data-ma="${esc(u.ma_nv)}"
+                ${u.dangKhoa ? '' : 'disabled title="Tài khoản này không bị khoá"'}>🔓 Mở khoá</button>
+              <button class="ghost" data-viec="dat-lai-mk" data-ma="${esc(u.ma_nv)}">🔑 Đặt lại MK</button>
+            </td></tr>`;
+        }).join('');
+    }
+
+    async function loadUsers() {
+      $('#usrOut').textContent = '';
+      try {
+        const d = await getJSON('/api/admin/lgc-users');
+        USERS = d.users || [];
+        const khoa = USERS.filter((u) => u.dangKhoa).length;
+        $('#usrCount').textContent = `${USERS.length} tài khoản`
+          + (khoa ? ` · ${khoa} đang bị khoá` : '')
+          + ` · khoá ${d.khoaPhut} phút sau ${d.saiToiDa} lần sai`;
+        veUsers();
+      } catch (e) { $('#usrOut').textContent = 'Lỗi: ' + e.message; }
+    }
+
+    $('#usrReload').addEventListener('click', loadUsers);
+    $('#usrSearch').addEventListener('input', veUsers);
+    // Bat su kien o CAP BANG: bang duoc ve lai sau moi thao tac nen gan
+    // listener vao tung nut se mat ngay sau lan ve lai dau tien.
+    $('#usrTable').addEventListener('click', async (ev) => {
+      const nut = ev.target.closest('button[data-viec]');
+      if (!nut) return;
+      const { viec, ma } = nut.dataset;
+      const hoi = viec === 'dat-lai-mk'
+        ? `Đặt lại mật khẩu của ${ma} về chính mã nhân viên VIẾT HOA?\n`
+          + 'Lần đăng nhập tới người này BẮT BUỘC phải đổi mật khẩu.'
+        : `Mở khoá tài khoản ${ma}? (mật khẩu giữ nguyên)`;
+      if (!window.confirm(hoi)) return;
+      nut.disabled = true;
+      $('#usrOut').textContent = 'Đang xử lý…';
+      try {
+        const res = await fetch(`/api/admin/lgc-users/${viec}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ma }),
+        });
+        const d = await res.json();
+        if (!res.ok || d.error) throw new Error(d.message || 'Thất bại');
+        $('#usrOut').textContent = '✔ ' + d.message;
+        await loadUsers();
+      } catch (e) {
+        $('#usrOut').textContent = 'Lỗi: ' + e.message;
+        nut.disabled = false;
+      }
+    });
+    loadUsers();
 
     load();
   </script>

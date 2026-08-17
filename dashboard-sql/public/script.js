@@ -1191,6 +1191,341 @@ let mainTotalRows = 0;  // tong so dong bang chi tiet (cho bo dem X/Y)
 
 let dashLoadSeq = 0; // chong race: doi filter nhanh -> chi render response MOI nhat
 
+// ===========================================================================
+// PHAN TICH CHUYEN SAU (truoc nam o trang /beta, nay o ngay Dashboard)
+// ===========================================================================
+//  MUC TIEU (SLA) KHONG con la thanh truot tren trang: no la CON SO NGHIEP VU
+//  CHOT, lay tu /api/kpi-config va chi sua duoc o trang /admin. De moi may tu
+//  keo mot kieu thi hai nguoi mo cung mot thang se doc ra hai ty le "dat" khac
+//  nhau ma khong ai biet vi sao.
+// ---------------------------------------------------------------------------
+let sauTargets = { tatTargetDays: 2, backlogWarnDays: 30 };
+let sauSeries = [];        // chuoi thang - chi co sau khi bam "Nap xu huong"
+let sauNotRec = [];        // dong chua doi ung - nt
+let sauRows = [];          // dong cua ky dang xem (tu /api/dashboard)
+let sauKpis = null;
+
+async function napMucTieu() {
+  try {
+    const d = await fetch('/api/kpi-config').then((r) => r.json());
+    if (Number.isFinite(Number(d.tatTargetDays))) sauTargets = d;
+  } catch (_) { /* giu mac dinh - khong lam hong ca trang vi mot con so */ }
+}
+
+/**
+ * TAT cua chang "XUAT KHO -> TRA US/SERVICE" = cot tat_days.
+ * ⚠️ KHONG phai tat_install_days (xuat kho -> lap len tau): chang do NGAN hon
+ * han nen cham SLA tren no thi ty le dat luon dep ma khong dung viec.
+ * Bo CUVT giong cach dashboard tinh TAT trung binh (CUVT do rieng).
+ */
+const sauTat = (rows) => (rows || [])
+  .filter((r) => (r.department || '').toUpperCase() !== 'CUVT')
+  .map((r) => Number(r.tat_days))
+  .filter((x) => Number.isFinite(x));
+
+const sauPct = (a, p) => {
+  if (!a.length) return 0;
+  const s = [...a].sort((x, y) => x - y);
+  return s[Math.max(0, Math.min(s.length - 1, Math.ceil(p * s.length) - 1))];
+};
+const sauAvg = (a) => (a.length ? a.reduce((s, x) => s + x, 0) / a.length : 0);
+const r1s = (n) => Math.round(n * 10) / 10;
+
+/** Sparkline SVG noi tuyen - khong can them thu vien. */
+function sauSpark(vals, mau) {
+  const v = (vals || []).map(Number).filter((x) => Number.isFinite(x));
+  if (v.length < 2) return '';
+  const w = 68, h = 22, lo = Math.min(...v), hi = Math.max(...v), dai = hi - lo || 1;
+  const pts = v.map((x, i) => `${(i / (v.length - 1)) * w},${h - ((x - lo) / dai) * (h - 4) - 2}`).join(' ');
+  const [cx, cy] = pts.split(' ').pop().split(',');
+  return `<svg class="spark" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-hidden="true">
+    <polyline points="${pts}" fill="none" stroke="${mau}" stroke-width="1.6"
+      stroke-linejoin="round" stroke-linecap="round" opacity=".85" />
+    <circle cx="${cx}" cy="${cy}" r="2.2" fill="${mau}" /></svg>`;
+}
+
+/**
+ * So voi ky truoc. Tra RONG khi KHONG co so ky truoc - KHONG bia mui ten.
+ * ⚠️ PHAI loai null/undefined/'' TRUOC khi goi Number(): Number(null) === 0 va
+ * Number('') === 0, deu la so huu han, nen chi kiem Number.isFinite() thoi thi
+ * "chua co so ky truoc" bien thanh "ky truoc bang 0" -> the KPI bay ra mot mui
+ * ten tang vot hoan toan bia dat. Da gap that: luc chua nap chuoi thang, the
+ * "Ton dong 36" hien "▲ 36 thiet bi so thang truoc".
+ */
+function sauDelta(nay, truoc, donVi, tot) {
+  if (truoc === null || truoc === undefined || truoc === '') return '';
+  if (!Number.isFinite(Number(truoc)) || !Number.isFinite(Number(nay))) return '';
+  const d = r1s(Number(nay) - Number(truoc));
+  if (d === 0) return '<span class="delta-flat">▬ không đổi</span>';
+  const giam = d < 0;
+  const hay = (tot === 'thap') ? giam : !giam;
+  return `<span class="${hay ? 'delta-good' : 'delta-bad'}">${giam ? '▼' : '▲'} ${Math.abs(d)}${donVi}</span>`
+    + ' <span class="text-muted">so tháng trước</span>';
+}
+
+const sauMau = (v, dat, canhBao, tot) => {
+  if (!Number.isFinite(Number(v))) return cssVar('--hair');
+  const x = Number(v);
+  const ok = (tot === 'thap') ? x <= dat : x >= dat;
+  const vua = (tot === 'thap') ? x <= canhBao : x >= canhBao;
+  return ok ? cssVar('--good') : vua ? cssVar('--warning') : cssVar('--critical');
+};
+
+function veSauKpis() {
+  const target = Number(sauTargets.tatTargetDays) || 2;
+  const tat = sauTat(sauRows);
+  const dat = tat.filter((x) => x <= target).length;
+  const quaHan = tat.length - dat;
+  const sla = tat.length ? Math.round((dat / tat.length) * 100) : 0;
+  const tb = r1s(sauAvg(tat));
+  const p90 = r1s(sauPct(tat, 0.9));
+  const k = sauKpis || {};
+  // ⚠️ CHI the nao co lich su THAT moi co mui ten + sparkline. Ty le dat, P90,
+  // qua han KHONG co so ky truoc -> de trong chu khong bia.
+  const truoc = sauSeries.length >= 2 ? sauSeries[sauSeries.length - 2] : null;
+  const cot = (f) => sauSeries.map((x) => x[f]);
+  const cards = [
+    { label: 'TAT xuất kho → trả US', big: `${tb} <span class="text-sm">ngày</span>`,
+      mau: sauMau(tb, target, target * 1.5, 'thap'),
+      sub: `Mục tiêu <b>${target} ngày</b> · ${tb <= target
+        ? `<span class="delta-good">đạt (dư ${r1s(target - tb)} ngày)</span>`
+        : `<span class="delta-bad">vượt ${r1s(tb - target)} ngày</span>`}` },
+    { label: 'Tỷ lệ đạt mục tiêu', big: `${sla}<span class="text-sm">%</span>`,
+      mau: sauMau(sla, 90, 70, 'cao'), sub: `${dat}/${tat.length} thiết bị trong ${target} ngày` },
+    { label: `Quá hạn (&gt; ${target} ngày)`, big: `${quaHan}`,
+      mau: quaHan ? cssVar('--critical') : cssVar('--good'),
+      sub: quaHan ? 'thiết bị cần xem lại' : 'không có ca nào quá hạn' },
+    { label: 'P90 — đuôi chậm', big: `${p90} <span class="text-sm">ngày</span>`,
+      mau: sauMau(p90, target, target * 2, 'thap'),
+      sub: `P50 (trung vị): ${r1s(sauPct(tat, 0.5))} ngày` },
+    { label: 'Tồn đọng (chưa đối ứng)', big: `${k.countNotReconciled ?? 0}`,
+      mau: sauMau(k.reconcileRate ?? 0, 90, 75, 'cao'),
+      sub: sauDelta(k.countNotReconciled, truoc ? truoc.notReconciled : undefined, ' thiết bị', 'thap'),
+      spark: sauSpark(cot('notReconciled'), cssVar('--series-5')) },
+    { label: 'Tỷ lệ đối ứng', big: `${k.reconcileRate ?? 0}<span class="text-sm">%</span>`,
+      mau: sauMau(k.reconcileRate ?? 0, 90, 75, 'cao'),
+      sub: sauDelta(k.reconcileRate, truoc ? truoc.reconcileRate : undefined, '%', 'cao'),
+      spark: sauSpark(cot('reconcileRate'), cssVar('--series-1')) },
+  ];
+  $('#sauKpis').innerHTML = cards.map((c) => `
+    <div class="kbox" style="--k:${c.mau}">
+      <div class="klabel">${c.label}</div>
+      <div class="kbig">${c.big}</div>
+      <div class="kfoot"><div class="ksub">${c.sub || ''}</div>${c.spark || ''}</div>
+    </div>`).join('');
+  $('#sauDesc').textContent =
+    `Mục tiêu ${target} ngày (xuất kho → trả US/service) · tồn đọng quá hạn sau `
+    + `${sauTargets.backlogWarnDays} ngày. Đổi ở trang /admin.`;
+}
+
+function veSauDist() {
+  const target = Number(sauTargets.tatTargetDays) || 2;
+  const data = sauTat(sauRows);
+  const edges = [0, 1, 2, 3, 5, 7, 10, 14, 21, 30, 9999];
+  const labels = ['0-1', '1-2', '2-3', '3-5', '5-7', '7-10', '10-14', '14-21', '21-30', '>30'];
+  const bins = new Array(labels.length).fill(0);
+  data.forEach((v) => {
+    for (let i = 0; i < edges.length - 1; i++) if (v >= edges[i] && v < edges[i + 1]) { bins[i]++; break; }
+  });
+  destroyChart('sauDist');
+  charts.sauDist = new Chart($('#cSauDist'), {
+    type: 'bar',
+    data: { labels, datasets: [{ label: 'Số thiết bị', data: bins, borderRadius: 4,
+      backgroundColor: bins.map((_, i) => (edges[i] >= target ? cssVar('--critical') : cssVar('--good')) + 'cc') }] },
+    options: { ...chartDefaults(), plugins: { legend: { display: false },
+      subtitle: { display: true, color: cssVar('--text-muted'),
+        text: `P50=${r1s(sauPct(data, 0.5))}n · P90=${r1s(sauPct(data, 0.9))}n · Mục tiêu=${target}n` } } },
+  });
+}
+
+function veSauPareto() {
+  // Gom theo PART NO chu khong liet ke tung thiet bi: cau hoi Pareto la "xu ly
+  // NHOM nao thi cat duoc phan lon thoi gian cho", ma nhom o day la ma vat tu.
+  const m = new Map();
+  (sauRows || []).forEach((r) => {
+    const v = Number(r.tat_days);
+    if (!Number.isFinite(v)) return;
+    const k = r.partno || '(trống)';
+    m.set(k, (m.get(k) || 0) + v);
+  });
+  const all = [...m.entries()].map(([pn, ngay]) => ({ pn, ngay })).sort((a, b) => b.ngay - a.ngay);
+  const tong = all.reduce((s, x) => s + x.ngay, 0) || 1;
+  const top = all.slice(0, Math.min(15, all.length));
+  // Luy ke tinh tren TOAN BO danh sach, chi HIEN 15 cot dau -> con so % noi
+  // dung su that "15 ma nay chiem X% tong thoi gian cho".
+  let dong = 0;
+  const luyKe = top.map((x) => { dong += x.ngay; return Math.round((dong / tong) * 1000) / 10; });
+  destroyChart('sauPareto');
+  charts.sauPareto = new Chart($('#cSauPareto'), {
+    data: {
+      labels: top.map((x) => x.pn),
+      datasets: [
+        { type: 'bar', label: 'Tổng ngày chờ', data: top.map((x) => r1s(x.ngay)), yAxisID: 'y',
+          backgroundColor: cssVar('--series-1') + 'cc', borderRadius: 4, order: 2 },
+        { type: 'line', label: '% luỹ kế', data: luyKe, yAxisID: 'y1',
+          borderColor: cssVar('--warning'), backgroundColor: cssVar('--warning'),
+          borderWidth: 2, tension: .25, pointRadius: 2, order: 1 },
+        { type: 'line', label: 'Mốc 80%', data: top.map(() => 80), yAxisID: 'y1',
+          borderColor: cssVar('--critical'), borderWidth: 1.5, borderDash: [4, 4], pointRadius: 0, order: 0 },
+      ],
+    },
+    options: { ...chartDefaults(),
+      plugins: { legend: { labels: { color: cssVar('--text-secondary'), boxWidth: 12, font: { size: 11 } } },
+        subtitle: { display: true, color: cssVar('--text-muted'),
+          text: `${top.length}/${all.length} mã vật tư chiếm ${luyKe[luyKe.length - 1] || 0}% tổng thời gian chờ` } },
+      scales: {
+        x: { grid: { display: false }, ticks: { color: cssVar('--text-muted'), font: { size: 10 }, maxRotation: 60, minRotation: 45 } },
+        y: { position: 'left', beginAtZero: true, grid: { color: cssVar('--hair') }, ticks: { color: cssVar('--text-muted') } },
+        y1: { position: 'right', min: 0, max: 100, grid: { drawOnChartArea: false },
+              ticks: { color: cssVar('--text-muted'), callback: (v) => v + '%' } },
+      } },
+  });
+}
+
+let sauCenterTable = null;
+function veSauCenter() {
+  const target = Number(sauTargets.tatTargetDays) || 2;
+  const m = new Map();
+  (sauRows || []).forEach((r) => {
+    const d = r.department || '(trống)';
+    if (d.toUpperCase() === 'CUVT') return;
+    if (!m.has(d)) m.set(d, { dep: d, tat: [], n: 0 });
+    const g = m.get(d); g.n++;
+    if (Number.isFinite(Number(r.tat_days))) g.tat.push(Number(r.tat_days));
+  });
+  const data = [...m.values()].map((g) => ({
+    dep: g.dep, n: g.n, avgTat: r1s(sauAvg(g.tat)), p90: r1s(sauPct(g.tat, 0.9)),
+    quaHan: g.tat.filter((x) => x > target).length,
+    sla: g.tat.length ? Math.round((g.tat.filter((x) => x <= target).length / g.tat.length) * 100) : null,
+  })).sort((a, b) => b.p90 - a.p90);
+  const soDo = (c) => {
+    const v = c.getValue();
+    if (v == null) return '—';
+    const col = v >= 90 ? cssVar('--good') : v >= 70 ? cssVar('--warning') : cssVar('--critical');
+    return `<b style="color:${col}">${v}%</b>`;
+  };
+  // ⚠️ Cot `responsiveCollapse` la BAT BUOC: khong co no thi Tabulator van
+  // giau cot tren man hinh hep nhung KHONG co nut nao de xo ra.
+  const cols = [
+    { formatter: 'responsiveCollapse', width: 34, minWidth: 34, hozAlign: 'center', resizable: false, headerSort: false },
+    { title: 'Trung tâm', field: 'dep', headerFilter: 'input', minWidth: 110, responsive: 0 },
+    { title: 'SLA đạt (%)', field: 'sla', hozAlign: 'right', sorter: 'number', formatter: soDo, minWidth: 95, responsive: 0 },
+    { title: 'TAT TB (ngày)', field: 'avgTat', hozAlign: 'right', sorter: 'number', minWidth: 110, responsive: 1 },
+    { title: 'P90 (ngày)', field: 'p90', hozAlign: 'right', sorter: 'number', minWidth: 100, responsive: 2 },
+    { title: `Quá hạn (>${target}n)`, field: 'quaHan', hozAlign: 'right', sorter: 'number', minWidth: 110, responsive: 3,
+      formatter: (c) => (Number(c.getValue()) ? `<b style="color:${cssVar('--critical')}">${c.getValue()}</b>` : '0') },
+    { title: 'SL thiết bị', field: 'n', hozAlign: 'right', sorter: 'number', minWidth: 100, responsive: 4 },
+  ];
+  if (sauCenterTable) { sauCenterTable.destroy(); sauCenterTable = null; }
+  sauCenterTable = new Tabulator('#sauCenterTable', {
+    data, columns: cols, layout: 'fitColumns', maxHeight: '360px',
+    responsiveLayout: 'collapse', responsiveLayoutCollapseStartOpen: false,
+    placeholder: 'Không có dữ liệu Trung tâm trong kỳ này.',
+  });
+}
+
+function veSauTrend() {
+  const target = Number(sauTargets.tatTargetDays) || 2;
+  const s = sauSeries;
+  const bars = s.map((x) => Number(x.notReconciled) || 0);
+  const lines = s.flatMap((x) => [x.tatTotal, x.tatInstall, x.tatUsReturn]).map(Number).filter(Number.isFinite);
+  // ⚠️ Cot ton dong chay toi hang chuc o truc phai con duong TAT chi vai ngay o
+  // truc trai -> de mac dinh thi cot cao kin khung con duong bi ep xuong day.
+  // Gioi han truc phai GAP DOI cot cao nhat va ha cot xuong con nen mo.
+  const maxBar = Math.max(1, ...bars);
+  const maxLine = Math.max(target, ...lines);
+  destroyChart('sauTrend');
+  charts.sauTrend = new Chart($('#cSauTrend'), {
+    data: {
+      labels: s.map((x) => x.month),
+      datasets: [
+        { type: 'bar', label: 'Chưa đối ứng', data: bars, yAxisID: 'y1',
+          backgroundColor: cssVar('--series-5') + '33', borderColor: cssVar('--series-5') + '55', borderWidth: 1, order: 9 },
+        { type: 'line', label: 'TAT tổng (3 chặng)', data: s.map((x) => x.tatTotal), yAxisID: 'y',
+          borderColor: cssVar('--series-1'), backgroundColor: cssVar('--series-1'), borderWidth: 3, tension: .3, order: 0 },
+        { type: 'line', label: 'TAT install', data: s.map((x) => x.tatInstall), yAxisID: 'y',
+          borderColor: cssVar('--series-1'), borderWidth: 1.6, borderDash: [5, 3], tension: .3, order: 1 },
+        { type: 'line', label: 'TAT US return', data: s.map((x) => x.tatUsReturn), yAxisID: 'y',
+          borderColor: cssVar('--series-8'), borderWidth: 1.6, tension: .3, order: 2 },
+        { type: 'line', label: `Mục tiêu ${target} ngày`, data: s.map(() => target), yAxisID: 'y',
+          borderColor: cssVar('--critical'), borderWidth: 1.5, borderDash: [4, 4], pointRadius: 0, order: 3 },
+      ],
+    },
+    options: { ...chartDefaults(),
+      plugins: { legend: { labels: { color: cssVar('--text-secondary'), boxWidth: 12, font: { size: 11 } } } },
+      scales: {
+        x: { grid: { color: cssVar('--hair') }, ticks: { color: cssVar('--text-muted'), maxRotation: 0, autoSkip: true } },
+        y: { position: 'left', beginAtZero: true, suggestedMax: maxLine * 1.25,
+             grid: { color: cssVar('--hair') }, ticks: { color: cssVar('--text-muted') } },
+        y1: { position: 'right', beginAtZero: true, max: maxBar * 2,
+              grid: { drawOnChartArea: false }, ticks: { color: cssVar('--text-muted') } },
+      } },
+  });
+}
+
+function veSauAging() {
+  // Moc dau BAM THEO MUC TIEU, moc "qua han" bam theo nguong ton dong dat o
+  // trang admin: de dai "0-7 ngay" co dinh thi voi muc tieu 2 ngay ca nhom qua
+  // han van nam gon trong cot xanh dau tien - bieu do giau mat thu can thay.
+  const t = Math.max(1, Math.round(Number(sauTargets.tatTargetDays) || 2));
+  const qh = Math.max(t + 1, Math.round(Number(sauTargets.backlogWarnDays) || 30));
+  const buckets = [
+    { l: `≤ ${t} ngày`, max: t, n: 0, c: '--good' },
+    { l: `${t + 1}-${qh}`, max: qh, n: 0, c: '--warning' },
+    { l: `${qh + 1}-90`, max: 90, n: 0, c: '--series-5' },
+    { l: '>90', max: Infinity, n: 0, c: '--critical' },
+  ].filter((b, i, a) => i === 0 || b.max > a[i - 1].max);
+  (sauNotRec || []).map((r) => Number(r.tat_days)).filter(Number.isFinite).forEach((v) => {
+    (buckets.find((x) => v <= x.max) || buckets[buckets.length - 1]).n += 1;
+  });
+  destroyChart('sauAging');
+  charts.sauAging = new Chart($('#cSauAging'), {
+    type: 'bar',
+    data: { labels: buckets.map((b) => b.l), datasets: [{ label: 'Thiết bị chưa đối ứng',
+      data: buckets.map((b) => b.n), backgroundColor: buckets.map((b) => cssVar(b.c) + 'cc'), borderRadius: 4 }] },
+    options: { ...chartDefaults(), plugins: { legend: { display: false } } },
+  });
+}
+
+/** Ve cac phan dung du lieu DA CO trong /api/dashboard (khong hoi them). */
+function veSauNhanh(dash) {
+  sauRows = dash.rows || [];
+  sauKpis = dash.kpis || {};
+  veSauKpis();
+  veSauDist();
+  veSauPareto();
+  veSauCenter();
+}
+
+/** Bam "Nap xu huong & ton dong" -> hoi them hai duong nang. */
+async function napSauNang() {
+  const nut = $('#sauRun');
+  nut.disabled = true;
+  const cu = nut.textContent;
+  nut.textContent = '⏳ Đang nạp…';
+  try {
+    const [nr, tr] = await Promise.all([
+      api('/api/reports/not-reconciled'),
+      api('/api/trend', { months: 6 }),
+    ]);
+    sauNotRec = nr.rows || [];
+    sauSeries = tr.series || [];
+    $('#sauTrendIdle').classList.add('hidden');
+    $('#sauAgingIdle').classList.add('hidden');
+    $('#sauTrendBox').classList.remove('hidden');
+    $('#sauAgingBox').classList.remove('hidden');
+    veSauTrend();
+    veSauAging();
+    veSauKpis();      // ve lai de co sparkline + so sanh ky truoc
+    nut.textContent = '↻ Nạp lại xu hướng';
+  } catch (e) {
+    nut.textContent = cu;
+    showError('Không nạp được xu hướng / tồn đọng: ' + e.message);
+  } finally {
+    nut.disabled = false;
+  }
+}
+
 async function loadDashboard() {
   const seq = ++dashLoadSeq;
   showError('');
@@ -1208,6 +1543,7 @@ async function loadDashboard() {
     baseKpiTotal = dash.kpis.tatTotalAvg || 0;
     renderKPIs(dash.kpis, dash.prevKpis);
     renderCharts(dash.charts);
+    veSauNhanh(dash);   // phan tich chuyen sau - dung du lieu vua tai, khong hoi them
 
     // Bang chi tiet: dung "rows" tra kem trong /api/dashboard (tranh query 2 lan).
     const rows = dash.rows || (await api('/api/tat/departments')).rows;
@@ -1374,7 +1710,7 @@ function veKpiNhanVien(sel, rows, kieu) {
   const coKhac = !laXuat && tong('sl_khac') > 0;
   const cot = laXuat
     ? ['Mã NV', 'Tên', 'Số phiếu xuất', 'Item xuất', 'Phiếu đã scan', 'Tỷ lệ scan']
-    : ['Mã NV', 'Tên', 'Số phiếu receive', 'Item', 'Tổng SL', 'SL nhập R', 'SL nhập C',
+    : ['Mã NV', 'Tên', 'Số phiếu', 'Item', 'Receive', 'Return', 'Tổng SL', 'SL nhập R', 'SL nhập C',
       ...(coKhac ? ['SL khác'] : []), 'Phiếu đã scan', 'Tỷ lệ scan'];
   const head = '<tr>' + cot.map((c, i) => `<th${i >= 2 ? ' class="ra-num"' : ''}>${c}</th>`).join('') + '</tr>';
   const num = (v) => `<td class="ra-num">${v}</td>`;
@@ -1384,7 +1720,8 @@ function veKpiNhanVien(sel, rows, kieu) {
     const duoi = num(`${r.da_scan}/${r.da_scan + r.chua_scan}`) + num(bar(r.ty_le_scan)) + '</tr>';
     return laXuat
       ? chung + num(r.so_xuat) + duoi
-      : chung + num(r.so_item) + num(r.tong_sl) + num(r.sl_r ?? 0) + num(r.sl_c ?? 0)
+      : chung + num(r.so_item) + num(r.so_receive ?? 0) + num(r.so_return ?? 0)
+        + num(r.tong_sl) + num(r.sl_r ?? 0) + num(r.sl_c ?? 0)
         + (coKhac ? num(r.sl_khac ?? 0) : '') + duoi;
   }).join('');
   const scanTong = tong('da_scan');
@@ -1393,7 +1730,8 @@ function veKpiNhanVien(sel, rows, kieu) {
     + num(tong('so_phieu'))
     + (laXuat
       ? num(tong('so_xuat'))
-      : num(tong('so_item')) + num(lam2(tong('tong_sl')))
+      : num(tong('so_item')) + num(tong('so_receive')) + num(tong('so_return'))
+        + num(lam2(tong('tong_sl')))
         + num(lam2(tong('sl_r'))) + num(lam2(tong('sl_c')))
         + (coKhac ? num(lam2(tong('sl_khac'))) : ''))
     + num(`${scanTong}/${scanMau}`)
@@ -2296,10 +2634,14 @@ function fmtScanCell(cell, params) {
   if (mau) {
     const c = cssVar(mau);
     const d = cell.getRow().getData();
-    const ma = params && params.khoa ? d[params.khoa] : '';
-    if (v === 'SCANNED' && params && params.loai && ma) {
+    const p = params || {};
+    // Uu tien lay THEO DONG (loaiField/khoaField) - bang Receiving co CA hai
+    // loai phieu, moi loai mot thu muc scan; con lai thi dung tham so co dinh.
+    const loai = p.loaiField ? d[p.loaiField] : p.loai;
+    const ma = p.khoaField ? d[p.khoaField] : (p.khoa ? d[p.khoa] : '');
+    if (v === 'SCANNED' && loai && ma) {
       return `<button type="button" class="tat-badge scan-mo" data-scan-mo`
-        + ` data-loai="${escapeHtml(params.loai)}" data-station="${escapeHtml(d.station || '')}"`
+        + ` data-loai="${escapeHtml(loai)}" data-station="${escapeHtml(d.station || '')}"`
         + ` data-ma="${escapeHtml(ma)}" style="background:${c}22;color:${c}"`
         + ` title="Bấm để mở file scan của phiếu ${escapeHtml(ma)}">${SCAN_LABEL[v]} ⤓</button>`;
     }
@@ -2903,14 +3245,37 @@ let recvTable = null;
 let recvTotalRows = 0;
 let recvLoadSeq = 0;
 
+/** Nhan loai dong cua tab Receiving - mot nguon duy nhat cho thuat ngu. */
+const RECV_LOAI_LABEL = { RECEIVE: 'Receive', RETURN: 'Return' };
+
 const COLS_RECEIVING = [
+  {
+    title: 'Loại', field: 'loai', hozAlign: 'center', width: 100,
+    headerTooltip: 'Receive = phiếu nhập mới (HISTORY.VM = B1). '
+      + 'Return = hàng trả lại kho (VM = EA/TC) — TRẢ LẠI KHO CŨNG LÀ MỘT LẦN NHẬP KHO '
+      + 'nên inspector được tính công. Phiếu trả đánh số bằng HISTORYNO_I.',
+    formatter: (cell) => {
+      const v = cell.getValue();
+      if (v !== 'RETURN') return `<span style="color:var(--text-muted)">${RECV_LOAI_LABEL.RECEIVE}</span>`;
+      const c = cssVar('--series-4');
+      return `<span class="tat-badge" style="background:${c}22;color:${c}">${RECV_LOAI_LABEL.RETURN}</span>`;
+    },
+    headerFilter: 'list',
+    headerFilterParams: { values: { '': 'Tất cả', ...RECV_LOAI_LABEL } },
+  },
+  {
+    title: 'Số phiếu', field: 'phieu_khoa', headerFilter: 'input',
+    headerTooltip: 'Receive: VOUCHERNO · Return: HISTORYNO_I. Hai loại đánh số khác nhau nên '
+      + 'gộp về một cột để đếm “số phiếu” cho đúng.',
+  },
   {
     title: 'Scan', field: 'scan', hozAlign: 'center', width: 105, ...SCAN_HEADER_FILTER,
     headerTooltip: 'Có file PDF trùng VOUCHERNO trong thư mục scan hay chưa. Chấp nhận CẢ HAI cách đặt tên: '
       + 'giữ nguyên “R-259454.pdf” (SGN) hoặc bỏ tiền tố “259454.pdf” (HAN). “—” = không đọc được thư mục. '
+      + 'Phiếu TRẢ đánh số bằng HISTORYNO_I và file nằm ở thư mục PICKING LIST. '
       + 'Ô “Đã scan” BẤM ĐƯỢC để mở chính file PDF trên máy chủ.',
     formatter: fmtScanCell,
-    formatterParams: { loai: 'receiving', khoa: 'voucherno' },
+    formatterParams: { loaiField: 'scan_loai', khoaField: 'scan_key' },
   },
   {
     title: 'Ngày giờ', field: 'receive_time_vn', 
@@ -2948,8 +3313,18 @@ function recvFilter(row) {
 
 function renderRecvKpis(k) {
   renderKpiCards('#recvKpi', [
-    { label: 'Item receive', value: k.soDong, unit: 'item', accent: '--series-1' },
-    { label: 'Số phiếu receive', value: k.soPhieu, unit: 'phiếu', accent: '--series-3' },
+    {
+      label: 'Item nhập kho', value: k.soDong, unit: 'item', accent: '--series-1',
+      title: 'Tổng item vào kho trong kỳ, GỒM CẢ hàng trả lại kho — trả lại kho cũng là '
+        + 'một lần nhập kho nên inspector được tính công.',
+    },
+    {
+      label: 'Trong đó: Return', value: k.soDongReturn ?? 0, unit: 'item', accent: '--series-4',
+      title: 'Item trả lại kho (HISTORY.VM = EA/TC). Phần còn lại là phiếu nhập mới (VM = B1): '
+        + `${(k.soDongReceive ?? 0).toLocaleString('vi')} item.`,
+    },
+    { label: 'Số phiếu', value: k.soPhieu, unit: 'phiếu', accent: '--series-3',
+      title: 'Receive đếm theo VOUCHERNO, Return đếm theo HISTORYNO_I.' },
     {
       label: 'Đã scan', value: `${k.daScan}/${k.tongPhieuScan}`, unit: `phiếu (${k.tyLeScan ?? 0}%)`,
       accent: (k.chuaScan === 0 && k.tongPhieuScan > 0) ? '--good' : '--warning',
@@ -3335,6 +3710,7 @@ async function init() {
   });
 
   // Tab chinh
+  $('#sauRun').addEventListener('click', napSauNang);
   $$('.mainTab').forEach((b) => b.addEventListener('click', () => switchTab(b.dataset.tab)));
   $$('.lgcTab').forEach((b) => b.addEventListener('click', () => switchLgcTab(b.dataset.lgc)));
   $('#lgcRun').addEventListener('click', runLgc);
@@ -3358,6 +3734,9 @@ async function init() {
   initPickslip();
   initReceiving();
   checkHealth();
+  // Muc tieu KPI phai co TRUOC khi ve dashboard - ve xong moi biet muc tieu
+  // thi cac the KPI se nhap nhay mot lan tu 2 ngay (mac dinh) sang so that.
+  await napMucTieu();
   await loadFilters(); // nap danh muc roi ve lai nut theo gia tri da khoi phuc
   if (!LGC_ONLY) loadDashboard();
 }

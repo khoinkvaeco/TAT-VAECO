@@ -4,6 +4,9 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>VAECO · Dashboard Báo cáo TAT</title>
+  <!-- Khong co the nay thi trinh duyet tu doi /favicon.ico -> 404 moi lan mo
+       trang, va tab hien bieu tuong trang tron. -->
+  <link rel="icon" href="favicon.svg" type="image/svg+xml" />
 
   <!-- Thư viện để NGAY TRÊN MÁY BACKEND, không tải từ CDN.
        Dựng lại bằng `npm run build:assets` (nguồn: node_modules, phiên bản ghim
@@ -251,6 +254,56 @@
       <!-- SO SANH NHIEU THANG (chuyen tu trang beta sang).
            Thang DA DONG duoc luu ra JSON o may chu nen tai rat nhanh; thang
            hien tai van tinh lai vi con dang phat sinh. Xem README §7g. -->
+      <!-- ============ PHAN TICH CHUYEN SAU (truoc o trang /beta) ============
+           Chuyen han sang dashboard theo yeu cau nghiep vu. MUC TIEU khong con
+           la thanh truot tren trang nua ma lay tu /api/kpi-config (sua o
+           /admin) - de moi may tu keo mot kieu thi hai nguoi mo cung mot thang
+           se doc ra hai ty le "dat" khac nhau ma khong ai biet vi sao. -->
+      <div class="card mb-5" id="sauCard">
+        <div class="flex items-center justify-between gap-3 flex-wrap mb-3">
+          <div>
+            <h3 class="card-title mb-0">Phân tích chuyên sâu <span class="unit">(SLA · phân phối · tồn đọng · Pareto)</span></h3>
+            <p class="text-xs text-muted mt-0.5" id="sauDesc"></p>
+          </div>
+          <!-- Hai bieu do "Xu huong" va "Aging" can THEM hai luot truy van
+               nang (/api/trend, /api/reports/not-reconciled) nen KHONG tu chay
+               khi mo trang - giong cach lam cua khoi "So sanh cac thang" ngay
+               duoi. Bon phan con lai dung du lieu dashboard DA CO san. -->
+          <button type="button" id="sauRun" class="btn-accent">▶ Nạp xu hướng &amp; tồn đọng</button>
+        </div>
+
+        <div id="sauKpis" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3 mb-4"></div>
+
+        <div class="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-4">
+          <div class="card">
+            <h3 class="card-title">Xu hướng TAT &amp; tồn đọng theo tháng</h3>
+            <p class="text-xs text-muted mb-2">Đường: TAT theo chặng (ngày, trục trái) · Cột mờ phía sau: số thiết bị chưa đối ứng (trục phải). Vạch đứt = mục tiêu.</p>
+            <div id="sauTrendIdle" class="text-sm text-secondary py-6 text-center">Bấm <b>▶ Nạp xu hướng &amp; tồn đọng</b> ở trên.</div>
+            <div class="chart-box hidden" id="sauTrendBox"><canvas id="cSauTrend"></canvas></div>
+          </div>
+          <div class="card">
+            <h3 class="card-title">Phân phối TAT <span class="unit">(vì sao “trung bình” gây hiểu nhầm)</span></h3>
+            <p class="text-xs text-muted mb-2">Cột: số thiết bị theo dải TAT xuất kho → trả US. Cột đỏ = đã vượt mục tiêu.</p>
+            <div class="chart-box"><canvas id="cSauDist"></canvas></div>
+          </div>
+          <div class="card">
+            <h3 class="card-title">Aging tồn đọng <span class="unit">(thiết bị CHƯA đối ứng theo tuổi)</span></h3>
+            <p class="text-xs text-muted mb-2">Nhóm theo số ngày kể từ khi xuất kho; mốc đầu bám theo mục tiêu, mốc quá hạn bám theo ngưỡng tồn đọng đặt ở trang admin.</p>
+            <div id="sauAgingIdle" class="text-sm text-secondary py-6 text-center">Bấm <b>▶ Nạp xu hướng &amp; tồn đọng</b> ở trên.</div>
+            <div class="chart-box hidden" id="sauAgingBox"><canvas id="cSauAging"></canvas></div>
+          </div>
+          <div class="card">
+            <h3 class="card-title">Pareto <span class="unit">(nhóm nhỏ nào gây phần lớn thời gian chờ)</span></h3>
+            <p class="text-xs text-muted mb-2">Cột: tổng số ngày chờ của từng Part No (15 mã cao nhất) · Đường: <b>% luỹ kế trên TOÀN BỘ</b> thiết bị trong kỳ. Vạch 80% cho biết cần xử lý bao nhiêu mã là đủ.</p>
+            <div class="chart-box"><canvas id="cSauPareto"></canvas></div>
+          </div>
+        </div>
+
+        <h3 class="card-title">Hiệu suất theo Trung tâm</h3>
+        <p class="text-xs text-muted mb-2">TAT trung bình, P90 (đuôi chậm), số thiết bị, và % đạt mục tiêu. Trên điện thoại bấm <b>+</b> để xem hết cột.</p>
+        <div id="sauCenterTable"></div>
+      </div>
+
       <div class="card mb-5" id="trendCard">
         <div class="flex items-center justify-between gap-3 flex-wrap mb-3">
           <div>
@@ -559,7 +612,7 @@
 
   <footer class="max-w-[1600px] mx-auto px-5 py-6 text-xs text-muted flex items-center gap-3 flex-wrap">
     <span>VAECO · Dashboard TAT — dữ liệu từ SQL Server (AMOS/NQT). Giờ đã quy đổi sang múi giờ Việt Nam (+7). Đơn vị TAT: ngày.</span>
-    <a href="/beta" class="ml-auto underline hover:no-underline" title="Dashboard beta — đề xuất cải tiến">✨ Beta</a>
+
     <a href="/admin.html" class="underline hover:no-underline" title="Review câu hỏi chatbot chưa hiểu">🛠️ Admin</a>
   </footer>
 

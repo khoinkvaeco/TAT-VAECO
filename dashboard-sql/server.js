@@ -813,6 +813,62 @@ const SCAN_DIR_FILE = path.join(DATA_DIR_EARLY(), 'scan-folders.json');
 const _scanCache = new Map();
 const SCAN_CACHE_MS = 60 * 1000;
 
+// ---------------------------------------------------------------------------
+// MUC TIEU KPI (SLA) - luu TREN MAY BACKEND, sua o trang /admin
+// ---------------------------------------------------------------------------
+//  VI SAO khong de thanh truot tren trang dashboard nua: muc tieu la CON SO
+//  NGHIEP VU CHOT, ai xem cung phai thay CUNG mot con so. De moi may tu keo
+//  mot kieu thi hai nguoi mo cung mot thang se doc ra hai ty le "dat" khac
+//  nhau ma khong ai biet vi sao.
+//  Cung quy tac voi thu muc scan (§6b): file JSON tren backend, MOI MAY DEU
+//  XEM duoc, chi MAY QUAN TRI (localhost + ADMIN_IPS) moi SUA duoc.
+// ---------------------------------------------------------------------------
+const KPI_TARGET_FILE = path.join(DATA_DIR_EARLY(), 'kpi-targets.json');
+
+/** Muc tieu mac dinh khi chua ai cau hinh (nghiep vu chot 04/2026). */
+const KPI_TARGET_MAC_DINH = {
+  // So NGAY toi da tu luc XUAT KHO den luc TRA US/SERVICE (cot tat_days).
+  // ⚠️ KHONG phai tat_install_days (xuat kho -> lap len tau) - chang do ngan
+  // hon han nen cham tren no thi ty le dat luon dep ma khong dung viec.
+  tatTargetDays: 2,
+  // Ton dong qua bao nhieu ngay thi coi la QUA HAN (cot aging + the KPI).
+  backlogWarnDays: 30,
+};
+
+function loadKpiTargets() {
+  let saved = {};
+  try {
+    if (fs.existsSync(KPI_TARGET_FILE)) saved = JSON.parse(fs.readFileSync(KPI_TARGET_FILE, 'utf8')) || {};
+  } catch (e) {
+    console.warn('[KPI] Khong doc duoc kpi-targets.json:', e.message);
+  }
+  // So khong hop le (chuoi, am, qua lon) -> LUI VE MAC DINH chu khong nhan
+  // bua: mot muc tieu = 0 se lam moi ty le "dat" thanh 0% ma khong bao gi.
+  const so = (v, mac, min, max) => {
+    const n = Number(v);
+    return Number.isFinite(n) && n >= min && n <= max ? Math.round(n * 10) / 10 : mac;
+  };
+  return {
+    tatTargetDays: so(saved.tatTargetDays, KPI_TARGET_MAC_DINH.tatTargetDays, 0.1, 365),
+    backlogWarnDays: so(saved.backlogWarnDays, KPI_TARGET_MAC_DINH.backlogWarnDays, 1, 3650),
+    updatedAt: saved.updatedAt || null,
+    updatedBy: saved.updatedBy || null,
+    macDinh: KPI_TARGET_MAC_DINH,
+  };
+}
+
+function saveKpiTargets(body, ip) {
+  const cu = loadKpiTargets();
+  const lay = (k) => (body && body[k] !== undefined && body[k] !== null && body[k] !== '' ? body[k] : cu[k]);
+  saveJsonSafe(KPI_TARGET_FILE, {
+    tatTargetDays: lay('tatTargetDays'),
+    backlogWarnDays: lay('backlogWarnDays'),
+    updatedAt: new Date().toISOString(),
+    updatedBy: ip || 'unknown',
+  });
+  return loadKpiTargets();
+}
+
 /**
  * Doc duong dan da luu (neu co), lui ve mac dinh trong CONFIG.
  * Cau truc tra ve, moi loai la mot bang tra cuu THEO STATION:
@@ -3511,9 +3567,18 @@ async function qReceiving(range, f, ghi = () => {}) {
   }
   w += storeInClause(f, 'x.store', params);
 
-  // Dong B1 con hieu luc = khong co dong CR nao cung RECDETAILNO_I
-  const conLai = `x.vm = 'B1' AND NOT EXISTS (
-        SELECT 1 FROM #hi c WHERE c.vm = 'CR' AND c.recdetailno = x.recdetailno)`;
+  // Dong con hieu luc:
+  //   - RECEIVE (B1): khong co dong CR nao cung RECDETAILNO_I (phieu bi huy)
+  //   - RETURN (EA/TC): giu het - AMOS khong huy phieu tra bang co che CR
+  // ⚠️ Bo loc "CONDITION khong chua US" o bien `w` AP CHO CA HAI loai (nghiep
+  // vu chon). He qua phai biet: dong return co CONDITION la US se KHONG hien
+  // ra va KHONG vao KPI inspector - hang tra ve kho phan lon la unserviceable
+  // nen day la mot bo phan dang ke. Muon xem het thi bo dieu kien o `w`.
+  const conLai = `(
+        (x.vm = 'B1' AND NOT EXISTS (
+          SELECT 1 FROM #hi c WHERE c.vm = 'CR' AND c.recdetailno = x.recdetailno))
+        OR x.vm IN ('EA', 'TC')
+      )`;
 
   const text = `
     IF OBJECT_ID('tempdb..#hraw') IS NOT NULL DROP TABLE #hraw;
@@ -3529,7 +3594,7 @@ async function qReceiving(range, f, ghi = () => {}) {
       h.[QTY], h.[DEL_DATE], h.[ORDERDATE], h.[MUTATION], h.[MUTATION_TIME]
     INTO #hraw
     FROM [DWH_DB]..[STG_AMOS].[HISTORY] h
-    WHERE h.[VM] IN ('B1', 'CR')
+    WHERE h.[VM] IN ('B1', 'CR', 'EA', 'TC')
       AND h.[DEL_DATE] >= ${dFrom} AND h.[DEL_DATE] < ${dTo};
 
     -- BUOC 2 (TAI CHO): cat got chuoi + doi ngay AMOS sang datetime.
@@ -3560,7 +3625,19 @@ async function qReceiving(range, f, ghi = () => {}) {
       -- NGAY GIO NHAP KHO day du: MUTATION (so ngay AMOS) + MUTATION_TIME
       -- (so ms ke tu 0h) -> gio VN. DEL_DATE chi co NGAY nen van giu lam moc
       -- ky bao cao, con cot hien tren bang la moc nay.
-      ${amosDayTimeToVN('h.[MUTATION]', 'h.[MUTATION_TIME]')} AS receive_time_vn
+      ${amosDayTimeToVN('h.[MUTATION]', 'h.[MUTATION_TIME]')} AS receive_time_vn,
+      -- LOAI dong: RECEIVE (mua/nhap moi, VM = B1) hay RETURN (hang tra lai
+      -- kho, VM = EA/TC - CUNG bo ma ma tab Quan ly xuat kho dung de tra
+      -- "phieu tra"). Nghiep vu: TRA LAI KHO CUNG LA MOT LAN NHAP KHO nen
+      -- inspector phai duoc tinh cong.
+      CASE WHEN RTRIM(h.[VM]) = 'B1' THEN 'RECEIVE'
+           WHEN RTRIM(h.[VM]) IN ('EA', 'TC') THEN 'RETURN'
+           ELSE 'CR' END                      AS loai,
+      -- KHOA PHIEU de dem "da/chua scan" THEO PHIEU. Hai loai danh so khac
+      -- nhau: phieu receive theo VOUCHERNO, phieu tra theo HISTORYNO_I.
+      CASE WHEN RTRIM(h.[VM]) IN ('EA', 'TC')
+           THEN CONVERT(varchar(32), TRY_CONVERT(bigint, h.[HISTORYNO_I]))
+           ELSE RTRIM(h.[VOUCHERNO]) END      AS phieu_khoa
     INTO #hi
     FROM #hraw h;
     DROP TABLE #hraw;
@@ -3612,7 +3689,9 @@ async function qReceiving(range, f, ghi = () => {}) {
     SELECT x.created_by AS ma_nv,
            MAX(${tenNhanVien('si')}) AS ten_nv,
            COUNT(*) AS so_item,
-           COUNT(DISTINCT x.voucherno) AS so_phieu,
+           COUNT(DISTINCT x.phieu_khoa) AS so_phieu,
+           SUM(CASE WHEN x.loai = 'RECEIVE' THEN 1 ELSE 0 END) AS so_receive,
+           SUM(CASE WHEN x.loai = 'RETURN'  THEN 1 ELSE 0 END) AS so_return,
            SUM(TRY_CONVERT(float, x.qty)) AS tong_sl,
            SUM(CASE WHEN ${nhomMatClass('x.mat_class')} = 'R'
                     THEN TRY_CONVERT(float, x.qty) ELSE 0 END) AS sl_r,
@@ -3628,7 +3707,7 @@ async function qReceiving(range, f, ghi = () => {}) {
 
   ghi(`Kỳ báo cáo: ${range.label} (${String(range.from).slice(0, 10)} → ${String(range.to).slice(0, 10)})`);
   const sets = await buoc(ghi,
-    'Kéo HISTORY (VM = B1 + CR) về #temp rồi gom số liệu (qua linked server — bước lâu nhất)',
+    'Kéo HISTORY (VM = B1 + CR + EA/TC) về #temp rồi gom số liệu (qua linked server — bước lâu nhất)',
     () => queryMulti(text, params));
   const pick = (k) => sets.find((s) => s.length && k in s[0]) || [];
   const cnt = pick('b1_tho')[0] || {};
@@ -3640,9 +3719,17 @@ async function qReceiving(range, f, ghi = () => {}) {
   //     theo dong. Xem giai thich o enrichPickslipRows().
   const vouchers = pick('vc_all');
   const dirs = loadScanDirs();
-  // MOI STATION MOT THU MUC - tra cuu theo station cua tung voucher
-  const index = await buoc(ghi, 'Đọc thư mục file scan phiếu nhập',
-    () => loadScanIndex(dirs.receiving, 'full'));
+  // MOI STATION MOT THU MUC - tra cuu theo station cua tung voucher.
+  // ⚠️ HAI THU MUC KHAC NHAU cho hai loai phieu:
+  //   RECEIVE -> thu muc 'receiving', ten file = <VOUCHERNO>.pdf (nguyen ten)
+  //   RETURN  -> thu muc 'picking',   ten file = <HISTORYNO_I>-….pdf
+  // Phieu tra nam trong thu muc PICKING LIST (dung cho tab Quan ly xuat kho da
+  // lam nhu vay) - tra nham thu muc thi moi phieu tra deu bao "chua scan" oan.
+  const [index, indexTra] = await buoc(ghi, 'Đọc thư mục file scan phiếu nhập + phiếu trả',
+    () => Promise.all([
+      loadScanIndex(dirs.receiving, 'full'),
+      loadScanIndex(dirs.picking, 'prefix'),
+    ]));
   // TEN FILE SCAN KHAC NHAU THEO STATION:
   //   HAN bo tien to 'R-'  -> file '259454.pdf'
   //   SGN giu nguyen       -> file 'R-259454.pdf'
@@ -3653,6 +3740,15 @@ async function qReceiving(range, f, ghi = () => {}) {
     const bo = raw.replace(/^R-/i, '').trim();
     return [...new Set([raw, bo].filter(Boolean))];
   };
+
+  /**
+   * Tra trang thai scan cua MOT phieu, chon dung THU MUC theo loai phieu.
+   * RETURN dung thu muc picking list + khoa <HISTORYNO_I>; RECEIVE dung thu
+   * muc receiving + khoa <VOUCHERNO> (thu ca dang co va khong co tien to R-).
+   */
+  const traScan = (loai, station, khoa) => (loai === 'RETURN'
+    ? scanStateNhieuKhoa(indexTra, station, [String(khoa || '').trim()])
+    : scanStateNhieuKhoa(index, station, scanKeys(khoa)));
 
   let daScan = 0;
   let chuaScan = 0;
@@ -3670,7 +3766,7 @@ async function qReceiving(range, f, ghi = () => {}) {
   // bang MIN o SQL) - neu khong, cong ca bang KPI se lon hon so cua ca tab.
   const scanTheoNv = new Map();
   for (const v of vouchers) {
-    const { trangThai: s } = scanStateNhieuKhoa(index, v.station, scanKeys(v.vc_all));
+    const { trangThai: s } = traScan(v.loai, v.station, v.vc_all);
     if (s === 'SCANNED') daScan += 1;
     else if (s === 'CHUA_SCAN') chuaScan += 1;
     gom(byStation, v.station, s);
@@ -3688,12 +3784,17 @@ async function qReceiving(range, f, ghi = () => {}) {
   let daScanDong = 0;
   let chuaScanDong = 0;
   for (const r of rows) {
-    const ung = scanKeys(r.voucherno);
-    const kq = scanStateNhieuKhoa(index, r.station, ung);
+    const laTra = r.loai === 'RETURN';
+    const ung = laTra ? [String(r.phieu_khoa || '').trim()] : scanKeys(r.voucherno);
+    const kq = traScan(r.loai, r.station, laTra ? r.phieu_khoa : r.voucherno);
     r.scan = kq.trangThai;
     // Tim thay thi hien DUNG ten file da khop; chua thay thi liet ke ca hai
     // dang de nguoi dung biet can dat ten the nao.
     r.voucher_scan = kq.khoaKhop || ung.join(' hoặc ');
+    // Cho nut "mo file scan" o giao dien biet phai tim o THU MUC nao va bang
+    // KHOA nao - hai loai phieu nam o hai thu muc khac han.
+    r.scan_loai = laTra ? 'picking' : 'receiving';
+    r.scan_key = laTra ? String(r.phieu_khoa || '') : String(r.voucherno || '');
     if (r.scan === 'SCANNED') daScanDong += 1;
     else if (r.scan === 'CHUA_SCAN') chuaScanDong += 1;
     const day = r.del_date instanceof Date ? r.del_date.toISOString().slice(0, 10) : String(r.del_date || '').slice(0, 10);
@@ -3711,9 +3812,14 @@ async function qReceiving(range, f, ghi = () => {}) {
     kpis: {
       soDong: tot.tong_dong || 0,
       soPhieu: tot.tong_phieu || 0,
+      // Tach RECEIVE / RETURN: hai viec khac nhau nhung deu la NHAP KHO nen
+      // gop chung mot bang, chi tach con so de nhin ra ty trong.
+      soDongReceive: tot.dong_receive || 0,
+      soDongReturn: tot.dong_return || 0,
       b1Tho: cnt.b1_tho || 0,
       crHuy: cnt.cr_huy || 0,
       b1BiHuy: cnt.b1_bi_huy || 0,
+      retTho: cnt.ret_tho || 0,
       daScan: daScan,
       chuaScan: chuaScan,
       tongPhieuScan: daScan + chuaScan,
@@ -3732,8 +3838,10 @@ async function qReceiving(range, f, ghi = () => {}) {
         return {
           ma_nv: ma,
           ten_nv: String(r.ten_nv || '').trim(),
-          so_phieu: sn.soPhieu,   // moi voucher quy cho DUNG MOT nguoi
+          so_phieu: sn.soPhieu,   // moi phieu quy cho DUNG MOT nguoi
           so_item: r.so_item || 0,
+          so_receive: r.so_receive || 0,
+          so_return: r.so_return || 0,
           tong_sl: lam2(r.tong_sl),
           sl_r: lam2(r.sl_r),
           sl_c: lam2(r.sl_c),
@@ -5594,7 +5702,9 @@ app.get('/api/progress/:job', (req, res) => {
 // --- XAC THUC LGC: dang nhap / doi mat khau / thong tin nguoi dung ---
 //     Gioi han so lan thu theo IP (chong do mat khau tu nhieu tai khoan khac
 //     nhau - khoa theo tai khoan o auth-lgc.js khong chan duoc kieu do nay).
-const LGC_THU_TOI_DA = 10;         // 10 lan / phut / IP
+// 10 lan / phut / IP. Chinh duoc qua .env (LGC_RATE_PER_MIN) - bai kiem
+// tools/admincheck.js can nhieu luot dang nhap lien tiep hon muc nay.
+const LGC_THU_TOI_DA = Math.max(3, parseInt(process.env.LGC_RATE_PER_MIN || '10', 10) || 10);
 
 const datCookieLgc = (res, ma) => res.setHeader('Set-Cookie',
   `${authLgc.COOKIE}=${authLgc.taoVe(ma)}; Path=/; Max-Age=${Math.floor(authLgc.TTL_MS / 1000)}; HttpOnly; SameSite=Lax`);
@@ -5631,6 +5741,54 @@ app.get('/api/lgc/me', h(async (req, res) => {
 app.post('/api/lgc/logout', h(async (req, res) => {
   res.setHeader('Set-Cookie', `${authLgc.COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax`);
   res.json({ ok: true });
+}));
+
+// ---------------------------------------------------------------------------
+// ADMIN: QUAN LY TAI KHOAN LGC (quen mat khau / bi khoa)
+// ---------------------------------------------------------------------------
+//  Ba duong nay nam duoi /api/admin/... nen TU DONG di qua adminGuard theo IP.
+//  Hai viec TACH RIENG co chu dinh:
+//    - MO KHOA   : chi go trang thai khoa, GIU NGUYEN mat khau. Nguoi go sai
+//                  vai lan roi bi khoa 15 phut nhung van nho mat khau thi
+//                  khong co ly do gi bat ho dat lai.
+//    - DAT LAI MK: ve chinh MA NHAN VIEN VIET HOA + BAT BUOC doi ngay lan sau.
+//  Moi thao tac deu ghi vao nhat ky dang nhap LGC (ghiLog) kem IP quan tri.
+// ---------------------------------------------------------------------------
+app.get('/api/admin/lgc-users', h(async (req, res) => {
+  const ds = await authLgc.danhSachUser();
+  const now = Date.now();
+  res.json({
+    ok: true,
+    saiToiDa: authLgc.SAI_TOI_DA,
+    khoaPhut: authLgc.KHOA_PHUT,
+    ...authLgc.trangThai(),
+    users: ds.map((u) => ({
+      ...u,
+      dangKhoa: !!(u.khoa_den && new Date(u.khoa_den).getTime() > now),
+    })),
+  });
+}));
+
+app.post('/api/admin/lgc-users/:viec', h(async (req, res) => {
+  const viec = String(req.params.viec || '');
+  if (viec !== 'mo-khoa' && viec !== 'dat-lai-mk') {
+    return res.status(404).json({ error: true, message: 'Việc không hợp lệ (mo-khoa | dat-lai-mk).' });
+  }
+  const ma = String((req.body || {}).ma || '').trim().toUpperCase();
+  if (!ma) return res.status(400).json({ error: true, message: 'Thiếu mã nhân viên.' });
+  const ip = String(req.socket.remoteAddress || '').replace(/^::ffff:/, '');
+  const kq = viec === 'mo-khoa'
+    ? await authLgc.moKhoaUser(ma)
+    : await authLgc.datLaiMatKhau(ma);
+  if (!kq.ok) return res.status(404).json({ error: true, message: kq.message });
+  authLgc.ghiLog(ip, ma, viec === 'mo-khoa' ? 'ADMIN_UNLOCK' : 'ADMIN_RESET', `boi IP ${ip}`);
+  console.log(`[LGC] IP ${ip} ${viec === 'mo-khoa' ? 'MO KHOA' : 'DAT LAI MAT KHAU'} cho ${ma}`);
+  res.json({
+    ok: true, ma,
+    message: viec === 'mo-khoa'
+      ? `Đã mở khoá ${ma}. Mật khẩu giữ nguyên.`
+      : `Đã đặt lại mật khẩu ${ma} về chính mã nhân viên VIẾT HOA. Lần đăng nhập tới bắt buộc đổi mật khẩu.`,
+  });
 }));
 
 // --- ADMIN: xem / xoa ban luu KPI theo thang ([NQT].[dbo].[TAT_KPI_THANG]) ---
@@ -6069,6 +6227,31 @@ app.get('/api/scan-config', h(async (req, res) => {
     // (giong adminGuard, khong tin header) - server VAN chan lai o POST.
     canEdit: isAdminAllowed(String(req.socket.remoteAddress || '').replace(/^::ffff:/, '')),
   });
+}));
+
+// --- MUC TIEU KPI: ai cung XEM duoc, chi may quan tri moi SUA duoc ---
+app.get('/api/kpi-config', h(async (req, res) => {
+  res.json({
+    ...loadKpiTargets(),
+    canEdit: isAdminAllowed(String(req.socket.remoteAddress || '').replace(/^::ffff:/, '')),
+  });
+}));
+
+app.post('/api/admin/kpi-config', h(async (req, res) => {
+  const b = req.body || {};
+  for (const [k, min, max] of [['tatTargetDays', 0.1, 365], ['backlogWarnDays', 1, 3650]]) {
+    if (b[k] === undefined || b[k] === null || b[k] === '') continue;
+    const n = Number(b[k]);
+    if (!Number.isFinite(n) || n < min || n > max) {
+      return res.status(400).json({
+        error: true, message: `"${k}" phải là số trong khoảng ${min} – ${max}.`,
+      });
+    }
+  }
+  const ip = String(req.socket.remoteAddress || '').replace(/^::ffff:/, '');
+  const kq = saveKpiTargets(b, ip);
+  console.log(`[KPI] IP ${ip} dat muc tieu: TAT=${kq.tatTargetDays} ngay, ton dong=${kq.backlogWarnDays} ngay`);
+  res.json({ ok: true, ...kq });
 }));
 
 app.post('/api/admin/scan-config', h(async (req, res) => {
@@ -7506,8 +7689,10 @@ app.get(['/wp', '/wp.html', '/rasoat'], (req, res) =>
 // Route tien: /admin -> trang admin review log cau hoi chua hieu
 app.get('/admin', (req, res) => res.sendFile(path.join(__dirname, 'public', 'admin.html')));
 
-// Route: /beta -> trang dashboard beta (de xuat cai tien, lay y kien)
-app.get('/beta', (req, res) => res.sendFile(path.join(__dirname, 'public', 'beta.html')));
+// Route: /beta -> DA CHUYEN HAN sang Dashboard (nghiep vu duyet xong).
+// Giu lai duong dan cu de ai da ghim link khong gap trang trang; chuyen thang
+// ve Dashboard thay vi de mot ban sao thu hai troi tu tu lech voi ban chinh.
+app.get(['/beta', '/beta.html'], (req, res) => res.redirect(301, '/'));
 
 // Route: /lgc -> VAN LA index.html, chi khac diem vao. Frontend thay duong dan
 // la /lgc thi mo thang nhom "LGC" va an cac tab TAT (che do LGC).
