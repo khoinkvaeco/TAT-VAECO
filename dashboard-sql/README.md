@@ -1482,6 +1482,72 @@ dashboard”*: đạt + quá hạn = tổng · tỷ lệ khớp số đếm · P
 tiết** (chứng minh không tính trên bảng bị cắt) · đổi mục tiêu ở `/admin` thì dashboard đổi **ngay**
 · và **trung bình / P50 / P90 KHÔNG đổi** theo mục tiêu (đổi mà chúng cũng đổi là dấu hiệu tính nhầm).
 
+## 7n. ⚠️ Lỗi đã LỌT lên sản xuất — và cách bịt để không lặp lại
+
+Tab Receiving được bổ sung cột **Loại** (Receive/Return) và số phiếu chuẩn hoá. **Bốn bộ kiểm tra
+đều ĐẠT**, nhưng trên dữ liệu thật **mọi dòng đều bị xếp “Receive”** và cột số phiếu **trống rỗng**.
+
+**Nguyên nhân:** khối sửa file `server.js` bị lỗi giữa chừng nên **chưa hề được ghi** — câu SQL thật
+không có cột `loai` / số phiếu. Bài kiểm tra không thấy vì `kpicheck` chạy ở **`DEMO_MODE`**, mà ở
+đó dữ liệu do `demo-data.js` sinh ra **luôn có đủ** các cột. Nói cách khác: **bộ kiểm tra đang đo
+dữ liệu mẫu, không đo câu SQL.**
+
+### Bịt bằng LUẬT 5 của `tools/sqlcheck.js`
+
+`sqlcheck` chạy server ở chế độ **LIVE** với `mssql` giả, nên nó bắt được **chính câu SQL thật** —
+không thể bị che mất bởi dữ liệu mẫu. Luật mới: với mỗi endpoint, liệt kê các cột **bắt buộc** phải
+có trong câu SQL mà endpoint đó sinh ra.
+
+```
+/api/receiving : loai · voucherno · voucherno_goc · dong_receive · dong_return · so_receive · so_return
+/api/dashboard : tat_days · sla_n · sla_dat · sla_p50 · sla_p90
+/api/pickslip  : so_item · so_huy · so_can_scan
+```
+
+Hai điều đã **đo thật**, không suy đoán:
+
+* **Bắt được lỗi:** bỏ cột `so_return` khỏi câu SQL → `✖ /api/receiving: câu SQL THIẾU cột
+  "so_return"`, trong khi `kpicheck` (demo) vẫn báo ĐẠT — đúng y kịch bản đã lọt.
+* **Khớp chuỗi con là chưa đủ:** `AS loai` vẫn nằm trong `AS loai_DA_BI_THAO`, nên bản đầu của luật
+  báo ĐẠT khi cột đã bị đổi tên. Đã siết thành khớp **trọn tên cột** (`\bAS\s+\[?ten\]?\b`).
+* ⚠️ **Giới hạn đã biết:** luật bắt trường hợp cột **không hề có** trong endpoint — đúng cái đã xảy
+  ra. Nó **không** bắt trường hợp cột bị *đổi tên* ở một lệnh trong khi lệnh khác vẫn dùng tên cũ;
+  nhưng trường hợp đó **SQL Server báo lỗi ngay** khi chạy thật, chứ không âm thầm sai.
+
+## 7o. Phân loại Receive / Return trong tab Receiving
+
+### Nhận biết bằng HAI dấu hiệu, chỉ cần MỘT
+
+| Dấu hiệu | Ghi chú |
+|---|---|
+| `VM ∈ {EA, TC}` | bộ mã mà tab *Quản lý xuất kho* dùng để tra phiếu trả (`fetchReturnHistory`) |
+| `VOUCHERNO` bắt đầu **`P-CA-`** | phiếu **trả service / recertify**. ⚠️ **Nghiệp vụ chốt.** Trong `HISTORY` các dòng này **không chắc** mang `VM = 'TC'`, nên chỉ xét `VM` là chúng bị xếp nhầm thành *Receive* |
+
+Đối chiếu trên dữ liệu thật bằng **`GET /api/admin/diag/receiving-loai`** — đếm số dòng theo
+(`VM` × tiền tố `VOUCHERNO`), để nhìn ra ngay phiếu `P-CA-…` đang mang `VM` nào và có mã nào bị bỏ
+sót không.
+
+### ⚠️ Kỳ báo cáo dùng HAI cột ngày khác nhau
+
+| Loại | Cột ngày |
+|---|---|
+| `B1` / `CR` (nhập mới) | **`DEL_DATE`** |
+| `EA` / `TC` (trả lại kho) | **`MUTATION`** — đúng cột mà tab *Quản lý xuất kho* dùng làm “ngày trả kho” |
+
+Lọc cả hai bằng `DEL_DATE` là **dòng trả rơi hết khỏi kỳ mà không báo gì** — tab Receiving không có
+dòng RETURN nào. Cột `del_date` trả về cũng lấy theo đúng quy tắc này, nếu không biểu đồ theo ngày
+mất hết dòng trả.
+
+### Một số phiếu — MỘT cách viết
+
+Phiếu trả hiển thị ở cột **Receiving No** dưới dạng **`<HISTORYNO_I>-R`**, **giống hệt** cột *Phiếu
+trả* của tab *Quản lý xuất kho*. Cột **“Số phiếu”** riêng đã **bỏ** — hai cột cùng một ý nghĩa thì
+chỉ nên có một chỗ hiện. Số gốc trong AMOS (`P-CA-…`) giữ ở `voucherno_goc`, rê chuột vào ô là thấy.
+
+⚠️ **File scan vẫn tra bằng `HISTORYNO_I` THUẦN**, không phải số hiển thị có đuôi `-R`: tên file
+thật là `<HISTORYNO_I>-….pdf` mà chế độ `prefix` cắt từ dấu `-`, lấy nhầm số hiển thị là **mọi phiếu
+trả đều báo “chưa scan” oan**.
+
 ## 8. API
 
 | Endpoint | Mô tả |
@@ -1498,6 +1564,7 @@ tiết** (chứng minh không tính trên bảng bị cắt) · đổi mục ti�
 | `GET /api/scan-config` | Đường dẫn 2 thư mục file scan + **trạng thái thật** (đọc được bao nhiêu file PDF / lỗi gì) + `canEdit`. **Mọi máy xem được.** |
 | `GET /api/scan/tim` | Liệt kê file PDF ứng với một phiếu (`loai`, `station`, `ma`). **Sau cổng LGC.** |
 | `GET /api/scan/file` | Trả về chính file PDF (`loai`, `station`, `ma`, `ten`). Tên file phải nằm trong danh sách thật của thư mục — xem §6c. **Sau cổng LGC.** |
+| `GET /api/admin/diag/receiving-loai` | Đếm dòng `HISTORY` theo (`VM` × tiền tố `VOUCHERNO`) để đối chiếu phân loại Receive/Return trên dữ liệu thật. **Chỉ IP quản trị.** |
 | `GET /api/kpi-config` | Mục tiêu KPI đang dùng + `canEdit`. Ai cũng xem được. |
 | `POST /api/admin/kpi-config` | Đặt mục tiêu (`tatTargetDays`, `backlogWarnDays`). Lưu `data/kpi-targets.json`. **Chỉ IP quản trị.** |
 | `GET /api/admin/lgc-users` | Danh sách tài khoản LGC + trạng thái khoá (KHÔNG kèm hash mật khẩu). **Chỉ IP quản trị.** |

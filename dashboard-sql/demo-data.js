@@ -685,9 +685,9 @@ const nhomMc = (v) => {
 
 function gomTheoNhanVien(rows, cot, kieu) {
   const m = new Map();
-  // Phieu tra danh so bang HISTORYNO_I chu khong phai VOUCHERNO -> dung
-  // phieu_khoa (server tra ve san) de dem "so phieu" cho dung ca hai loai.
-  const khoaPhieu = kieu === 'pickslip' ? 'picking_listno' : 'phieu_khoa';
+  // Ca RECEIVE lan RETURN dung CHUNG cot voucherno lam so phieu (phieu tra
+  // da duoc chuan hoa thanh '<HISTORYNO_I>-R' ngay o server).
+  const khoaPhieu = kieu === 'pickslip' ? 'picking_listno' : 'voucherno';
   for (const r of rows) {
     const ma = String(r[cot] || '').trim();
     if (!ma) continue;
@@ -1031,9 +1031,16 @@ function receiving(range, f) {
     // danh so bang HISTORYNO_I va file scan nam o thu muc PICKING LIST -
     // giong het server that.
     const laTra = rndInt(0, 99) < 25;
+    // Phieu tra: so GOC trong AMOS co dang 'P-CA-…' (phieu tra service /
+    // recertify) nhung so HIEN THI la '<HISTORYNO_I>-R', giong het cot
+    // "Phiếu trả" cua tab Quan ly xuat kho. File scan van dat theo
+    // HISTORYNO_I thuan.
+    const hist = rndInt(4000000, 4999999);
     vcPool.push({
       loai: laTra ? 'RETURN' : 'RECEIVE',
-      no: laTra ? String(rndInt(4000000, 4999999)) : 'R-' + rndInt(200000, 299999),
+      hist,
+      goc: laTra ? 'P-CA-' + rndInt(380000, 389999) : 'R-' + rndInt(200000, 299999),
+      no: laTra ? `${hist}-R` : 'R-' + rndInt(200000, 299999),
       scan: rndInt(0, 9) < 7 ? 'SCANNED' : 'CHUA_SCAN',
       inspector: rnd(INSPECTOR),
     });
@@ -1069,24 +1076,24 @@ function receiving(range, f) {
   rows.forEach((r) => {
     const v = rnd(vcPool);
     r.loai = v.loai;
-    r.phieu_khoa = v.no;
     r.created_by = v.inspector;   // mot phieu = mot inspector
+    r.voucherno = v.no;           // so HIEN THI tren cot "Receiving No"
+    r.voucherno_goc = v.goc;      // so goc trong AMOS (P-CA-… voi phieu tra)
+    r.historyno = v.hist;
     if (v.loai === 'RETURN') {
-      // Phieu tra: so phieu la HISTORYNO_I, file scan o thu muc picking list
-      r.voucherno = '';
-      r.historyno = Number(v.no);
-      r.voucher_scan = v.no;
+      // File scan o thu muc PICKING LIST, ten dat theo HISTORYNO_I THUAN
+      r.voucher_scan = String(v.hist);
       r.scan_loai = 'picking';
+      r.scan_key = String(v.hist);
     } else {
-      r.voucherno = v.no;
       // Ten file khac nhau theo station: SGN giu 'R-...', HAN bo tien to
       const giuR = (r.station || '').toUpperCase() === 'SGN';
       r.voucher_scan = v.scan === 'SCANNED'
         ? (giuR ? v.no : v.no.replace(/^R-/i, ''))
         : `${v.no} hoặc ${v.no.replace(/^R-/i, '')}`;
       r.scan_loai = 'receiving';
+      r.scan_key = v.no;
     }
-    r.scan_key = v.loai === 'RETURN' ? v.no : r.voucherno;
     r.scan = v.scan; // moi dong cung phieu PHAI cung trang thai scan
   });
   // Chi loc theo station/store - giong server (nhap kho khong theo Trung tam)
@@ -1094,7 +1101,7 @@ function receiving(range, f) {
   const pct = (a, b) => (b ? Math.round((a / b) * 1000) / 10 : 0);
   // Dem scan theo PHIEU (distinct voucher) - giong server that
   const vc = new Map();
-  kept.forEach((r) => vc.set(r.phieu_khoa, r));
+  kept.forEach((r) => vc.set(r.voucherno, r));
   const daScan = [...vc.values()].filter((r) => r.scan === 'SCANNED').length;
   const chuaScan = vc.size - daScan;
   const daScanDong = kept.filter((r) => r.scan === 'SCANNED').length;

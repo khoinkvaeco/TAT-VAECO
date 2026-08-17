@@ -3233,8 +3233,9 @@ const COLS_RECEIVING = [
   {
     title: 'Loại', field: 'loai', hozAlign: 'center', width: 100,
     headerTooltip: 'Receive = phiếu nhập mới (HISTORY.VM = B1). '
-      + 'Return = hàng trả lại kho (VM = EA/TC) — TRẢ LẠI KHO CŨNG LÀ MỘT LẦN NHẬP KHO '
-      + 'nên inspector được tính công. Phiếu trả đánh số bằng HISTORYNO_I.',
+      + 'Return = hàng trả lại kho — nhận biết bằng VM ∈ {EA, TC} HOẶC VOUCHERNO bắt đầu “P-CA-” '
+      + '(phiếu trả service / recertify). TRẢ LẠI KHO CŨNG LÀ MỘT LẦN NHẬP KHO nên inspector '
+      + 'được tính công. Đối chiếu được bằng /api/admin/diag/receiving-loai.',
     formatter: (cell) => {
       const v = cell.getValue();
       if (v !== 'RETURN') return `<span style="color:var(--text-muted)">${RECV_LOAI_LABEL.RECEIVE}</span>`;
@@ -3243,11 +3244,6 @@ const COLS_RECEIVING = [
     },
     headerFilter: 'list',
     headerFilterParams: { values: { '': 'Tất cả', ...RECV_LOAI_LABEL } },
-  },
-  {
-    title: 'Số phiếu', field: 'phieu_khoa', headerFilter: 'input',
-    headerTooltip: 'Receive: VOUCHERNO · Return: HISTORYNO_I. Hai loại đánh số khác nhau nên '
-      + 'gộp về một cột để đếm “số phiếu” cho đúng.',
   },
   {
     title: 'Scan', field: 'scan', hozAlign: 'center', width: 105, ...SCAN_HEADER_FILTER,
@@ -3265,7 +3261,19 @@ const COLS_RECEIVING = [
       + 'DEL_DATE chỉ có NGÀY nên vẫn dùng làm mốc kỳ báo cáo, còn cột này là mốc thật để đối chiếu.',
     formatter: (cell) => escapeHtml(fmtDateTime(cell.getValue())),
   },
-  { title: 'Receiving No', field: 'voucherno', headerFilter: 'input'},
+  {
+    title: 'Receiving No', field: 'voucherno', headerFilter: 'input',
+    headerTooltip: 'Receive: VOUCHERNO của AMOS. Return: <HISTORYNO_I>-R — GIỐNG HỆT cột '
+      + '“Phiếu trả” của tab Quản lý xuất kho, để một số phiếu trả chỉ có MỘT cách viết trong '
+      + 'cả chương trình. Rê chuột vào ô để xem số gốc trong AMOS (P-CA-…).',
+    formatter: (cell) => {
+      const d = cell.getRow().getData();
+      const v = cell.getValue() || '';
+      const goc = d.voucherno_goc && d.voucherno_goc !== v
+        ? ` title="Số gốc trong AMOS: ${escapeHtml(d.voucherno_goc)}"` : '';
+      return `<span${goc}>${escapeHtml(v)}</span>`;
+    },
+  },
   { title: 'Part No', field: 'partno', headerFilter: 'input' },
   { title: 'Serial / Batch', field: 'serialno', headerFilter: 'input' },
   { title: 'Qty', field: 'qty', hozAlign: 'right', sorter: 'number' },

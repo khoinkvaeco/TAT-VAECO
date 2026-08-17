@@ -165,10 +165,74 @@ function findWriteOutsideAppTables(sql) {
   return hits;
 }
 
+/**
+ * LUAT 5: CAU SQL PHAI SINH RA DU CAC COT MA NODE / GIAO DIEN DOC.
+ * ---------------------------------------------------------------------------
+ * ⚠️ LUAT NAY SINH RA TU MOT LOI THAT DA LOT LEN SAN XUAT.
+ * Tab Receiving duoc bo sung cot `loai` (Receive/Return) va so phieu chuan
+ * hoa. Bon bai kiem tra deu DAT vi chung chay o DEMO_MODE - ma o do du lieu
+ * do demo-data.js sinh ra, LUON CO du cac cot. Cau SQL that thi KHONG he
+ * duoc sua (mot khoi sua file bi loi giua chung nen khong ghi duoc). Ket qua:
+ * tren du lieu that MOI dong deu bi xep 'Receive' va cot so phieu trong rong,
+ * khong bai kiem nao thay.
+ *
+ * Bai nay soi CHINH CAU SQL nen no khong the bi che mat boi du lieu mau.
+ * Cach doc: voi moi endpoint, liet ke cac ten cot BAT BUOC phai xuat hien
+ * trong cac cau SQL ma endpoint do sinh ra.
+ *
+ * ⚠️ GIOI HAN DA BIET (do that, khong phai suy doan): luat nay bat truong hop
+ * cot KHONG HE CO trong ca endpoint - dung cai da xay ra. No KHONG bat duoc
+ * truong hop cot bi DOI TEN o mot lenh trong khi lenh khac van co ten cu
+ * (vd doi ten cot cua #hi nhung [3] van con `MIN(x.loai) AS loai`). Truong hop
+ * do KHONG nguy hiem bang: cac tham chieu `x.loai` con lai se thanh cot khong
+ * ton tai va SQL Server BAO LOI NGAY khi chay that, chu khong am tham sai.
+ */
+const COT_BAT_BUOC = {
+  '/api/receiving': [
+    // Phan loai Receive/Return + so phieu hien thi + so goc de doi chieu
+    'loai', 'voucherno', 'voucherno_goc',
+    // Tach so dong theo loai cho the KPI cua tab
+    'dong_receive', 'dong_return',
+    // KPI inspector: so dong receive/return cua tung nguoi
+    'so_receive', 'so_return',
+  ],
+  '/api/dashboard': [
+    // Chi so SLA phai tinh o SQL (khong phai o trinh duyet tren bang bi cat)
+    'tat_days', 'sla_n', 'sla_dat', 'sla_p50', 'sla_p90',
+  ],
+  // ⚠️ KHONG liet ke 'so_xuat' o day: cot do KHONG co trong SQL, Node tinh ra
+  // tu (so_item - so_huy). Liet ke nham lam bai kiem bao loi oan - da gap ngay
+  // luc viet luat nay.
+  '/api/pickslip': ['so_item', 'so_huy', 'so_can_scan'],
+};
+
+/**
+ * ⚠️ PHAI khop TRON TEN COT, khong duoc dung includes():
+ * 'AS loai' van nam TRONG 'AS loai_DA_BI_THAO', nen khop chuoi con se bao DAT
+ * ngay ca khi cot da bi doi ten. Da thu that luc chung minh luat nay.
+ */
+const reCot = (ten) => new RegExp(`\\bAS\\s+\\[?${ten}\\]?\\b`, 'i');
+
+function soiCotBatBuoc(theoEndpoint) {
+  const loi = [];
+  for (const [ep, cots] of Object.entries(COT_BAT_BUOC)) {
+    const sql = (theoEndpoint.get(ep) || []).join('\n');
+    if (!sql) { loi.push(`${ep}: KHONG bat duoc cau SQL nao`); continue; }
+    for (const cot of cots) {
+      if (!reCot(cot).test(sql)) {
+        loi.push(`${ep}: cau SQL THIEU cot "${cot}" (Node/giao dien co doc cot nay)`);
+      }
+    }
+  }
+  return loi;
+}
+
 const RULES = [
   { ten: 'Ghi vao bang KHONG phai cua app', tim: findWriteOutsideAppTables },
   { ten: 'Ham gom chua subquery (Msg 130)', tim: findAggWithSubquery },
   { ten: 'APPLY vao linked server', tim: findApplyOnLinkedServer },
+  // Luat 5 chay MOT LAN tren toan bo (khong theo tung cau) - xem duoi main()
+  { ten: 'Cau SQL thieu cot ma Node/giao dien doc', tim: () => [] },
   // canhBao = chi nhac, khong lam TRUOT (xem giai thich o findFuncInRemoteWhere)
   { ten: 'Ham trong WHERE gui xuong linked server (cham gap ~21 lan)',
     tim: findFuncInRemoteWhere, canhBao: true },
@@ -202,7 +266,11 @@ async function main() {
   }
   if (!up) { srv.kill(); console.error('✖ Khong khoi dong duoc server de soi SQL.'); process.exit(1); }
 
+  // Goi TUNG endpoint roi danh dau moc trong file log, de biet cau SQL nao
+  // thuoc endpoint nao (phuc vu LUAT 5 - soi cot bat buoc).
+  const moc = [];
   for (const ep of ENDPOINTS) {
+    moc.push({ ep, tu: fs.existsSync(OUT) ? fs.statSync(OUT).size : 0 });
     try { await fetch(BASE + ep); } catch (_) { /* khong quan trong: chi can no DUNG CAU */ }
   }
   // SIGN_CACHE=false o tren cho ra nhanh "LEFT JOIN (SELECT ... GROUP BY)";
@@ -216,6 +284,22 @@ async function main() {
     process.exit(1);
   }
 
+  // Gom cau SQL theo endpoint (theo thu tu goi - moi endpoint mot khoang)
+  const theoEndpoint = new Map();
+  {
+    let i = 0;
+    let tichLuy = 0;
+    for (const line of lines) {
+      tichLuy += Buffer.byteLength(line) + 1;
+      while (i + 1 < moc.length && tichLuy > moc[i + 1].tu) i++;
+      let sql;
+      try { sql = JSON.parse(line).sql; } catch (_) { continue; }
+      const ep = moc[i] ? moc[i].ep : '?';
+      if (!theoEndpoint.has(ep)) theoEndpoint.set(ep, []);
+      theoEndpoint.get(ep).push(sql);
+    }
+  }
+
   const loi = [];
   const daSoi = new Set();
   for (const line of lines) {
@@ -226,6 +310,10 @@ async function main() {
     for (const r of RULES) {
       for (const h of r.tim(sql)) loi.push({ rule: r.ten, chiTiet: h, sql });
     }
+  }
+
+  for (const h of soiCotBatBuoc(theoEndpoint)) {
+    loi.push({ rule: 'Cau SQL thieu cot ma Node/giao dien doc', chiTiet: h, sql: '' });
   }
 
   console.log(`Da soi ${daSoi.size} cau SQL khac nhau (${lines.length} luot goi).`);

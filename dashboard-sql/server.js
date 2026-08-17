@@ -3595,11 +3595,20 @@ async function qReceiving(range, f, ghi = () => {}) {
     INTO #hraw
     FROM [DWH_DB]..[STG_AMOS].[HISTORY] h
     WHERE h.[VM] IN ('B1', 'CR', 'EA', 'TC')
-      AND h.[DEL_DATE] >= ${dFrom} AND h.[DEL_DATE] < ${dTo};
+      -- ⚠️ HAI COT NGAY KHAC NHAU cho hai loai dong:
+      --   B1/CR (nhap moi)  -> DEL_DATE  (ngay nhap kho)
+      --   EA/TC (tra lai kho) -> MUTATION (dung cot ma tab Quan ly xuat kho
+      --        dang dung lam "ngay tra kho" - xem fetchReturnHistory).
+      -- Loc CA HAI bang DEL_DATE la dong tra bi rot het khoi ky ma khong bao
+      -- gi -> tab Receiving khong co dong RETURN nao, dung nhu da gap that.
+      AND (
+        (h.[VM] IN ('B1', 'CR') AND h.[DEL_DATE] >= ${dFrom} AND h.[DEL_DATE] < ${dTo})
+        OR (h.[VM] IN ('EA', 'TC') AND h.[MUTATION] >= ${dFrom} AND h.[MUTATION] < ${dTo})
+      );
 
     -- BUOC 2 (TAI CHO): cat got chuoi + doi ngay AMOS sang datetime.
     SELECT
-      RTRIM(h.[VOUCHERNO])                  AS voucherno,
+      RTRIM(h.[VOUCHERNO])                  AS voucherno_goc,
       RTRIM(h.[PARTNO])                     AS partno,
       -- MOT cot Serial/Batch: moi dong chi co MOT trong hai (serial cho thiet
       -- bi co so, batch cho vat tu theo lo) nen bay hai cot thi luon co mot cot
@@ -3619,25 +3628,43 @@ async function qReceiving(range, f, ghi = () => {}) {
       RTRIM(h.[OWNER])                      AS owner,
       RTRIM(h.[CREATED_BY])                 AS created_by,
       TRY_CONVERT(float, h.[QTY])           AS qty,
-      ${d2v('h.[DEL_DATE]')}                AS del_date,
+      -- Ngay thuoc ve KY BAO CAO: B1/CR theo DEL_DATE, EA/TC theo MUTATION
+      -- (giong dung dieu kien loc o buoc keo du lieu ben tren). Neu de nguyen
+      -- DEL_DATE thi dong tra co ngay rong -> bieu do theo ngay mat het.
+      CASE WHEN RTRIM(h.[VM]) IN ('EA', 'TC') THEN ${d2v('h.[MUTATION]')}
+           ELSE ${d2v('h.[DEL_DATE]')} END   AS del_date,
       ${d2v('h.[ORDERDATE]')}               AS orderdate,
       ${d2v('h.[MUTATION]')}                AS mutation_date,
       -- NGAY GIO NHAP KHO day du: MUTATION (so ngay AMOS) + MUTATION_TIME
       -- (so ms ke tu 0h) -> gio VN. DEL_DATE chi co NGAY nen van giu lam moc
       -- ky bao cao, con cot hien tren bang la moc nay.
       ${amosDayTimeToVN('h.[MUTATION]', 'h.[MUTATION_TIME]')} AS receive_time_vn,
-      -- LOAI dong: RECEIVE (mua/nhap moi, VM = B1) hay RETURN (hang tra lai
-      -- kho, VM = EA/TC - CUNG bo ma ma tab Quan ly xuat kho dung de tra
-      -- "phieu tra"). Nghiep vu: TRA LAI KHO CUNG LA MOT LAN NHAP KHO nen
-      -- inspector phai duoc tinh cong.
-      CASE WHEN RTRIM(h.[VM]) = 'B1' THEN 'RECEIVE'
-           WHEN RTRIM(h.[VM]) IN ('EA', 'TC') THEN 'RETURN'
-           ELSE 'CR' END                      AS loai,
-      -- KHOA PHIEU de dem "da/chua scan" THEO PHIEU. Hai loai danh so khac
-      -- nhau: phieu receive theo VOUCHERNO, phieu tra theo HISTORYNO_I.
-      CASE WHEN RTRIM(h.[VM]) IN ('EA', 'TC')
-           THEN CONVERT(varchar(32), TRY_CONVERT(bigint, h.[HISTORYNO_I]))
-           ELSE RTRIM(h.[VOUCHERNO]) END      AS phieu_khoa
+      -- ===================== PHAN LOAI DONG ==========================
+      -- RETURN = hang TRA LAI KHO. Nhan biet bang HAI dau hieu, chi can MOT:
+      --   (a) VM IN ('EA','TC') - bo ma ma tab Quan ly xuat kho dung de tra
+      --       "phieu tra" (xem fetchReturnHistory);
+      --   (b) VOUCHERNO bat dau 'P-CA-' - phieu tra service / recertify.
+      --       ⚠️ NGHIEP VU CHOT. Trong HISTORY cac dong nay KHONG chac mang
+      --       VM='TC', nen neu chi xet VM thi chung bi xep nham thanh RECEIVE
+      --       (da gap that tren du lieu that: ca bang khong co dong RETURN nao
+      --       trong khi cot Receiving No day so P-CA-...).
+      --       Doi chieu duoc bang GET /api/admin/diag/receiving-loai.
+      -- CR = phieu huy nhap (chi dung de loai dong B1 tuong ung).
+      -- Nghiep vu: TRA LAI KHO CUNG LA MOT LAN NHAP KHO -> inspector duoc
+      -- tinh cong.
+      CASE WHEN RTRIM(h.[VM]) = 'CR' THEN 'CR'
+           WHEN RTRIM(h.[VM]) IN ('EA', 'TC')
+             OR RTRIM(h.[VOUCHERNO]) LIKE 'P-CA-%' THEN 'RETURN'
+           ELSE 'RECEIVE' END                 AS loai,
+      -- SO PHIEU hien tren cot "Receiving No".
+      -- Phieu tra dung dang <HISTORYNO_I>-R, GIONG HET cot "Phiếu trả" cua tab
+      -- Quan ly xuat kho - de mot so phieu tra chi co MOT cach viet trong ca
+      -- chuong trinh. So goc (P-CA-…) van giu o cot voucherno_goc.
+      CASE WHEN RTRIM(h.[VM]) = 'CR' THEN RTRIM(h.[VOUCHERNO])
+           WHEN RTRIM(h.[VM]) IN ('EA', 'TC')
+             OR RTRIM(h.[VOUCHERNO]) LIKE 'P-CA-%'
+             THEN CONVERT(varchar(32), TRY_CONVERT(bigint, h.[HISTORYNO_I])) + '-R'
+           ELSE RTRIM(h.[VOUCHERNO]) END      AS voucherno
     INTO #hi
     FROM #hraw h;
     DROP TABLE #hraw;
@@ -3652,9 +3679,10 @@ async function qReceiving(range, f, ghi = () => {}) {
     SELECT
       SUM(CASE WHEN t.vm = 'B1' THEN 1 ELSE 0 END) AS b1_tho,
       SUM(CASE WHEN t.vm = 'CR' THEN 1 ELSE 0 END) AS cr_huy,
-      SUM(CASE WHEN t.vm = 'B1' AND t.co_cr = 1 THEN 1 ELSE 0 END) AS b1_bi_huy
+      SUM(CASE WHEN t.vm = 'B1' AND t.co_cr = 1 THEN 1 ELSE 0 END) AS b1_bi_huy,
+      SUM(CASE WHEN t.loai = 'RETURN' THEN 1 ELSE 0 END) AS ret_tho
     FROM (
-      SELECT x.vm,
+      SELECT x.vm, x.loai,
              CASE WHEN EXISTS (SELECT 1 FROM #hi c
                                WHERE c.vm = 'CR' AND c.recdetailno = x.recdetailno)
                   THEN 1 ELSE 0 END AS co_cr
@@ -3662,12 +3690,16 @@ async function qReceiving(range, f, ghi = () => {}) {
     ) t;
 
     -- [1] Tong so dong sau khi loc (de biet bang chi tiet co bi cat khong)
-    SELECT COUNT(*) AS tong_dong, COUNT(DISTINCT x.voucherno) AS tong_phieu
+    SELECT COUNT(*) AS tong_dong,
+           COUNT(DISTINCT x.voucherno) AS tong_phieu,
+           SUM(CASE WHEN x.loai = 'RECEIVE' THEN 1 ELSE 0 END) AS dong_receive,
+           SUM(CASE WHEN x.loai = 'RETURN'  THEN 1 ELSE 0 END) AS dong_return
     FROM #hi x WHERE ${conLai} ${w};
 
     -- [2] Bang chi tiet
     SELECT TOP (@top)
-      x.station, x.store, x.location, x.voucherno, x.partno, x.serialno,
+      x.loai, x.voucherno, x.voucherno_goc,
+      x.station, x.store, x.location, x.partno, x.serialno,
       x.psn, x.labelno, x.qty, x.tinh_trang, x.mat_class, x.orderno, x.orderdate,
       x.del_date, x.receive_time_vn, x.owner, x.created_by,
       x.historyno, x.recdetailno
@@ -3677,7 +3709,11 @@ async function qReceiving(range, f, ghi = () => {}) {
     -- [3] DANH SACH VOUCHER (distinct) cua TOAN KY - de dem "da/chua scan"
     --     theo PHIEU (mot voucher co nhieu dong) va KHONG bi cat boi TOP(@top).
     --     Nghiep vu yeu cau scan dat 100% nen so nay phai phu het ky.
-    SELECT x.voucherno AS vc_all, MIN(x.station) AS station, MIN(x.store) AS store,
+    SELECT x.voucherno AS vc_all, MIN(x.loai) AS loai,
+           -- Phieu tra doi chieu file scan bang HISTORYNO_I THUAN (ten file
+           -- <HISTORYNO_I>-….pdf), KHONG phai so hien thi co duoi '-R'.
+           MIN(x.historyno) AS historyno,
+           MIN(x.station) AS station, MIN(x.store) AS store,
            MIN(x.created_by) AS created_by
     FROM #hi x WHERE ${conLai} ${w}
     GROUP BY x.voucherno;
@@ -3689,7 +3725,7 @@ async function qReceiving(range, f, ghi = () => {}) {
     SELECT x.created_by AS ma_nv,
            MAX(${tenNhanVien('si')}) AS ten_nv,
            COUNT(*) AS so_item,
-           COUNT(DISTINCT x.phieu_khoa) AS so_phieu,
+           COUNT(DISTINCT x.voucherno) AS so_phieu,
            SUM(CASE WHEN x.loai = 'RECEIVE' THEN 1 ELSE 0 END) AS so_receive,
            SUM(CASE WHEN x.loai = 'RETURN'  THEN 1 ELSE 0 END) AS so_return,
            SUM(TRY_CONVERT(float, x.qty)) AS tong_sl,
@@ -3766,7 +3802,8 @@ async function qReceiving(range, f, ghi = () => {}) {
   // bang MIN o SQL) - neu khong, cong ca bang KPI se lon hon so cua ca tab.
   const scanTheoNv = new Map();
   for (const v of vouchers) {
-    const { trangThai: s } = traScan(v.loai, v.station, v.vc_all);
+    const { trangThai: s } = traScan(v.loai, v.station,
+      v.loai === 'RETURN' ? idStr(v.historyno) : v.vc_all);
     if (s === 'SCANNED') daScan += 1;
     else if (s === 'CHUA_SCAN') chuaScan += 1;
     gom(byStation, v.station, s);
@@ -3785,8 +3822,13 @@ async function qReceiving(range, f, ghi = () => {}) {
   let chuaScanDong = 0;
   for (const r of rows) {
     const laTra = r.loai === 'RETURN';
-    const ung = laTra ? [String(r.phieu_khoa || '').trim()] : scanKeys(r.voucherno);
-    const kq = traScan(r.loai, r.station, laTra ? r.phieu_khoa : r.voucherno);
+    // ⚠️ Phieu tra doi chieu file scan bang HISTORYNO_I THUAN, KHONG phai so
+    // hien thi tren cot "Receiving No" (so do co duoi '-R'). Ten file that la
+    // <HISTORYNO_I>-….pdf, ma che do 'prefix' cat tu dau '-' -> lay nham so
+    // hien thi la moi phieu tra deu bao "chua scan" oan.
+    const khoaTra = idStr(r.historyno);
+    const ung = laTra ? [khoaTra] : scanKeys(r.voucherno);
+    const kq = traScan(r.loai, r.station, laTra ? khoaTra : r.voucherno);
     r.scan = kq.trangThai;
     // Tim thay thi hien DUNG ten file da khop; chua thay thi liet ke ca hai
     // dang de nguoi dung biet can dat ten the nao.
@@ -3794,7 +3836,7 @@ async function qReceiving(range, f, ghi = () => {}) {
     // Cho nut "mo file scan" o giao dien biet phai tim o THU MUC nao va bang
     // KHOA nao - hai loai phieu nam o hai thu muc khac han.
     r.scan_loai = laTra ? 'picking' : 'receiving';
-    r.scan_key = laTra ? String(r.phieu_khoa || '') : String(r.voucherno || '');
+    r.scan_key = laTra ? khoaTra : String(r.voucherno || '');
     if (r.scan === 'SCANNED') daScanDong += 1;
     else if (r.scan === 'CHUA_SCAN') chuaScanDong += 1;
     const day = r.del_date instanceof Date ? r.del_date.toISOString().slice(0, 10) : String(r.del_date || '').slice(0, 10);
@@ -6447,6 +6489,44 @@ app.get('/api/scan/file', h(async (req, res) => {
       console.warn(`[SCAN] Khong gui duoc file ${abs}: ${e.message}`);
       res.status(404).json({ error: true, message: 'Không mở được file scan.' });
     }
+  });
+}));
+
+/**
+ * CHAN DOAN PHAN LOAI RECEIVE / RETURN tren DU LIEU THAT.
+ * ---------------------------------------------------------------------------
+ * Dem so dong theo (VM × tien to VOUCHERNO) de nhin ra ngay:
+ *   - phieu 'P-CA-…' dang mang VM nao (nghiep vu noi day la phieu TRA);
+ *   - co ma VM nao khac dang bi bo sot khong.
+ * Sinh ra vi da gap that: ca tab Receiving khong co dong RETURN nao trong khi
+ * cot Receiving No day so P-CA-… - luc do khong co cach nao nhin ra su that
+ * ngoai viec doan.
+ */
+app.get('/api/admin/diag/receiving-loai', h(async (req, res) => {
+  if (CONFIG.demoMode) return res.json({ demo: true, rows: [] });
+  const range = resolveRange(req.query);
+  const dx = amosDayExact(range);
+  const rows = await query(`
+    SELECT RTRIM(h.[VM]) AS vm,
+           CASE WHEN RTRIM(h.[VOUCHERNO]) LIKE 'P-CA-%' THEN 'P-CA-…'
+                WHEN RTRIM(h.[VOUCHERNO]) LIKE 'R-%'    THEN 'R-…'
+                ELSE 'khac' END AS tien_to,
+           COUNT(*) AS so_dong,
+           COUNT(DISTINCT h.[VOUCHERNO]) AS so_phieu,
+           SUM(CASE WHEN h.[DEL_DATE] IS NULL THEN 1 ELSE 0 END) AS thieu_del_date,
+           MIN(RTRIM(h.[VOUCHERNO])) AS vd_voucher
+    FROM [DWH_DB]..[STG_AMOS].[HISTORY] h
+    WHERE (h.[DEL_DATE] >= ${dx.fromDayX} AND h.[DEL_DATE] < ${dx.toDayX})
+       OR (h.[MUTATION] >= ${dx.fromDayX} AND h.[MUTATION] < ${dx.toDayX})
+    GROUP BY RTRIM(h.[VM]),
+             CASE WHEN RTRIM(h.[VOUCHERNO]) LIKE 'P-CA-%' THEN 'P-CA-…'
+                  WHEN RTRIM(h.[VOUCHERNO]) LIKE 'R-%'    THEN 'R-…'
+                  ELSE 'khac' END
+    ORDER BY COUNT(*) DESC`);
+  res.json({
+    ky: range.label,
+    giaiThich: 'Dong duoc xep RETURN khi VM ∈ {EA,TC} HOAC VOUCHERNO bat dau "P-CA-".',
+    rows,
   });
 }));
 
