@@ -3640,29 +3640,26 @@ async function qReceiving(range, f, ghi = () => {}) {
       -- ky bao cao, con cot hien tren bang la moc nay.
       ${amosDayTimeToVN('h.[MUTATION]', 'h.[MUTATION_TIME]')} AS receive_time_vn,
       -- ===================== PHAN LOAI DONG ==========================
-      -- RETURN = hang TRA LAI KHO. Nhan biet bang HAI dau hieu, chi can MOT:
-      --   (a) VM IN ('EA','TC') - bo ma ma tab Quan ly xuat kho dung de tra
-      --       "phieu tra" (xem fetchReturnHistory);
-      --   (b) VOUCHERNO bat dau 'P-CA-' - phieu tra service / recertify.
-      --       ⚠️ NGHIEP VU CHOT. Trong HISTORY cac dong nay KHONG chac mang
-      --       VM='TC', nen neu chi xet VM thi chung bi xep nham thanh RECEIVE
-      --       (da gap that tren du lieu that: ca bang khong co dong RETURN nao
-      --       trong khi cot Receiving No day so P-CA-...).
-      --       Doi chieu duoc bang GET /api/admin/diag/receiving-loai.
+      -- RETURN = hang TRA LAI KHO, nhan biet bang VM IN ('EA','TC') - DUNG BO
+      -- MA ma tab Quan ly xuat kho dang dung de tra "phieu tra" (xem
+      -- fetchReturnHistory). KHONG tu nghi them quy tac nao khac.
+      --
+      -- VI SAO RETURN VAO DAY MA CANCEL THI KHONG (nghiep vu chot):
+      --   CANCEL - thu kho huy khi nguoi nhan KHONG LAY. Hang chua he ra khoi
+      --            kho -> khong co gi de inspector kiem.
+      --   RETURN - nguoi nhan DA LAY RA KHOI KHO roi khong dung (hoac khong
+      --            dung het so luong) nen mang tra lai. Hang tu ngoai quay ve
+      --            -> inspector PHAI KIEM nhu mot thao tac nhap hang, va do la
+      --            ly do no duoc tinh cong cho inspector.
       -- CR = phieu huy nhap (chi dung de loai dong B1 tuong ung).
-      -- Nghiep vu: TRA LAI KHO CUNG LA MOT LAN NHAP KHO -> inspector duoc
-      -- tinh cong.
       CASE WHEN RTRIM(h.[VM]) = 'CR' THEN 'CR'
-           WHEN RTRIM(h.[VM]) IN ('EA', 'TC')
-             OR RTRIM(h.[VOUCHERNO]) LIKE 'P-CA-%' THEN 'RETURN'
+           WHEN RTRIM(h.[VM]) IN ('EA', 'TC') THEN 'RETURN'
            ELSE 'RECEIVE' END                 AS loai,
       -- SO PHIEU hien tren cot "Receiving No".
       -- Phieu tra dung dang <HISTORYNO_I>-R, GIONG HET cot "Phiếu trả" cua tab
       -- Quan ly xuat kho - de mot so phieu tra chi co MOT cach viet trong ca
-      -- chuong trinh. So goc (P-CA-…) van giu o cot voucherno_goc.
-      CASE WHEN RTRIM(h.[VM]) = 'CR' THEN RTRIM(h.[VOUCHERNO])
-           WHEN RTRIM(h.[VM]) IN ('EA', 'TC')
-             OR RTRIM(h.[VOUCHERNO]) LIKE 'P-CA-%'
+      -- chuong trinh. So goc trong AMOS van giu o cot voucherno_goc.
+      CASE WHEN RTRIM(h.[VM]) IN ('EA', 'TC')
              THEN CONVERT(varchar(32), TRY_CONVERT(bigint, h.[HISTORYNO_I])) + '-R'
            ELSE RTRIM(h.[VOUCHERNO]) END      AS voucherno
     INTO #hi
@@ -6495,12 +6492,10 @@ app.get('/api/scan/file', h(async (req, res) => {
 /**
  * CHAN DOAN PHAN LOAI RECEIVE / RETURN tren DU LIEU THAT.
  * ---------------------------------------------------------------------------
- * Dem so dong theo (VM × tien to VOUCHERNO) de nhin ra ngay:
- *   - phieu 'P-CA-…' dang mang VM nao (nghiep vu noi day la phieu TRA);
- *   - co ma VM nao khac dang bi bo sot khong.
- * Sinh ra vi da gap that: ca tab Receiving khong co dong RETURN nao trong khi
- * cot Receiving No day so P-CA-… - luc do khong co cach nao nhin ra su that
- * ngoai viec doan.
+ * Dem so dong HISTORY theo (VM × tien to VOUCHERNO) trong ky, de tra loi cac
+ * cau kieu "co dong RETURN nao khong", "VM nao dang chiem bao nhieu" ma khong
+ * phai doan. Sinh ra sau mot lan ca tab Receiving khong co dong RETURN nao va
+ * khong co cach nao nhin ra su that ngoai viec doan.
  */
 app.get('/api/admin/diag/receiving-loai', h(async (req, res) => {
   if (CONFIG.demoMode) return res.json({ demo: true, rows: [] });
@@ -6525,7 +6520,8 @@ app.get('/api/admin/diag/receiving-loai', h(async (req, res) => {
     ORDER BY COUNT(*) DESC`);
   res.json({
     ky: range.label,
-    giaiThich: 'Dong duoc xep RETURN khi VM ∈ {EA,TC} HOAC VOUCHERNO bat dau "P-CA-".',
+    giaiThich: 'Dong duoc xep RETURN khi VM ∈ {EA, TC} - dung bo ma ma tab '
+      + 'Quan ly xuat kho dung de tra phieu tra.',
     rows,
   });
 }));

@@ -3233,9 +3233,11 @@ const COLS_RECEIVING = [
   {
     title: 'Loại', field: 'loai', hozAlign: 'center', width: 100,
     headerTooltip: 'Receive = phiếu nhập mới (HISTORY.VM = B1). '
-      + 'Return = hàng trả lại kho — nhận biết bằng VM ∈ {EA, TC} HOẶC VOUCHERNO bắt đầu “P-CA-” '
-      + '(phiếu trả service / recertify). TRẢ LẠI KHO CŨNG LÀ MỘT LẦN NHẬP KHO nên inspector '
-      + 'được tính công. Đối chiếu được bằng /api/admin/diag/receiving-loai.',
+      + 'Return = hàng trả lại kho (VM ∈ {EA, TC} — đúng bộ mã tab Quản lý xuất kho dùng để tra '
+      + 'phiếu trả). Vì sao Return vào đây mà Cancel thì không: CANCEL là thủ kho huỷ khi người '
+      + 'nhận KHÔNG LẤY, hàng chưa hề ra khỏi kho nên không có gì để kiểm; RETURN là người nhận '
+      + 'ĐÃ LẤY RA rồi không dùng (hoặc không dùng hết) nên mang trả lại — inspector phải kiểm '
+      + 'như một thao tác nhập hàng.',
     formatter: (cell) => {
       const v = cell.getValue();
       if (v !== 'RETURN') return `<span style="color:var(--text-muted)">${RECV_LOAI_LABEL.RECEIVE}</span>`;
@@ -3265,7 +3267,7 @@ const COLS_RECEIVING = [
     title: 'Receiving No', field: 'voucherno', headerFilter: 'input',
     headerTooltip: 'Receive: VOUCHERNO của AMOS. Return: <HISTORYNO_I>-R — GIỐNG HỆT cột '
       + '“Phiếu trả” của tab Quản lý xuất kho, để một số phiếu trả chỉ có MỘT cách viết trong '
-      + 'cả chương trình. Rê chuột vào ô để xem số gốc trong AMOS (P-CA-…).',
+      + 'cả chương trình. Rê chuột vào ô để xem số gốc trong AMOS.',
     formatter: (cell) => {
       const d = cell.getRow().getData();
       const v = cell.getValue() || '';

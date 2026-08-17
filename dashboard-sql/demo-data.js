@@ -1031,15 +1031,15 @@ function receiving(range, f) {
     // danh so bang HISTORYNO_I va file scan nam o thu muc PICKING LIST -
     // giong het server that.
     const laTra = rndInt(0, 99) < 25;
-    // Phieu tra: so GOC trong AMOS co dang 'P-CA-…' (phieu tra service /
-    // recertify) nhung so HIEN THI la '<HISTORYNO_I>-R', giong het cot
-    // "Phiếu trả" cua tab Quan ly xuat kho. File scan van dat theo
-    // HISTORYNO_I thuan.
+    // Phieu tra (VM = EA/TC): so HIEN THI la '<HISTORYNO_I>-R', giong het cot
+    // "Phiếu trả" cua tab Quan ly xuat kho. File scan dat theo HISTORYNO_I
+    // thuan. Nghiep vu: nguoi nhan da lay hang ra khoi kho roi khong dung nen
+    // mang tra lai -> inspector phai kiem nhu mot thao tac nhap hang.
     const hist = rndInt(4000000, 4999999);
     vcPool.push({
       loai: laTra ? 'RETURN' : 'RECEIVE',
       hist,
-      goc: laTra ? 'P-CA-' + rndInt(380000, 389999) : 'R-' + rndInt(200000, 299999),
+      goc: laTra ? 'T-' + rndInt(380000, 389999) : 'R-' + rndInt(200000, 299999),
       no: laTra ? `${hist}-R` : 'R-' + rndInt(200000, 299999),
       scan: rndInt(0, 9) < 7 ? 'SCANNED' : 'CHUA_SCAN',
       inspector: rnd(INSPECTOR),

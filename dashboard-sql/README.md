@@ -1514,18 +1514,22 @@ Hai điều đã **đo thật**, không suy đoán:
   ra. Nó **không** bắt trường hợp cột bị *đổi tên* ở một lệnh trong khi lệnh khác vẫn dùng tên cũ;
   nhưng trường hợp đó **SQL Server báo lỗi ngay** khi chạy thật, chứ không âm thầm sai.
 
-## 7o. Phân loại Receive / Return trong tab Receiving
+## 7o. Vì sao RETURN vào tab Receiving mà CANCEL thì không
 
-### Nhận biết bằng HAI dấu hiệu, chỉ cần MỘT
+**Nghiệp vụ chốt** — đây là lý do của cả tính năng, không phải chi tiết kỹ thuật:
 
-| Dấu hiệu | Ghi chú |
-|---|---|
-| `VM ∈ {EA, TC}` | bộ mã mà tab *Quản lý xuất kho* dùng để tra phiếu trả (`fetchReturnHistory`) |
-| `VOUCHERNO` bắt đầu **`P-CA-`** | phiếu **trả service / recertify**. ⚠️ **Nghiệp vụ chốt.** Trong `HISTORY` các dòng này **không chắc** mang `VM = 'TC'`, nên chỉ xét `VM` là chúng bị xếp nhầm thành *Receive* |
+| | Chuyện gì xảy ra | Inspector có việc không? |
+|---|---|---|
+| **Cancel** | **thủ kho huỷ** khi người nhận **không lấy**. Hàng **chưa hề ra khỏi kho**. | **Không** — không có gì để kiểm |
+| **Return** | người nhận **đã lấy ra khỏi kho** rồi không dùng (hoặc **không dùng hết số lượng**) nên mang trả lại. Hàng từ ngoài **quay về**. | **Có** — phải kiểm **như một thao tác nhập hàng**, nên được tính công |
 
-Đối chiếu trên dữ liệu thật bằng **`GET /api/admin/diag/receiving-loai`** — đếm số dòng theo
-(`VM` × tiền tố `VOUCHERNO`), để nhìn ra ngay phiếu `P-CA-…` đang mang `VM` nào và có mã nào bị bỏ
-sót không.
+Nhận biết dòng return dùng **đúng bộ mã mà tab *Quản lý xuất kho* đang dùng** để tra phiếu trả:
+**`VM ∈ {EA, TC}`** (xem `fetchReturnHistory`). Không tự nghĩ thêm quy tắc nào khác — phân loại
+return đã có sẵn ở phía xuất kho, tab Receiving chỉ lấy dữ liệu đó về.
+
+Đối chiếu trên dữ liệu thật bằng **`GET /api/admin/diag/receiving-loai`** — đếm số dòng `HISTORY`
+theo (`VM` × tiền tố `VOUCHERNO`) trong kỳ, để trả lời “có dòng RETURN nào không / VM nào đang
+chiếm bao nhiêu” mà không phải đoán.
 
 ### ⚠️ Kỳ báo cáo dùng HAI cột ngày khác nhau
 
@@ -1542,7 +1546,7 @@ mất hết dòng trả.
 
 Phiếu trả hiển thị ở cột **Receiving No** dưới dạng **`<HISTORYNO_I>-R`**, **giống hệt** cột *Phiếu
 trả* của tab *Quản lý xuất kho*. Cột **“Số phiếu”** riêng đã **bỏ** — hai cột cùng một ý nghĩa thì
-chỉ nên có một chỗ hiện. Số gốc trong AMOS (`P-CA-…`) giữ ở `voucherno_goc`, rê chuột vào ô là thấy.
+chỉ nên có một chỗ hiện. Số gốc trong AMOS giữ ở `voucherno_goc`, rê chuột vào ô là thấy.
 
 ⚠️ **File scan vẫn tra bằng `HISTORYNO_I` THUẦN**, không phải số hiển thị có đuôi `-R`: tên file
 thật là `<HISTORYNO_I>-….pdf` mà chế độ `prefix` cắt từ dấu `-`, lấy nhầm số hiển thị là **mọi phiếu
