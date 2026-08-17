@@ -1427,6 +1427,61 @@ thư mục `receiving`.
 Trước đó **mọi trang** đều để trình duyệt tự đòi `/favicon.ico` → **404 mỗi lần mở**, tab hiện biểu
 tượng trắng. Nay `index` · `admin` · `lgc-login` · `wp` đều trỏ vào `public/favicon.svg`.
 
+## 7m. ⚠️ HAI con số TAT khác nhau — vì sao, và cách đã thống nhất
+
+Trên dữ liệu thật, hai thẻ KPI cạnh nhau hiện **1.7** và **2.7 ngày**. **Không cái nào sai** — chúng
+đo **hai khoảng thời gian khác nhau**, nhưng đặt cạnh nhau thì nhìn như mâu thuẫn.
+
+```
+xuất kho ──► lắp lên tàu ──────► tháo khỏi tàu ──► trả US ──► CUVT nhận
+         └─ tat_install ─┘   └ nằm trên tàu ┘  └ tat_usret ┘ └ tat_cuvt ┘
+         └────────────── tat_days (CÓ MỤC TIÊU 2 NGÀY) ─────┘
+```
+
+| Chỉ số | Công thức | Bao gồm |
+|---|---|---|
+| `tatTotalAvg` — “TAT tổng (3 chặng)” | `tat_install + tat_usret + tat_cuvt` | **KHÔNG liên tục**: bỏ qua thời gian nằm trên tàu, lại **cộng thêm** chặng CUVT xảy ra **sau** khi đã trả US |
+| **`tat_days`** — xuất kho → trả US/service | `del_time − issue_time` | **toàn bộ** khoảng, **gồm cả** thời gian trên tàu |
+
+**Chặng nghiệp vụ đặt mục tiêu 2 ngày là `tat_days`** → nó thành **thẻ đầu tiên** của bảng KPI. Ba
+chặng thành phần vẫn giữ (để biết nút thắt nằm ở đâu); **“TAT tổng (3 chặng)” đã bỏ khỏi bảng KPI**
+— nó vẫn còn trên biểu đồ cột xếp chồng, là chỗ nó có nghĩa. Đo trên dữ liệu mẫu: chênh lệch
+`2.5 − 2.1 = 0.4 ngày` chính là *thời gian trên tàu trừ đi chặng CUVT*.
+
+### Lỗi thật đi kèm: mẫu số tính trên dữ liệu bị cắt
+
+Ảnh chụp thật cho thấy `476/576 thiết bị` trong khi thẻ *Thiết bị xuất kho* ghi `645`. Nguyên nhân:
+tỷ lệ đạt được tính **ở trình duyệt** từ `dash.rows` — mà bảng chi tiết **bị cắt ở `MAX_ROWS`**,
+nên nó tính trên **một phần** dữ liệu trong khi các thẻ bên cạnh tính trên **toàn bộ**.
+
+Nay tính **ở SQL**: kéo cặp đối ứng về `#tatpair` **một lần** rồi gom hai lần (TAT theo chặng và
+SLA) từ **cùng một tập** — hai thẻ cạnh nhau không thể lệch nhau nữa. Percentile dùng
+`PERCENTILE_CONT(0.5 / 0.9) … OVER ()`.
+
+⚠️ Mục tiêu đọc từ `loadKpiTargets()` **ở server**, không nhận từ URL — để người dùng tự truyền thì
+lại quay về đúng cái vòng luẩn quẩn mà việc đưa mục tiêu về `/admin` sinh ra để bỏ. Khóa cache API
+đánh theo URL mà mục tiêu **không** nằm trong URL, nên `POST /api/admin/kpi-config` gọi
+`apiCache.clear()`; thiếu dòng đó thì dashboard vẫn trả số theo mục tiêu **cũ** đến khi hết TTL.
+
+### Một bảng KPI duy nhất
+
+Khối *Phân tích chuyên sâu* **không còn bảng KPI riêng**: bốn thẻ SLA đã lên bảng chính, hai thẻ
+*Tồn đọng* / *Tỷ lệ đối ứng* vốn đã có sẵn ở đó. Sparkline 6 tháng nay vẽ **ngay trên bảng chính**
+(sau khi bấm *Nạp xu hướng*), nên gộp bảng mà không mất gì.
+
+### Dữ liệu mẫu: mỗi lần gọi lại sinh một tập MỚI
+
+`DEMO.dashboard()` và `DEMO.tatDepartments()` là **hai lần bốc ngẫu nhiên độc lập**, nên thẻ KPI và
+bảng chi tiết của **cùng một lần tải** là hai tập khác nhau — đúng y cái lỗi vừa sửa trên sản xuất,
+và bấm *Tải lại* là mọi con số nhảy lung tung. Nay `dashboardData(range, f)` nhớ kết quả theo
+(kỳ + bộ lọc), route lấy `rows` từ **chính tập đó**. *(Chính bài kiểm `admincheck` phát hiện ra:
+hai trường hợp so sánh giữa hai lần gọi trượt vì dữ liệu đổi giữa chừng.)*
+
+`tools/admincheck.js` lên **35 trường hợp**, thêm mục *“mục tiêu phải chạy thẳng vào số liệu
+dashboard”*: đạt + quá hạn = tổng · tỷ lệ khớp số đếm · P50 ≤ P90 · **mẫu số ≥ số dòng bảng chi
+tiết** (chứng minh không tính trên bảng bị cắt) · đổi mục tiêu ở `/admin` thì dashboard đổi **ngay**
+· và **trung bình / P50 / P90 KHÔNG đổi** theo mục tiêu (đổi mà chúng cũng đổi là dấu hiệu tính nhầm).
+
 ## 8. API
 
 | Endpoint | Mô tả |

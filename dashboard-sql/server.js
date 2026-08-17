@@ -3929,7 +3929,15 @@ async function qOther(range, f) {
  *   [6] Phan bo station (tap doi ung): station, cnt
  */
 async function qDashboardAgg(range, f) {
-  const params = { from: range.from, to: range.to, ...amosDayParams(range) };
+  // Muc tieu SLA doc TU CAU HINH tren may chu (sua o /admin) chu KHONG nhan tu
+  // URL: de nguoi dung tu truyen thi moi may lai ra mot ty le "dat" khac nhau -
+  // dung cai vong luan quan ma viec dua muc tieu ve /admin sinh ra de bo.
+  // ⚠️ Doi muc tieu thi PHAI bo cache API (saveKpiTargets goi apiCache.clear()),
+  // vi khoa cache dung theo URL ma muc tieu khong nam trong URL.
+  const params = {
+    from: range.from, to: range.to, ...amosDayParams(range),
+    slaTarget: Number(loadKpiTargets().tatTargetDays) || 2,
+  };
   const deptR = deptFromReal('r', 'sm');
   const deptK = deptFromStaff('k.[created_b2]', 'sm');
   const deptT = deptFromStaff('t.[created_b2]', 'sm');
@@ -3976,17 +3984,27 @@ async function qDashboardAgg(range, f) {
       ${wSvc}`;
 
   const text = `
+    -- ⚠️ KEO CAP DOI UNG VE #tatpair MOT LAN roi moi gom, thay vi viet cau
+    -- UNION nay HAI LAN cho hai phep gom khac nhau. Ly do KHONG phai toc do ma
+    -- la DONG NHAT SO LIEU: [0] (TAT theo chang) va [7] (SLA xuat kho -> tra
+    -- US) BUOC phai doc dung MOT tap dong, neu khong hai the KPI ngay canh
+    -- nhau se noi hai chuyen khac nhau ma khong ai biet cai nao dung.
+    IF OBJECT_ID('tempdb..#tatpair') IS NOT NULL DROP TABLE #tatpair;
+
     -- [0] TAT theo Trung tam (toan bo, khong TOP) - TACH 2 THANH PHAN:
     --     tat_install = lap len tau (YE dau tien cung labelno SAU gio xuat) - gio xuat kho
     --     tat_usret   = tra US (del_time) - thao tu tau (YA khop historyno_)
+    --     tat_days    = TOAN CHANG xuat kho -> tra US/service. ⚠️ KHAC HAN
+    --                   (tat_install + tat_usret): giua hai chang do con
+    --                   THOI GIAN THIET BI NAM TREN TAU, nen tat_days LON HON
+    --                   tong hai chang. Muc tieu 2 ngay cua nghiep vu la cho
+    --                   tat_days.
     --     AVG() tu bo qua NULL -> dong thieu su kien lap/thao KHONG tinh vao TB.
-    SELECT x.department, COUNT(*) AS cnt,
-           AVG(x.tat_install) AS avg_install, COUNT(x.tat_install) AS cnt_install,
-           AVG(x.tat_usret)   AS avg_usret,   COUNT(x.tat_usret)   AS cnt_usret
-    FROM (
+    SELECT * INTO #tatpair FROM (
       SELECT ${deptR} AS department,
              CAST(DATEDIFF(MINUTE, ${amosToVN('k')}, ye.install_time) AS float) / 1440.0 AS tat_install,
-             CAST(DATEDIFF(MINUTE, ya.removal_time, r.[del_time]) AS float) / 1440.0    AS tat_usret
+             CAST(DATEDIFF(MINUTE, ya.removal_time, r.[del_time]) AS float) / 1440.0    AS tat_usret,
+             CAST(DATEDIFF(MINUTE, ${amosToVN('k')}, r.[del_time]) AS float) / 1440.0   AS tat_days
       FROM [NQT].[dbo].[kho_ser1] k
       INNER JOIN [NQT].[dbo].[real_us1] r
         ON k.[labelno] = r.[labelno] AND k.[voucherno] = r.[voucher_s]
@@ -4015,7 +4033,8 @@ async function qDashboardAgg(range, f) {
       -- Nhanh TRA SERVICE (recertify): tat_usret = gio CI - gio thao YA
       SELECT ${deptK} AS department,
              CAST(DATEDIFF(MINUTE, ${amosToVN('k')}, ye.install_time) AS float) / 1440.0 AS tat_install,
-             CAST(DATEDIFF(MINUTE, rc.removal_time, rc.recert_time) AS float) / 1440.0   AS tat_usret
+             CAST(DATEDIFF(MINUTE, rc.removal_time, rc.recert_time) AS float) / 1440.0   AS tat_usret,
+             CAST(DATEDIFF(MINUTE, ${amosToVN('k')}, rc.recert_time) AS float) / 1440.0  AS tat_days
       FROM [NQT].[dbo].[kho_ser1] k
       ${recertApply('k')}
       OUTER APPLY (
@@ -4028,8 +4047,12 @@ async function qDashboardAgg(range, f) {
       ${signJoin('k.[created_b2]', 'sm')}
       WHERE ${khoBase}
         ${svcWhere}
-    ) x
-    GROUP BY x.department;
+    ) x;
+
+    SELECT department, COUNT(*) AS cnt,
+           AVG(tat_install) AS avg_install, COUNT(tat_install) AS cnt_install,
+           AVG(tat_usret)   AS avg_usret,   COUNT(tat_usret)   AS cnt_usret
+    FROM #tatpair GROUP BY department;
 
     -- [1] TAT CUVT theo Trung tam (chang 3: tra US -> CUVT nhan).
     --     GROUP BY de xep chong duoc vao bieu do; tong the = trung binh CO TRONG SO
@@ -4154,10 +4177,32 @@ async function qDashboardAgg(range, f) {
         AND ${amosToVN('k')} >= @from AND ${amosToVN('k')} < @to
         ${wNotRec}
     ) s
-    GROUP BY s.station;`;
+    GROUP BY s.station;
 
-  const [deptAgg, cuvtAgg, retAgg, notRecAgg, retUSAgg, niAgg, stationAgg] = await queryMulti(text, params);
-  return { deptAgg, cuvtAgg, retAgg, notRecAgg, retUSAgg, niAgg: niAgg[0], stationAgg };
+    -- [7] SLA: TAT xuat kho -> tra US/service (tat_days) tren TOAN BO du lieu.
+    --     ⚠️ PHAI tinh o SQL chu KHONG phai o trinh duyet tu bang chi tiet:
+    --     bang do bi cat o MAX_ROWS nen ty le "dat" se tinh tren mot phan du
+    --     lieu, trong khi cac the KPI ben canh tinh tren toan bo -> hai con so
+    --     canh nhau ma khac nhau.
+    --     Bo CUVT giong het cach tinh TAT trung binh (CUVT do rieng).
+    SELECT COUNT(*) AS sla_n,
+           AVG(z.tat_days) AS sla_avg,
+           SUM(CASE WHEN z.tat_days <= @slaTarget THEN 1 ELSE 0 END) AS sla_dat,
+           MIN(z.p50) AS sla_p50,
+           MIN(z.p90) AS sla_p90
+    FROM (
+      SELECT tat_days,
+             PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY tat_days) OVER () AS p50,
+             PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY tat_days) OVER () AS p90
+      FROM #tatpair
+      WHERE tat_days IS NOT NULL AND LTRIM(RTRIM(ISNULL(department, ''))) <> 'CUVT'
+    ) z;
+
+    DROP TABLE #tatpair;`;
+
+  const [deptAgg, cuvtAgg, retAgg, notRecAgg, retUSAgg, niAgg, stationAgg, slaAgg] =
+    await queryMulti(text, params);
+  return { deptAgg, cuvtAgg, retAgg, notRecAgg, retUSAgg, niAgg: niAgg[0], stationAgg, sla: slaAgg[0] };
 }
 
 /** Dung ket qua aggregate SQL de tao KPI + charts (chinh xac tren toan bo du lieu). */
@@ -4201,12 +4246,31 @@ function buildDashboardFromAgg(range, agg, f) {
   // So cap doi ung THU CONG thuoc ky nay (loc theo gio xuat + bo loc dang chon)
   const manualCnt = countManualPairsInRange(range, f);
 
+  // --- SLA: TAT xuat kho -> tra US/service, tinh o SQL tren TOAN BO du lieu ---
+  // ⚠️ tat_days KHAC HAN (tatInstallAvg + tatUsReturnAvg): giua hai chang do
+  // con THOI GIAN THIET BI NAM TREN TAU. Do la ly do "TAT tong 3 chang" luon
+  // NHO HON "TAT xuat kho -> tra US" - hai the KPI canh nhau nhin nhu mau
+  // thuan nhung dang do hai khoang khac nhau.
+  const sla = agg.sla || {};
+  const slaTarget = Number(loadKpiTargets().tatTargetDays) || 2;
+  const slaN = Number(sla.sla_n) || 0;
+  const slaDat = Number(sla.sla_dat) || 0;
+
   const kpis = {
     // TAT tach 3 thanh phan + TAT TONG (cong 3 chang)
     tatInstallAvg,
     tatUsReturnAvg,
     tatCuvtAvg,
     tatTotalAvg: round1(tatInstallAvg + tatUsReturnAvg + tatCuvtAvg),
+    // --- Chi so cham SLA (chang xuat kho -> tra US/service) ---
+    slaTarget,
+    tatXuatTraAvg: round1(Number(sla.sla_avg) || 0),
+    slaN,
+    slaDat,
+    slaQuaHan: Math.max(0, slaN - slaDat),
+    slaTyLe: slaN ? Math.round((slaDat / slaN) * 1000) / 10 : 0,
+    slaP50: round1(Number(sla.sla_p50) || 0),
+    slaP90: round1(Number(sla.sla_p90) || 0),
     tatReturnStoreAvg: round1(wavg(agg.retAgg)),
     // Cap doi ung THU CONG (label lech, nguoi dung da xac nhan) -> tinh la DA
     // doi ung: da bi loai khoi notRec o SQL nen cong vao 'reconciled' de tong
@@ -4698,7 +4762,7 @@ async function chatAnswerKpi(intent, ctx) {
   const range = resolveRange(q);
   const f = readFilters(q);
   const dash = CONFIG.demoMode
-    ? DEMO.dashboard(range, f)
+    ? DEMO.dashboard(range, f, loadKpiTargets())
     : buildDashboardFromAgg(range, await qDashboardAgg(range, f), f);
   const k = dash.kpis;
   const perLbl =
@@ -5133,10 +5197,10 @@ async function runReportForPeriod(period, reason) {
   const { label, fileTag, range, prevRange } = reportRanges(period);
   const f = {};
   const dash = CONFIG.demoMode
-    ? DEMO.dashboard(range, f)
+    ? DEMO.dashboard(range, f, loadKpiTargets())
     : buildDashboardFromAgg(range, await qDashboardAgg(range, f), f);
   const prev = CONFIG.demoMode
-    ? DEMO.dashboard(prevRange, f)
+    ? DEMO.dashboard(prevRange, f, loadKpiTargets())
     : buildDashboardFromAgg(prevRange, await qDashboardAgg(prevRange, f), f);
   const out = { period, label, teams: null, files: [] };
 
@@ -5953,9 +6017,12 @@ app.get(
     const prevRange = resolveRange(prevPeriodQuery(req.query));
     const f = readFilters(req.query);
     if (CONFIG.demoMode) {
-      const d = DEMO.dashboard(range, f);
-      d.rows = DEMO.tatDepartments(range, f);
-      d.prevKpis = DEMO.dashboard(prevRange, f).kpis; // so voi ky truoc
+      const d = DEMO.dashboard(range, f, loadKpiTargets());
+      // ⚠️ PHAI lay tu CUNG mot tap ma DEMO.dashboard() vua dung, khong duoc
+      // goi tatDepartments() lan nua: goi lai la sinh mot tap ngau nhien KHAC,
+      // the KPI va bang chi tiet se noi hai chuyen khac nhau.
+      d.rows = DEMO.dashboardData(range, f).dept;
+      d.prevKpis = DEMO.dashboard(prevRange, f, loadKpiTargets()).kpis; // so voi ky truoc
       return res.json(d);
     }
 
@@ -6134,7 +6201,7 @@ app.get(
 
       const range = { ...monthRange(mstr), label: 'Thang' };
       const dash = CONFIG.demoMode
-        ? DEMO.dashboard(range, f)
+        ? DEMO.dashboard(range, f, loadKpiTargets())
         : buildDashboardFromAgg(range, await qDashboardAgg(range, f), f);
       const k = dash.kpis;
       const kpi = {
@@ -6250,6 +6317,9 @@ app.post('/api/admin/kpi-config', h(async (req, res) => {
   }
   const ip = String(req.socket.remoteAddress || '').replace(/^::ffff:/, '');
   const kq = saveKpiTargets(b, ip);
+  // Khoa cache API dung theo URL, ma muc tieu KHONG nam trong URL -> khong bo
+  // cache thi dashboard van tra so tinh theo muc tieu CU cho den khi het TTL.
+  apiCache.clear();
   console.log(`[KPI] IP ${ip} dat muc tieu: TAT=${kq.tatTargetDays} ngay, ton dong=${kq.backlogWarnDays} ngay`);
   res.json({ ok: true, ...kq });
 }));

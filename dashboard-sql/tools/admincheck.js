@@ -103,6 +103,45 @@ async function main() {
       vanCon.body.tatTargetDays === 3.5, `${vanCon.body.tatTargetDays}`);
     await J('/api/admin/kpi-config', { tatTargetDays: 2, backlogWarnDays: 30 });
 
+    // ===== 1b. MUC TIEU PHAI CHAY THANG VAO SO LIEU DASHBOARD ==============
+    // ⚠️ Day la muc quan trong nhat cua phan nay. Truoc do ty le "dat" duoc
+    // tinh O TRINH DUYET tu bang chi tiet - ma bang do bi cat o MAX_ROWS, nen
+    // no tinh tren MOT PHAN du lieu trong khi cac the KPI ben canh tinh tren
+    // TOAN BO -> hai con so canh nhau ma khac nhau. Nay tinh o SQL.
+    const dash = (q) => J(`/api/dashboard?periodType=month&month=2026-08&nocache=1${q || ''}`);
+    await J('/api/admin/kpi-config', { tatTargetDays: 2 });
+    const d2 = (await dash()).body.kpis;
+    kiemTra('Dashboard trả về chỉ số SLA tính ở SQL',
+      Number.isFinite(d2.tatXuatTraAvg) && d2.slaN > 0,
+      `TB ${d2.tatXuatTraAvg} ngày · ${d2.slaDat}/${d2.slaN}`);
+    kiemTra('Mục tiêu dùng đúng con số đặt ở /admin', d2.slaTarget === 2, `${d2.slaTarget}`);
+    kiemTra('Đạt + Quá hạn = Tổng', d2.slaDat + d2.slaQuaHan === d2.slaN);
+    kiemTra('Tỷ lệ đạt khớp với số đếm',
+      d2.slaTyLe === Math.round((d2.slaDat / d2.slaN) * 1000) / 10, `${d2.slaTyLe}%`);
+    kiemTra('P50 ≤ P90', d2.slaP50 <= d2.slaP90, `${d2.slaP50} ≤ ${d2.slaP90}`);
+    // Mau so PHAI phu het ky, khong duoc bang so dong cua bang chi tiet (bang
+    // do co the bi cat) - it nhat phai LON HON HOAC BANG.
+    const soDongChiTiet = ((await dash()).body.rows || [])
+      .filter((r) => String(r.department || '').toUpperCase() !== 'CUVT'
+        && Number.isFinite(Number(r.tat_days))).length;
+    kiemTra('Mẫu số SLA phủ hết kỳ (≥ số dòng của bảng chi tiết)',
+      d2.slaN >= soDongChiTiet, `${d2.slaN} ≥ ${soDongChiTiet}`);
+
+    // Doi muc tieu o /admin -> so lieu dashboard PHAI doi theo NGAY (khoa cache
+    // dung theo URL ma muc tieu khong nam trong URL, nen phai bo cache).
+    await J('/api/admin/kpi-config', { tatTargetDays: 30 });
+    const d30 = (await dash()).body.kpis;
+    kiemTra('Đổi mục tiêu ở /admin → dashboard đổi NGAY (đã bỏ cache)',
+      d30.slaTarget === 30 && d30.slaDat >= d2.slaDat && d30.slaTyLe >= d2.slaTyLe,
+      `mục tiêu 2n: ${d2.slaTyLe}% → 30n: ${d30.slaTyLe}%`);
+    kiemTra('Nới mục tiêu thì số quá hạn GIẢM', d30.slaQuaHan <= d2.slaQuaHan,
+      `${d2.slaQuaHan} → ${d30.slaQuaHan}`);
+    // Trung binh / P50 / P90 KHONG phu thuoc muc tieu - doi muc tieu ma chung
+    // doi thi la dau hieu tinh nham.
+    kiemTra('Trung bình / P50 / P90 KHÔNG đổi theo mục tiêu',
+      d30.tatXuatTraAvg === d2.tatXuatTraAvg && d30.slaP90 === d2.slaP90);
+    await J('/api/admin/kpi-config', { tatTargetDays: 2 });
+
     // ================= 2. TAI KHOAN LGC ====================================
     const MA = 'CU7788';
     const tao = await dangNhap(MA, MA);          // lan dau: mat khau = ma NV

@@ -289,6 +289,9 @@ body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
 .delta-bad  { color: var(--critical); font-weight: 700; }
 .delta-flat { color: var(--text-muted); }
 .spark { display: block; }
+/* Chan the KPI: mui ten so ky truoc (trai) + sparkline (phai) tren cung mot
+   dong, de the khong cao them khi co sparkline. */
+.kpi-chan { display: flex; align-items: flex-end; justify-content: space-between; gap: 6px; }
 @media (max-width: 700px) { .kbig { font-size: 22px; } }
 
 /* --- Nut mo FILE SCAN that (o cot Scan, trang thai "Da scan") --- */

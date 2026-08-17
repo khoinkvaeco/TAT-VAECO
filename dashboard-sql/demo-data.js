@@ -356,13 +356,40 @@ function deviceLookup(term) {
 }
 
 /** Dashboard mau (dung lai logic tong hop don gian). */
-function dashboard(range, f) {
-  const dept = tatDepartments(range, f);
-  const cuvt = tatCuvt(range, f);
-  const ret = returnStoreTat(range, f);
-  const ni = issuedNotInstalled(range, f);
-  const nr = notReconciled(range, f);
-  const retUS = returnedUnservice(range, f);
+/**
+ * @param {object} mucTieu  muc tieu KPI tu server (loadKpiTargets()). Truyen
+ *   vao thay vi doc file: demo-data khong biet gi ve o dia, va nho vay bai
+ *   kiem co the ep mot muc tieu bat ky de thu.
+ */
+// ⚠️ NHO KET QUA THEO (ky + bo loc). Truoc day MOI lan goi lai sinh ngau nhien
+// MOT TAP MOI, nen:
+//   - the KPI va bang chi tiet cua CUNG mot lan tai lai la hai tap khac nhau
+//     -> khong the doi chieu, dung y het cai loi that vua sua tren san xuat;
+//   - bam "Tai lai" la moi con so nhay lung tung, nhin nhu chuong trinh sai.
+// Cung ly do voi _repairDemoCache o duoi.
+const _dashDemoCache = new Map();
+
+function dashboardData(range, f) {
+  const ck = JSON.stringify([range.from, range.to,
+    [...((f && f.station) || [])].sort(), [...((f && f.store) || [])].sort(),
+    [...((f && f.department) || [])].sort(), !!(f && f.excludeCC), !!(f && f.excludeCab)]);
+  if (_dashDemoCache.has(ck)) return _dashDemoCache.get(ck);
+  const d = {
+    dept: tatDepartments(range, f),
+    cuvt: tatCuvt(range, f),
+    ret: returnStoreTat(range, f),
+    ni: issuedNotInstalled(range, f),
+    nr: notReconciled(range, f),
+    retUS: returnedUnservice(range, f),
+  };
+  if (_dashDemoCache.size > 40) _dashDemoCache.clear();
+  _dashDemoCache.set(ck, d);
+  return d;
+}
+
+function dashboard(range, f, mucTieu) {
+  const mucTieuKpi = mucTieu || { tatTargetDays: 2 };
+  const { dept, cuvt, ret, ni, nr, retUS } = dashboardData(range, f);
 
   const avg = (a, s) => {
     const v = a.map(s).filter((x) => isFinite(x));
@@ -445,6 +472,24 @@ function dashboard(range, f) {
   const kUsret = r1(wavg(byDept2, 'avgU', 'cntU'));
   const kCuvt = r1(avg(cuvt, (d) => d.tat_days));
 
+  // --- SLA: chang XUAT KHO -> TRA US/SERVICE (tat_days), giong server that ---
+  // ⚠️ KHAC HAN (kInstall + kUsret): giua hai chang do con thoi gian thiet bi
+  // NAM TREN TAU. Server tinh o SQL tren toan bo du lieu (khong phai tren bang
+  // chi tiet da bi cat) - demo cung phai tinh tren CA tap `dept`, khong phai
+  // tren mot phan, neu khong bai kiem se khong bat duoc loi that.
+  const slaTarget = Number(mucTieuKpi.tatTargetDays) || 2;
+  const slaVals = dept
+    .filter((d) => String(d.department || '').toUpperCase() !== 'CUVT')
+    .map((d) => Number(d.tat_days))
+    .filter((x) => Number.isFinite(x));
+  const pctl = (a, q) => {
+    if (!a.length) return 0;
+    const z = [...a].sort((x, y) => x - y);
+    return z[Math.max(0, Math.min(z.length - 1, Math.ceil(q * z.length) - 1))];
+  };
+  const slaN = slaVals.length;
+  const slaDat = slaVals.filter((x) => x <= slaTarget).length;
+
   return {
     range: { from: range.from, to: range.to, label: range.label },
     kpis: {
@@ -452,6 +497,14 @@ function dashboard(range, f) {
       tatUsReturnAvg: kUsret,
       tatCuvtAvg: kCuvt,
       tatTotalAvg: r1(kInstall + kUsret + kCuvt),
+      slaTarget,
+      tatXuatTraAvg: r1(avg(slaVals, (x) => x)),
+      slaN,
+      slaDat,
+      slaQuaHan: slaN - slaDat,
+      slaTyLe: slaN ? Math.round((slaDat / slaN) * 1000) / 10 : 0,
+      slaP50: r1(pctl(slaVals, 0.5)),
+      slaP90: r1(pctl(slaVals, 0.9)),
       tatReturnStoreAvg: r1(avg(ret, (d) => d.tat_days)),
       countIssued: dept.length + nr.length,
       countNotReconciled: nr.length,
@@ -1114,6 +1167,7 @@ module.exports = {
   reconcileStatus,
   reconcileReverse,
   dashboard,
+  dashboardData,
   tatDepartments,
   tatCuvt,
   returnStoreTat,

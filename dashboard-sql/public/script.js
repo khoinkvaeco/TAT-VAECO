@@ -350,6 +350,11 @@ function veChuBangRong() {
  *  'neutral' = chi thong tin (so luong). prev 0/thieu -> khong hien. */
 function kpiDelta(cur, prev, dir) {
   const c = Number(cur), p = Number(prev);
+  // ⚠️ `p === 0` cung CHAN luon truong hop KHONG CO so ky truoc: Number(null)
+  // va Number('') deu ra 0. Nho vay khong bao gio bay ra mui ten "tang vot"
+  // bia dat khi ky truoc chua co du lieu - loi nay da tung xay ra o mot ham
+  // delta khac cua trang beta (the "Ton dong 36" hien "▲ 36 so thang truoc"
+  // trong khi chua he nap chuoi thang).
   if (!isFinite(c) || !isFinite(p) || p === 0) return '';
   const pct = ((c - p) / Math.abs(p)) * 100;
   if (!isFinite(pct)) return '';
@@ -362,30 +367,75 @@ function kpiDelta(cur, prev, dir) {
   return `<span class="kpi-delta ${cls}" title="Kỳ trước: ${p}">${upArrow ? '▲' : '▼'} ${Math.abs(rounded)}%</span>`;
 }
 
-function renderKPIs(kpis, prev) {
+/**
+ * MOT BANG KPI DUY NHAT cho ca Dashboard.
+ *
+ * ⚠️ VI SAO GOP: truoc day co HAI bang - bang tren hien "TAT tong (3 chang)"
+ * con bang "Phan tich chuyen sau" hien "TAT xuat kho -> tra US". Hai so nay
+ * KHAC NHAU (1.7 vs 2.7 tren du lieu that) va dat canh nhau thi nhin nhu mau
+ * thuan, trong khi thuc ra dang do HAI KHOANG KHAC NHAU:
+ *
+ *   TAT tong (3 chang) = install + US return + CUVT
+ *        = xuat kho→lap  +  thao→tra US  +  tra US→CUVT nhan
+ *        ⚠️ KHONG lien tuc: BO QUA thoi gian thiet bi NAM TREN TAU, va CONG
+ *           them mot chang xay ra SAU khi da tra US.
+ *
+ *   TAT xuat kho → tra US (tat_days) = del_time − issue_time
+ *        = TOAN BO khoang tu luc xuat kho den luc tra US/service, GOM CA thoi
+ *          gian tren tau. Day moi la chang nghiep vu dat muc tieu 2 ngay.
+ *
+ * Nay: the DAU TIEN la chang co muc tieu (tat_days); ba chang thanh phan van
+ * giu de biet nut that o dau; "TAT tong (3 chang)" BO KHOI bang KPI - no van
+ * con tren bieu do cot xep chong, la cho no co nghia.
+ */
+function renderKPIs(kpis, prev, sparks) {
   prev = prev || {};
+  sparks = sparks || {};
+  const target = Number(kpis.slaTarget) || 2;
+  const tbSla = Number(kpis.tatXuatTraAvg) || 0;
+  const mauSla = tbSla <= target ? '--good' : (tbSla <= target * 1.5 ? '--warning' : '--critical');
+  const mauTyLe = kpis.slaTyLe >= 90 ? '--good' : (kpis.slaTyLe >= 70 ? '--warning' : '--critical');
   const cards = [
-    // TAT TONG = install + US return + CUVT (3 chang lien tiep cua 1 vong doi)
-    { label: 'TAT tổng (3 chặng)', value: kpis.tatTotalAvg, prev: prev.tatTotalAvg, dir: 'down', unit: 'ngày', accent: '--series-4' },
+    // --- Chang CO MUC TIEU: xuat kho -> tra US/service (tat_days) ---
+    { label: `TAT xuất kho → trả US (mục tiêu ${target}n)`, value: kpis.tatXuatTraAvg,
+      prev: prev.tatXuatTraAvg, dir: 'down', unit: 'ngày', accent: mauSla,
+      title: 'Toàn bộ khoảng từ lúc xuất kho đến lúc trả US/service, GỒM CẢ thời gian thiết bị '
+        + 'nằm trên tàu. Đây là chặng nghiệp vụ đặt mục tiêu. KHÁC với “tổng 3 chặng” ở biểu đồ '
+        + 'cột (tổng đó bỏ qua thời gian trên tàu và cộng thêm chặng CUVT sau khi đã trả US).' },
+    { label: 'Tỷ lệ đạt mục tiêu', value: kpis.slaTyLe, prev: prev.slaTyLe, dir: 'up', unit: '%',
+      accent: mauTyLe,
+      title: `${kpis.slaDat ?? 0}/${kpis.slaN ?? 0} thiết bị trong ${target} ngày. `
+        + 'Tính ở SQL trên TOÀN BỘ dữ liệu của kỳ, không phải trên bảng chi tiết bên dưới '
+        + '(bảng đó bị cắt ở MAX_ROWS).' },
+    { label: `Quá hạn (> ${target} ngày)`, value: kpis.slaQuaHan, prev: prev.slaQuaHan, dir: 'down',
+      unit: 'thiết bị', accent: kpis.slaQuaHan ? '--critical' : '--good' },
+    { label: 'P90 — đuôi chậm', value: kpis.slaP90, prev: prev.slaP90, dir: 'down', unit: 'ngày',
+      accent: '--series-5',
+      title: `Trung vị (P50): ${kpis.slaP50 ?? 0} ngày. P50 thấp hơn nhiều so với trung bình `
+        + 'nghĩa là số ít ca rất chậm đang kéo trung bình lên — xem biểu đồ Phân phối.' },
+    // --- Ba chang thanh phan (de biet nut that nam o chang nao) ---
     { label: 'TAT install', value: kpis.tatInstallAvg, prev: prev.tatInstallAvg, dir: 'down', unit: 'ngày', accent: '--series-1' },
     { label: 'TAT US return', value: kpis.tatUsReturnAvg, prev: prev.tatUsReturnAvg, dir: 'down', unit: 'ngày', accent: '--series-8' },
     { label: 'TAT CUVT', value: kpis.tatCuvtAvg, prev: prev.tatCuvtAvg, dir: 'down', unit: 'ngày', accent: '--series-2' },
     { label: 'TAT hoàn kho', value: kpis.tatReturnStoreAvg, prev: prev.tatReturnStoreAvg, dir: 'down', unit: 'ngày', accent: '--series-5' },
     { label: 'Thiết bị xuất kho', value: kpis.countIssued, prev: prev.countIssued, dir: 'neutral', unit: 'thiết bị', accent: '--series-3' },
-    { label: 'Chưa đối ứng', value: kpis.countNotReconciled, prev: prev.countNotReconciled, dir: 'down', unit: 'thiết bị', accent: '--series-6' },
-    { label: 'Tỷ lệ đối ứng', value: kpis.reconcileRate, prev: prev.reconcileRate, dir: 'up', unit: '%', accent: '--series-7' },
+    { label: 'Chưa đối ứng', value: kpis.countNotReconciled, prev: prev.countNotReconciled, dir: 'down', unit: 'thiết bị', accent: '--series-6', spark: 'notReconciled' },
+    { label: 'Tỷ lệ đối ứng', value: kpis.reconcileRate, prev: prev.reconcileRate, dir: 'up', unit: '%', accent: '--series-7', spark: 'reconcileRate' },
     // SL da NHAN (reci) / SL da GIAO (del) cua CUVT trong ky (2 so -> khong tinh delta)
     { label: 'SL nhận / SL giao (CUVT)', value: `${kpis.cntReci ?? 0}/${kpis.cntDel ?? 0}`, unit: '', accent: '--series-7' },
   ];
   $('#kpiGrid').innerHTML = cards
-    .map(
-      (c) => `
-      <div class="kpi" style="--accent:${cssVar(c.accent)}" title="${c.label}: ${c.value ?? 0} ${c.unit}">
+    .map((c) => {
+      // Sparkline chi ve khi THUC SU co chuoi thang (bam "Nap xu huong" xong).
+      const sp = c.spark && sparks[c.spark] && sparks[c.spark].length > 1
+        ? sauSpark(sparks[c.spark], cssVar(c.accent)) : '';
+      return `
+      <div class="kpi" style="--accent:${cssVar(c.accent)}" title="${escapeHtml(c.title || `${c.label}: ${c.value ?? 0} ${c.unit}`)}">
         <div class="kpi-label">${c.label}</div>
         <div class="kpi-value">${c.value ?? 0} <span class="kpi-unit">${c.unit}</span></div>
-        ${c.dir ? kpiDelta(c.value, c.prev, c.dir) : ''}
-      </div>`
-    )
+        <div class="kpi-chan">${c.dir ? kpiDelta(c.value, c.prev, c.dir) : ''}${sp}</div>
+      </div>`;
+    })
     .join('');
 }
 
@@ -1203,7 +1253,7 @@ let sauTargets = { tatTargetDays: 2, backlogWarnDays: 30 };
 let sauSeries = [];        // chuoi thang - chi co sau khi bam "Nap xu huong"
 let sauNotRec = [];        // dong chua doi ung - nt
 let sauRows = [];          // dong cua ky dang xem (tu /api/dashboard)
-let sauKpis = null;
+let lastDashKpis = null;   // de ve lai bang KPI chinh kem sparkline
 
 async function napMucTieu() {
   try {
@@ -1242,80 +1292,6 @@ function sauSpark(vals, mau) {
     <polyline points="${pts}" fill="none" stroke="${mau}" stroke-width="1.6"
       stroke-linejoin="round" stroke-linecap="round" opacity=".85" />
     <circle cx="${cx}" cy="${cy}" r="2.2" fill="${mau}" /></svg>`;
-}
-
-/**
- * So voi ky truoc. Tra RONG khi KHONG co so ky truoc - KHONG bia mui ten.
- * ⚠️ PHAI loai null/undefined/'' TRUOC khi goi Number(): Number(null) === 0 va
- * Number('') === 0, deu la so huu han, nen chi kiem Number.isFinite() thoi thi
- * "chua co so ky truoc" bien thanh "ky truoc bang 0" -> the KPI bay ra mot mui
- * ten tang vot hoan toan bia dat. Da gap that: luc chua nap chuoi thang, the
- * "Ton dong 36" hien "▲ 36 thiet bi so thang truoc".
- */
-function sauDelta(nay, truoc, donVi, tot) {
-  if (truoc === null || truoc === undefined || truoc === '') return '';
-  if (!Number.isFinite(Number(truoc)) || !Number.isFinite(Number(nay))) return '';
-  const d = r1s(Number(nay) - Number(truoc));
-  if (d === 0) return '<span class="delta-flat">▬ không đổi</span>';
-  const giam = d < 0;
-  const hay = (tot === 'thap') ? giam : !giam;
-  return `<span class="${hay ? 'delta-good' : 'delta-bad'}">${giam ? '▼' : '▲'} ${Math.abs(d)}${donVi}</span>`
-    + ' <span class="text-muted">so tháng trước</span>';
-}
-
-const sauMau = (v, dat, canhBao, tot) => {
-  if (!Number.isFinite(Number(v))) return cssVar('--hair');
-  const x = Number(v);
-  const ok = (tot === 'thap') ? x <= dat : x >= dat;
-  const vua = (tot === 'thap') ? x <= canhBao : x >= canhBao;
-  return ok ? cssVar('--good') : vua ? cssVar('--warning') : cssVar('--critical');
-};
-
-function veSauKpis() {
-  const target = Number(sauTargets.tatTargetDays) || 2;
-  const tat = sauTat(sauRows);
-  const dat = tat.filter((x) => x <= target).length;
-  const quaHan = tat.length - dat;
-  const sla = tat.length ? Math.round((dat / tat.length) * 100) : 0;
-  const tb = r1s(sauAvg(tat));
-  const p90 = r1s(sauPct(tat, 0.9));
-  const k = sauKpis || {};
-  // ⚠️ CHI the nao co lich su THAT moi co mui ten + sparkline. Ty le dat, P90,
-  // qua han KHONG co so ky truoc -> de trong chu khong bia.
-  const truoc = sauSeries.length >= 2 ? sauSeries[sauSeries.length - 2] : null;
-  const cot = (f) => sauSeries.map((x) => x[f]);
-  const cards = [
-    { label: 'TAT xuất kho → trả US', big: `${tb} <span class="text-sm">ngày</span>`,
-      mau: sauMau(tb, target, target * 1.5, 'thap'),
-      sub: `Mục tiêu <b>${target} ngày</b> · ${tb <= target
-        ? `<span class="delta-good">đạt (dư ${r1s(target - tb)} ngày)</span>`
-        : `<span class="delta-bad">vượt ${r1s(tb - target)} ngày</span>`}` },
-    { label: 'Tỷ lệ đạt mục tiêu', big: `${sla}<span class="text-sm">%</span>`,
-      mau: sauMau(sla, 90, 70, 'cao'), sub: `${dat}/${tat.length} thiết bị trong ${target} ngày` },
-    { label: `Quá hạn (&gt; ${target} ngày)`, big: `${quaHan}`,
-      mau: quaHan ? cssVar('--critical') : cssVar('--good'),
-      sub: quaHan ? 'thiết bị cần xem lại' : 'không có ca nào quá hạn' },
-    { label: 'P90 — đuôi chậm', big: `${p90} <span class="text-sm">ngày</span>`,
-      mau: sauMau(p90, target, target * 2, 'thap'),
-      sub: `P50 (trung vị): ${r1s(sauPct(tat, 0.5))} ngày` },
-    { label: 'Tồn đọng (chưa đối ứng)', big: `${k.countNotReconciled ?? 0}`,
-      mau: sauMau(k.reconcileRate ?? 0, 90, 75, 'cao'),
-      sub: sauDelta(k.countNotReconciled, truoc ? truoc.notReconciled : undefined, ' thiết bị', 'thap'),
-      spark: sauSpark(cot('notReconciled'), cssVar('--series-5')) },
-    { label: 'Tỷ lệ đối ứng', big: `${k.reconcileRate ?? 0}<span class="text-sm">%</span>`,
-      mau: sauMau(k.reconcileRate ?? 0, 90, 75, 'cao'),
-      sub: sauDelta(k.reconcileRate, truoc ? truoc.reconcileRate : undefined, '%', 'cao'),
-      spark: sauSpark(cot('reconcileRate'), cssVar('--series-1')) },
-  ];
-  $('#sauKpis').innerHTML = cards.map((c) => `
-    <div class="kbox" style="--k:${c.mau}">
-      <div class="klabel">${c.label}</div>
-      <div class="kbig">${c.big}</div>
-      <div class="kfoot"><div class="ksub">${c.sub || ''}</div>${c.spark || ''}</div>
-    </div>`).join('');
-  $('#sauDesc').textContent =
-    `Mục tiêu ${target} ngày (xuất kho → trả US/service) · tồn đọng quá hạn sau `
-    + `${sauTargets.backlogWarnDays} ngày. Đổi ở trang /admin.`;
 }
 
 function veSauDist() {
@@ -1490,8 +1466,7 @@ function veSauAging() {
 /** Ve cac phan dung du lieu DA CO trong /api/dashboard (khong hoi them). */
 function veSauNhanh(dash) {
   sauRows = dash.rows || [];
-  sauKpis = dash.kpis || {};
-  veSauKpis();
+  lastDashKpis = { kpis: dash.kpis || {}, prev: dash.prevKpis || {} };
   veSauDist();
   veSauPareto();
   veSauCenter();
@@ -1516,7 +1491,13 @@ async function napSauNang() {
     $('#sauAgingBox').classList.remove('hidden');
     veSauTrend();
     veSauAging();
-    veSauKpis();      // ve lai de co sparkline + so sanh ky truoc
+    // Ve lai BANG KPI CHINH de hai the co lich su co them sparkline.
+    if (lastDashKpis) {
+      renderKPIs(lastDashKpis.kpis, lastDashKpis.prev, {
+        notReconciled: sauSeries.map((x) => x.notReconciled),
+        reconcileRate: sauSeries.map((x) => x.reconcileRate),
+      });
+    }
     nut.textContent = '↻ Nạp lại xu hướng';
   } catch (e) {
     nut.textContent = cu;
