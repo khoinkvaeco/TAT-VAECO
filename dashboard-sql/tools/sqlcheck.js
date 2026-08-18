@@ -36,6 +36,11 @@ const ENDPOINTS = [
   '/api/pickslip', '/api/receiving',
   '/api/wp?wp=SQLCHECK-WP',
   '/api/wp/tim?station=SGN&wpStatus=11', '/api/wp/tim?station=SGN&wpStatus=-2&tuNgay=2026-01-01',
+  // Goi them MOT LUOT CO BO LOC station/store: menh de loc chi duoc sinh ra khi
+  // nguoi dung thuc su chon gia tri, ma LUAT 7 soi chinh cac menh de do.
+  '/api/dashboard?station=SGN&store=VNA',
+  '/api/tat/cuvt?station=SGN&store=VNA',
+  '/api/reports/returned-unservice?station=SGN&store=VNA',
 ];
 
 /** Tim vi tri dau ')' dong lai cho '(' o vi tri `open`. */
@@ -270,8 +275,48 @@ function findHaiCotNgayTrongPull(sql) {
   return loi;
 }
 
+/**
+ * LUAT 7: KHONG duoc ap BO LOC Station/Kho thang vao bang real_us1.
+ * ---------------------------------------------------------------------------
+ * ⚠️ SINH RA TU MOT LOI THAT (18/08/2026). The KPI "SL nhan / SL giao (CUVT)"
+ * hien **2/2** trong khi cung ky co ~593 thiet bi da doi ung.
+ *
+ * Nguyen nhan: danh sach gia tri cua o loc "Kho" duoc dung TU kho_ser1.[store]
+ * (xem /api/filters), nhung mot so truy van lai ap bo loc do vao
+ * real_us1.[store] - bang nay ghi kho theo BO GIA TRI KHAC. Phep IN (...) vi
+ * the gan nhu khong khop dong nao, va KHONG CO GI BAO LOI: so lieu chi lang
+ * le teo lai. Day la loai loi nguy hiem nhat vi trang van chay binh thuong.
+ *
+ * Luat: tim moi alias duoc gan cho [NQT].[dbo].[real_us1] trong cau, roi cam
+ * so alias do voi tham so @fStation / @fStore. Muon loc theo station/kho thi
+ * phai di qua PHIEU XUAT (kho_ser1) - xem khoTheoPhieuXuatClause().
+ */
+function findLocKhoTrenRealUs(sql) {
+  const loi = [];
+  const s = stripComments(sql);
+  const aliases = new Set();
+  const re = /\[NQT\]\.\[dbo\]\.\[real_us1\]\s+(?:AS\s+)?([A-Za-z_][A-Za-z0-9_]*)/gi;
+  let m;
+  while ((m = re.exec(s))) aliases.add(m[1]);
+  for (const a of aliases) {
+    for (const cot of ['station', 'store']) {
+      // vd: "r.[store] IN (@fStore0, @fStore1)" hoac "r.[store] NOT IN (...)"
+      const reXau = new RegExp(
+        `\\b${a}\\.\\[${cot}\\]\\s+(?:NOT\\s+)?IN\\s*\\([^)]*@f(?:Station|Store)`, 'i');
+      if (reXau.test(s)) {
+        loi.push(`Bo loc Station/Kho ap thang vao real_us1 (${a}.[${cot}]) - `
+          + 'danh sach gia tri cua o loc lay tu kho_ser1 nen phep IN se cat sach '
+          + 'du lieu ma khong bao loi. Loc qua phieu xuat: khoTheoPhieuXuatClause().');
+      }
+    }
+  }
+  return loi;
+}
+
 const RULES = [
   { ten: 'Ghi vao bang KHONG phai cua app', tim: findWriteOutsideAppTables },
+  { ten: 'Bo loc Station/Kho ap thang vao real_us1 (cat sach du lieu, khong bao loi)',
+    tim: findLocKhoTrenRealUs },
   { ten: 'Cau keo phieu nhap loc tren 2 cot ngay (quet ca bang HISTORY)',
     tim: findHaiCotNgayTrongPull },
   { ten: 'Ham gom chua subquery (Msg 130)', tim: findAggWithSubquery },

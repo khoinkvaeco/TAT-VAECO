@@ -142,6 +142,46 @@ async function main() {
       d30.tatXuatTraAvg === d2.tatXuatTraAvg && d30.slaP90 === d2.slaP90);
     await J('/api/admin/kpi-config', { tatTargetDays: 2 });
 
+    // ===== 1c. CAC THE KPI PHAI KHOP NHAU (bai kiem chong "so lieu la") =====
+    // ⚠️ SINH RA TU MOT LOI THAT (18/08/2026): the "SL nhan / SL giao (CUVT)"
+    // hien 2/2 trong khi cung ky co ~593 thiet bi da doi ung. Khong co gi bao
+    // loi ca - trang van chay, so lieu chi lang le sai. Cac dang thuc duoi day
+    // dung THEO DINH NGHIA, nen he so nao lech la co cho tinh nham.
+    const kAll = (await dash()).body.kpis;
+    const daDoiUng = kAll.countIssued - kAll.countNotReconciled;
+    kiemTra('Đã đối ứng + Chưa đối ứng = Thiết bị xuất kho',
+      daDoiUng + kAll.countNotReconciled === kAll.countIssued,
+      `${daDoiUng} + ${kAll.countNotReconciled} = ${kAll.countIssued}`);
+    kiemTra('Tỷ lệ đối ứng khớp với số đếm',
+      Math.abs(kAll.reconcileRate - (daDoiUng / kAll.countIssued) * 100) < 0.1,
+      `${kAll.reconcileRate}%`);
+    // Mau so SLA chinh la tap DA DOI UNG (tru CUVT) -> khong duoc vuot qua no.
+    kiemTra('Mẫu số SLA không vượt quá số thiết bị đã đối ứng',
+      kAll.slaN <= daDoiUng, `${kAll.slaN} ≤ ${daDoiUng}`);
+    // KHONG THE nhan nhieu hon so da giao - dang thuc tuyet doi.
+    kiemTra('SL nhận (CUVT) ≤ SL giao (CUVT)',
+      kAll.cntReci <= kAll.cntDel, `${kAll.cntReci} ≤ ${kAll.cntDel}`);
+    // ⚠️ DAU VET CHINH XAC CUA LOI DA XAY RA: bat bo loc Station/Kho vao thi
+    // "SL giao" sap gan het (593 -> 2) trong khi "Thiet bi xuat kho" hau nhu
+    // khong doi. Nguyen nhan la bo loc duoc ap vao MOT COT KHAC BANG, co bo
+    // gia tri khac han, nen phep IN (...) cat sach - va khong he bao loi.
+    //
+    // Cach do: so sanh TY LE CON LAI cua hai chi so sau khi loc. Hai chi so
+    // dem tren hai tap khac nhau nen ty le khong the bang nhau, nhung neu mot
+    // cai con 40% ma cai kia chi con 2% thi do khong con la nghiep vu nua.
+    // Nguong dat rat rong (lech 10 lan) - chi bat truong hop "sap", khong bat
+    // dao dong binh thuong.
+    const kLoc = (await dash('&station=SGN')).body.kpis;
+    const tyLe = (a, b2) => (b2 ? a / b2 : 0);
+    const rXuat = tyLe(kLoc.countIssued, kAll.countIssued);
+    const rGiao = tyLe(kLoc.cntDel, kAll.cntDel);
+    kiemTra('Lọc Station: KPI nào cũng chỉ nhỏ đi, không cái nào sập riêng',
+      kLoc.countIssued <= kAll.countIssued && kLoc.cntDel <= kAll.cntDel,
+      `xuất kho ${kAll.countIssued}→${kLoc.countIssued} · giao ${kAll.cntDel}→${kLoc.cntDel}`);
+    kiemTra('⚠️ Lọc Station KHÔNG được làm "SL giao" sập trong khi "Thiết bị xuất kho" thì không',
+      rXuat < 0.05 || rGiao >= rXuat / 10,
+      `còn lại: xuất kho ${(rXuat * 100).toFixed(1)}% · giao ${(rGiao * 100).toFixed(1)}%`);
+
     // ================= 2. TAI KHOAN LGC ====================================
     const MA = 'CU7788';
     const tao = await dangNhap(MA, MA);          // lan dau: mat khau = ma NV

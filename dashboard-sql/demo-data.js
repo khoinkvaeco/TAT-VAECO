@@ -123,21 +123,55 @@ function tatDepartments(range, f) {
   return applyFilter(rows, f);
 }
 
-function tatCuvt(range, f) {
+/**
+ * KHO CHUNG cua cac dong TRA UNSERVICE (real_us1) trong ky.
+ * ---------------------------------------------------------------------------
+ * ⚠️ PHAI CO MOT KHO CHUNG. Truoc day `tatCuvt` (80 dong) va
+ * `returnedUnservice` (50 dong) duoc sinh RIENG, nen du lieu demo mo ta mot
+ * chuyen khong the xay ra: 80 thiet bi DA NHAN trong khi chi 50 thiet bi
+ * DA GIAO. O du lieu that quan he la BAO HAM - "da nhan" luon la TAP CON cua
+ * "da giao" (cung loc del_time trong ky, chi them dieu kien reci_time hop le).
+ * Bai kiem "SL nhan (CUVT) ≤ SL giao (CUVT)" bat dung cho nay.
+ */
+const _usPoolCache = new Map();
+function usPool(range) {
+  const ck = `${range.from}|${range.to}`;
+  if (_usPoolCache.has(ck)) return _usPoolCache.get(ck);
   const rows = [];
-  for (let i = 0; i < 80; i++) {
+  for (let i = 0; i < 120; i++) {
     const d = baseDevice(i);
     const del = rndDate(range.from, range.to);
+    // ~70% da duoc CUVT nhan; so con lai chua nhan (reci_time = null)
+    const daNhan = Math.random() > 0.3;
     const tat = +(Math.random() * 2 + 0.05).toFixed(1); // ngay
-    const rec = new Date(del.getTime() + tat * 86400000);
     rows.push({
       ...d,
-      department: 'CUVT',
-      return_unservice_time: del.toISOString(),
-      receive_unservice_time: rec.toISOString(),
-      tat_days: tat,
+      historyno: 'H' + rndInt(100000, 999999),
+      del_staff: 'NV' + rndInt(100, 999),
+      department: rnd(DEPARTMENTS),
+      del_time: del.toISOString(),
+      reci_time: daNhan ? new Date(del.getTime() + tat * 86400000).toISOString() : null,
+      tat_days: daNhan ? tat : null,
     });
   }
+  if (_usPoolCache.size > 40) _usPoolCache.clear();
+  _usPoolCache.set(ck, rows);
+  return rows;
+}
+
+/** TAT CUVT = TAP CON cua kho chung: chi cac dong DA duoc CUVT nhan. */
+function tatCuvt(range, f) {
+  const rows = usPool(range)
+    .filter((r) => r.reci_time)
+    .map((r) => ({
+      partno: r.partno, serialno: r.serialno, labelno: r.labelno,
+      description: r.description, station: r.station, store: r.store,
+      staff: r.staff, ac_registr: r.ac_registr,
+      department: 'CUVT',
+      return_unservice_time: r.del_time,
+      receive_unservice_time: r.reci_time,
+      tat_days: r.tat_days,
+    }));
   return applyFilter(rows, f);
 }
 
@@ -207,27 +241,23 @@ function removedNotReturned(range, f) {
   return applyFilter(rows, f);
 }
 
+/** TRA UNSERVICE = TOAN BO kho chung (xem usPool). */
 function returnedUnservice(range, f) {
-  const rows = [];
-  for (let i = 0; i < 50; i++) {
-    const d = baseDevice(i);
-    const del = rndDate(range.from, range.to);
-    rows.push({
-      partno: d.partno,
-      serialno: d.serialno,
-      labelno: d.labelno,
-      description: d.description,
-      historyno: 'H' + rndInt(100000, 999999),
-      staff: d.staff,
-      ac_registr: d.ac_registr,
-      station: d.station,
-      store: d.store,
-      department: rnd(DEPARTMENTS),
-      del_staff: 'NV' + rndInt(100, 999),
-      del_time: del.toISOString(),
-      reci_time: Math.random() > 0.3 ? new Date(del.getTime() + rndInt(1, 48) * 3600000).toISOString() : null,
-    });
-  }
+  const rows = usPool(range).map((r) => ({
+    partno: r.partno,
+    serialno: r.serialno,
+    labelno: r.labelno,
+    description: r.description,
+    historyno: r.historyno,
+    staff: r.staff,
+    ac_registr: r.ac_registr,
+    station: r.station,
+    store: r.store,
+    department: r.department,
+    del_staff: r.del_staff,
+    del_time: r.del_time,
+    reci_time: r.reci_time,
+  }));
   return applyFilter(rows, f);
 }
 

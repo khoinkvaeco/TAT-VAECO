@@ -624,6 +624,56 @@ function buildFilterClause(f, cols, params) {
 }
 
 /**
+ * BO LOC Station/Kho CHO CAC BAO CAO CHI CO BANG real_us1.
+ * ---------------------------------------------------------------------------
+ * ⚠️ SINH RA TU MOT LOI THAT (18/08/2026): the KPI "SL nhan / SL giao (CUVT)"
+ * hien 2/2 trong khi cung ky co ~593 thiet bi da doi ung.
+ *
+ * Nguyen nhan: cac bao cao chi co bang real_us1 (TAT CUVT, Tra unservice) ap
+ * bo loc Station/Kho vao r.[station] / r.[store]. Nhung danh sach gia tri cua
+ * o loc "Kho" tren thanh loc duoc dung TU kho_ser1.[store] (xem /api/filters),
+ * con real_us1 ghi kho theo mot BO GIA TRI KHAC -> phep IN (...) gan nhu khong
+ * khop dong nao. Nguoi dung khong the biet dieu do vi o loc khong bao gio chao
+ * gia tri cua real_us1.
+ *
+ * Quy tac cua ca dashboard (da ghi trong README): **Station/Kho LUON lay tu
+ * kho_ser1** - tuc la tu PHIEU XUAT. Ham nay dua cac bao cao do ve dung quy
+ * tac: loc qua phieu xuat tuong ung bang EXISTS.
+ *
+ *   · EXISTS chu KHONG phai JOIN: mot dong real_us1 co the khop nhieu dong
+ *     kho_ser1, JOIN se nhan doi so dem.
+ *   · CHI them dieu kien khi nguoi dung CO chon station/kho. Khong chon thi
+ *     tra ve '' - giu nguyen "tat ca" nhu cu, khong tu y thu hep so mac dinh.
+ *
+ * @param f       bo loc tu readFilters()
+ * @param params  doi tuong tham so cua truy van (se duoc ghi them vao)
+ * @param alias   alias cua bang real_us1 trong cau goi (mac dinh 'r')
+ */
+function khoTheoPhieuXuatClause(f, params, alias = 'r') {
+  const p = {};
+  const dk = stationClause(f, 'kx.[station]', p)
+    + storeInClause(f, 'kx.[store]', p)
+    + excludeCabClause(f, 'kx.[store]');
+  if (!dk) return '';
+  Object.assign(params, p);
+  return ` AND EXISTS (
+        SELECT 1 FROM [NQT].[dbo].[kho_ser1] kx
+        WHERE kx.[vm] = 'T'
+          AND kx.[labelno] = ${alias}.[labelno]
+          AND kx.[voucherno] = ${alias}.[voucher_s]
+          ${dk})`;
+}
+
+/**
+ * Bo loc DAY DU cho bao cao chi co real_us1: Trung tam van lay tu real_us1
+ * (deptFromReal - nguon dung), Station/Kho lay qua phieu xuat.
+ */
+function realUsFilterClause(f, deptExpr, params, alias = 'r') {
+  return inClause(f.department, deptExpr, params, 'fDepartment')
+    + khoTheoPhieuXuatClause(f, params, alias);
+}
+
+/**
  * Dieu kien "Bo qua xuat costcenter" (checkbox tren dashboard).
  * Loai cac phieu xuat co receiver LA SO: dung 2 chu so ('15') hoac so thuan
  * (chi gom chu so va dau . , - vi du '1234', '12.5') - day la xuat cho
@@ -1540,11 +1590,8 @@ async function qTatDepartments(range, f) {
 async function qTatCuvt(range, f) {
   const params = { from: range.from, to: range.to, top: CONFIG.maxRows };
   const dept = deptFromReal('r', 'sm');
-  let where = buildFilterClause(
-    f,
-    { station: 'r.[station]', store: 'r.[store]', department: dept },
-    params
-  );
+  // Station/Kho loc QUA PHIEU XUAT - xem khoTheoPhieuXuatClause()
+  let where = realUsFilterClause(f, dept, params);
   const text = `
     SELECT TOP (@top)
       r.[partno]     AS partno,
@@ -2527,11 +2574,8 @@ async function qOneSidedWoParts(range, f) {
 async function qReturnedUnservice(range, f) {
   const params = { from: range.from, to: range.to, top: CONFIG.maxRows };
   const dept = deptFromReal('r', 'sm');
-  let where = buildFilterClause(
-    f,
-    { station: 'r.[station]', store: 'r.[store]', department: dept },
-    params
-  );
+  // Station/Kho loc QUA PHIEU XUAT - xem khoTheoPhieuXuatClause()
+  let where = realUsFilterClause(f, dept, params);
   const text = `
     SELECT TOP (@top)
       r.[event_perf] as event_perf,
@@ -4119,11 +4163,27 @@ async function qDashboardAgg(range, f) {
 
   // [0] va [6] co dong real_us1 -> Trung tam lay tu real_us1 (deptR).
   const wDept = buildFilterClause(f, { station: 'k.[station]', store: 'k.[store]', department: deptR }, params);
-  const wCuvt = buildFilterClause(f, { station: 'r.[station]', store: 'r.[store]', department: deptR }, params);
   const wRet = buildFilterClause(f, { station: 'tc.[station]', store: 'tc.[store]', department: deptT }, params);
   const wNotRec = buildFilterClause(f, { station: 'k.[station]', store: 'k.[store]', department: deptK }, params);
-  const wRetUS = buildFilterClause(f, { station: 'r.[station]', store: 'r.[store]', department: deptR }, params);
   const wNI = buildFilterClause(f, { station: 'k.[station]', store: 'k.[store]', department: deptK }, params);
+  // ⚠️ [1] TAT CUVT va [4] Tra unservice CHI co bang real_us1, khong noi sang
+  // kho_ser1. Truoc day chung ap bo loc Station/Kho vao r.[station]/r.[store]
+  // -> SAI, va sai rat nang: danh sach o loc "Kho" tren thanh loc duoc dung
+  // TU kho_ser1.[store] (xem /api/filters), con real_us1 ghi kho theo mot bo
+  // gia tri KHAC. Phep IN (...) vi the gan nhu khong khop dong nao: tren du
+  // lieu that the "SL nhan / SL giao (CUVT)" hien 2/2 trong khi ca ky co ~593
+  // thiet bi da doi ung. TAT CUVT cung bi tinh tren dung 2 dong do.
+  //
+  // README da ghi ro quy tac cua ca dashboard: "Station LUON lay tu
+  // kho_ser1.station". Nay [1] va [4] tuan dung quy tac do - loc qua PHIEU
+  // XUAT tuong ung bang EXISTS.
+  //   · Dung EXISTS chu KHONG phai JOIN: mot dong real_us1 co the khop nhieu
+  //     dong kho_ser1, JOIN se nhan doi so dem.
+  //   · Chi them EXISTS KHI NGUOI DUNG CO CHON station/kho. Khong chon thi giu
+  //     nguyen "tat ca" nhu cu - khong tu y thu hep so lieu mac dinh.
+  // Trung tam VAN lay tu real_us1 (deptR) - do la nguon dung, xem deptFromReal.
+  const wCuvt = realUsFilterClause(f, deptR, params);
+  const wRetUS = wCuvt;
   // Nhanh "tra service": dept theo created_b2 (khong co real_us1)
   const wSvc = buildFilterClause(f, { station: 'k.[station]', store: 'k.[store]', department: deptK }, params);
 
@@ -5808,7 +5868,8 @@ app.get(
         cacheMB: Math.round((cacheTotalBytes / 1048576) * 10) / 10,
       },
       // Liet ke cac route chan doan de biet ban dang chay da co chua
-      diagRoutes: ['/api/admin/diag/dept', '/api/admin/diag/higher', '/api/admin/diag/pairing', '/api/admin/diag/rbi'],
+      diagRoutes: ['/api/admin/diag/dept', '/api/admin/diag/higher', '/api/admin/diag/pairing',
+        '/api/admin/diag/rbi', '/api/admin/diag/cuvt-loc', '/api/admin/diag/receiving-loai'],
     };
     if (CONFIG.demoMode) {
       return res.json({ ...base, mode: 'demo', message: 'Dang chay DEMO_MODE (du lieu mau).' });
@@ -7738,6 +7799,116 @@ app.get('/api/admin/diag/rnr', h(async (req, res) => {
 //       - CHUA doi ung (notRecAgg): SIGN(nguoi LAP PHIEU XUAT)              -> 'PA'
 //     Con Station thi LUON lay tu phieu xuat (kho_ser1.station).
 //     Endpoint CHI DOC.
+/**
+ * CHAN DOAN "SL nhan / SL giao (CUVT)".
+ * ---------------------------------------------------------------------------
+ * Sinh ra vi hai con so nay hien 2/2 trong khi ca ky co ~593 thiet bi da doi
+ * ung - nho den muc chac chan la sai. Bai nay BOC TUNG DIEU KIEN de chi ra
+ * dieu kien nao cat mat bao nhieu dong, thay vi doan.
+ *
+ * ⚠️ Nghi van chinh: bo loc Store tren thanh loc lay danh sach tu
+ * kho_ser1.[store], nhung hai chi so nay ap bo loc do vao real_us1.[store].
+ * Neu hai bang dung BO GIA TRI KHAC NHAU thi phep IN (...) cat sach.
+ */
+app.get('/api/admin/diag/cuvt-loc', h(async (req, res) => {
+  if (CONFIG.demoMode) return res.json({ note: 'Dang o DEMO_MODE, khong co du lieu that.' });
+  const range = resolveRange(req.query);
+  const f = readFilters(req.query);
+  const ds = (v) => (v && v.length ? v.join(', ') : '(tat ca)');
+  const deptR = deptFromReal('r', 'sm');
+
+  // Dem cung mot tap voi TUNG bo loc rieng le, de thay cai nao cat bao nhieu.
+  const dem = async (them, extraParams = {}) => {
+    const p = { from: range.from, to: range.to, ...extraParams };
+    const r = await query(`
+      SELECT COUNT(*) AS n
+      FROM [NQT].[dbo].[real_us1] r
+      ${signJoin('r.[action_per]', 'sm')}
+      WHERE r.[del_time] IS NOT NULL
+        AND r.[del_time] >= @from AND r.[del_time] < @to
+        ${them}`, p);
+    return Number(r[0] && r[0].n) || 0;
+  };
+
+  const pSt = {};
+  const cSt = stationClause(f, 'r.[station]', pSt);
+  const pStore = {};
+  const cStore = storeInClause(f, 'r.[store]', pStore);
+  const pDept = {};
+  const cDept = inClause(f.department, deptR, pDept, 'fDepartment');
+  // CACH CU (da bo): loc thang vao r.[station] / r.[store]
+  const pCu = {};
+  const cCu = buildFilterClause(f,
+    { station: 'r.[station]', store: 'r.[store]', department: deptR }, pCu);
+  // CACH MOI (dang dung): Trung tam theo real_us1, Station/Kho qua PHIEU XUAT
+  const pMoi = {};
+  const cMoi = realUsFilterClause(f, deptR, pMoi);
+
+  const [khongLoc, chiStation, chiStore, chiDept, cachCu, cachMoi] = await Promise.all([
+    dem(''), dem(cSt, pSt), dem(cStore, pStore), dem(cDept, pDept),
+    dem(cCu, pCu), dem(cMoi, pMoi),
+  ]);
+
+  // Cung cach dem nhung THEM dieu kien "da nhan" (reci_time hop le)
+  const nhanTheo = ` AND r.[reci_time] IS NOT NULL AND r.[reci_time] >= r.[del_time]`;
+  const [nhanKhongLoc, nhanCu, nhanMoi] = await Promise.all([
+    dem(nhanTheo), dem(nhanTheo + cCu, pCu), dem(nhanTheo + cMoi, pMoi),
+  ]);
+
+  // BO GIA TRI store/station cua HAI BANG - de nhin ra ngay chung co cung
+  // "tu dien" hay khong. Day la cau tra loi that su cua ca bai kiem tra nay.
+  const storeReal = await query(`
+    SELECT LTRIM(RTRIM(ISNULL(r.[store], '(NULL)'))) AS store, COUNT(*) AS so_dong
+    FROM [NQT].[dbo].[real_us1] r
+    WHERE r.[del_time] >= @from AND r.[del_time] < @to
+    GROUP BY LTRIM(RTRIM(ISNULL(r.[store], '(NULL)')))
+    ORDER BY COUNT(*) DESC`, { from: range.from, to: range.to });
+  const stationReal = await query(`
+    SELECT LTRIM(RTRIM(ISNULL(r.[station], '(NULL)'))) AS station, COUNT(*) AS so_dong
+    FROM [NQT].[dbo].[real_us1] r
+    WHERE r.[del_time] >= @from AND r.[del_time] < @to
+    GROUP BY LTRIM(RTRIM(ISNULL(r.[station], '(NULL)')))
+    ORDER BY COUNT(*) DESC`, { from: range.from, to: range.to });
+
+  // Neu loc theo PHIEU XUAT (k.station/k.store) thay vi theo real_us1 thi
+  // duoc bao nhieu - day chinh la cach MOI CHI SO KHAC tren dashboard dang lam.
+  const pK = { from: range.from, to: range.to };
+  const cK = buildFilterClause(f,
+    { station: 'k.[station]', store: 'k.[store]', department: deptR }, pK);
+  const theoPhieuXuat = await query(`
+    SELECT COUNT(*) AS n
+    FROM [NQT].[dbo].[kho_ser1] k
+    INNER JOIN [NQT].[dbo].[real_us1] r
+      ON k.[labelno] = r.[labelno] AND k.[voucherno] = r.[voucher_s]
+    ${signJoin('r.[action_per]', 'sm')}
+    WHERE k.[vm] = 'T' AND k.[voucherno] LIKE 'P-%'
+      AND LTRIM(RTRIM(ISNULL(k.[costcenter], ''))) <> 'VN-SPL'
+      AND UPPER(LTRIM(RTRIM(ISNULL(k.[store], '')))) NOT IN ('MAIN','3RD')
+      AND UPPER(LTRIM(RTRIM(ISNULL(k.[condition], '')))) <> 'US'
+      ${excludeCostcenterClause(f, 'k')}
+      AND LTRIM(RTRIM(ISNULL(k.[receiver], ''))) <> ''
+      AND r.[del_time] >= @from AND r.[del_time] < @to
+      ${usPairDedup()}
+      ${cK}`, pK);
+
+  res.json({
+    ky: range.label,
+    boLocDangChon: { station: ds(f.station), store: ds(f.store), department: ds(f.department) },
+    ghiChu: 'cachMoi = con so DANG hien tren the KPI "SL nhan / SL giao (CUVT)"; '
+      + 'cachCu = con so cua ban truoc khi sua (loc thang vao real_us1.station/store).',
+    slGiao: { khongLoc, chiStation, chiStore, chiDept, cachCu, cachMoi },
+    slNhan: { khongLoc: nhanKhongLoc, cachCu: nhanCu, cachMoi: nhanMoi },
+    // Neu bo gia tri o day KHONG trung voi cac kho tren thanh loc thi da ro
+    // nguyen nhan: dang loc bang tu dien cua bang KHAC.
+    boGiaTriCuaRealUs1: { store: storeReal, station: stationReal },
+    giaoLocTheoPhieuXuat: {
+      ghiChu: 'Dem cung tap nhung loc theo kho_ser1.station/store - dung cach '
+        + 'ma MOI chi so khac tren dashboard dang dung.',
+      n: Number(theoPhieuXuat[0] && theoPhieuXuat[0].n) || 0,
+    },
+  });
+}));
+
 app.get('/api/admin/diag/dept', h(async (req, res) => {
   if (CONFIG.demoMode) return res.json({ note: 'Dang o DEMO_MODE, khong co du lieu that.' });
   const range = resolveRange(req.query);

@@ -1530,6 +1530,90 @@ câu `SELECT … INTO #hraw`; thấy cả hai cột ngày là **TRƯỢT**.
 trên CẢ HAI cột [DEL_DATE] và [MUTATION]`. Bỏ lời gọi `layReturnSeqnos` → LUẬT 5 báo
 `✖ /api/receiving: câu SQL THIẾU cột "seq_ret"`. Hai lỗi, hai luật, mỗi luật bắt đúng lỗi của mình.
 
+## 7p. ⚠️ Bộ lọc Kho/Station áp nhầm bảng — “SL nhận / SL giao (CUVT)” hiện 2/2
+
+**Triệu chứng thật (18/08/2026).** Thẻ KPI *SL nhận / SL giao (CUVT)* hiện **2/2**, trong khi cùng
+kỳ đó *Thiết bị xuất kho* = **756**, *Chưa đối ứng* = **163** → **593 thiết bị đã đối ứng**. Không
+có lỗi nào được báo — trang chạy bình thường, số liệu chỉ **lặng lẽ sai**.
+
+### Nguyên nhân
+
+| | Lấy giá trị từ đâu | Lọc vào cột nào |
+|---|---|---|
+| Ô lọc **Kho** trên thanh lọc | `kho_ser1.[store]` (xem `/api/filters`) | — |
+| *TAT CUVT* · *Trả unservice* (trước khi sửa) | — | **`real_us1.[store]`** |
+
+Hai bảng ghi kho theo **bộ giá trị khác nhau**, nên phép `IN (...)` gần như không khớp dòng nào.
+Người dùng **không có cách nào biết**: ô lọc không bao giờ chào giá trị của `real_us1`.
+
+Đây là loại lỗi nguy hiểm nhất — **không có thông báo lỗi**, chỉ có con số teo lại. Nó kéo theo:
+`SL giao`, `SL nhận`, **`TAT CUVT`** (tính trên đúng 2 dòng đó) và do đó cả **`TAT tổng 3 chặng`**.
+
+### Cách sửa
+
+README đã ghi sẵn quy tắc của cả dashboard: **Station/Kho LUÔN lấy từ `kho_ser1`** — tức là từ
+**phiếu xuất**. Ba chỗ vi phạm nay tuân đúng quy tắc đó qua `khoTheoPhieuXuatClause()`:
+
+```sql
+AND EXISTS (
+  SELECT 1 FROM [NQT].[dbo].[kho_ser1] kx
+  WHERE kx.[vm] = 'T'
+    AND kx.[labelno] = r.[labelno] AND kx.[voucherno] = r.[voucher_s]
+    AND kx.[station] IN (@fStation0) AND kx.[store] IN (@fStore0, …))
+```
+
+* **`EXISTS` chứ không phải `JOIN`** — một dòng `real_us1` có thể khớp nhiều dòng `kho_ser1`,
+  `JOIN` sẽ **nhân đôi số đếm**.
+* **Chỉ thêm điều kiện khi người dùng CÓ chọn** station/kho. Không chọn → giữ nguyên “tất cả” như
+  cũ, không tự ý thu hẹp số liệu mặc định.
+* **Trung tâm vẫn lấy từ `real_us1.department`** — đó vẫn là nguồn đúng (§ bảng mục 3).
+
+Ba chỗ đã sửa: `qDashboardAgg` [1] *TAT CUVT* · [4] *Trả unservice* · `qTatCuvt` · `qReturnedUnservice`.
+
+### Đo lại bằng `GET /api/admin/diag/cuvt-loc`
+
+Nhận đúng bộ lọc đang hiển thị trên màn hình, rồi bóc **từng điều kiện** cắt mất bao nhiêu dòng:
+
+| Trường | Nghĩa |
+|---|---|
+| `slGiao.khongLoc` | không lọc gì |
+| `slGiao.chiStation` / `chiStore` / `chiDept` | chỉ áp **một** bộ lọc |
+| `slGiao.cachCu` | con số của bản **trước** khi sửa (lọc thẳng vào `real_us1`) |
+| `slGiao.cachMoi` | con số **đang** hiện trên thẻ KPI |
+| `boGiaTriCuaRealUs1.store` / `.station` | **bộ giá trị thật** của `real_us1` — đối chiếu với các kho trên thanh lọc là thấy ngay hai bảng có cùng “từ điển” hay không |
+
+### Hai lớp chặn để không lặp lại
+
+**LUẬT 7 của `tools/sqlcheck.js`** — cấm áp bộ lọc Station/Kho thẳng vào `real_us1`. Nó tìm mọi
+alias được gán cho `[NQT].[dbo].[real_us1]` rồi cấm alias đó đứng cạnh `@fStation` / `@fStore`.
+`sqlcheck` nay gọi thêm một lượt **có bộ lọc** (`?station=SGN&store=VNA`) vì mệnh đề lọc chỉ được
+sinh ra khi người dùng thật sự chọn. Đã **đo thật**: đặt lại đúng dòng code cũ → `✖ TRƯỢT` với 2 lỗi
+(`r.[station]`, `r.[store]`).
+
+**`tools/admincheck.js`** thêm 6 đẳng thức giữa các thẻ KPI — đúng **theo định nghĩa**, nên lệch là
+có chỗ tính nhầm:
+
+```
+Đã đối ứng + Chưa đối ứng = Thiết bị xuất kho
+Tỷ lệ đối ứng            = Đã đối ứng / Thiết bị xuất kho
+Mẫu số SLA              ≤ Đã đối ứng
+SL nhận (CUVT)          ≤ SL giao (CUVT)          ← không thể nhận nhiều hơn số đã giao
+Lọc Station: KPI nào cũng chỉ nhỏ đi
+Lọc Station KHÔNG được làm "SL giao" sập trong khi "Thiết bị xuất kho" thì không
+```
+
+Đã **đo thật**: mô phỏng đúng lỗi (lọc *SL giao* bằng một cột có bộ giá trị khác) → `✖ còn lại:
+xuất kho 29.5% · giao 0.0%`.
+
+### ⚠️ Dữ liệu demo cũng từng mô tả chuyện không thể xảy ra
+
+Chính đẳng thức `SL nhận ≤ SL giao` **trượt ngay lần chạy đầu** — không phải vì code SQL, mà vì
+`demo-data.js` sinh `tatCuvt` (80 dòng) và `returnedUnservice` (50 dòng) **riêng rẽ**: 80 thiết bị
+“đã nhận” trong khi chỉ 50 thiết bị “đã giao”. Ở dữ liệu thật quan hệ là **bao hàm** — “đã nhận”
+luôn là **tập con** của “đã giao”. Nay cả hai lấy từ **một kho chung** `usPool(range)`, dòng nào có
+`reci_time` thì thuộc *đã nhận*. Bài kiểm tra chỉ có giá trị khi dữ liệu mẫu tuân đúng quan hệ của
+dữ liệu thật.
+
 ## 7o. Vì sao RETURN vào tab Receiving mà CANCEL thì không
 
 **Nghiệp vụ chốt** — đây là lý do của cả tính năng, không phải chi tiết kỹ thuật:
@@ -1662,6 +1746,7 @@ trả đều báo “chưa scan” oan**.
 | `GET /api/admin/diag/rbi` | Chẩn đoán báo cáo *Tháo trước lắp sau* (đếm theo từng điều kiện nới lỏng dần). **Chỉ IP quản trị.** |
 | `GET /api/admin/diag/remark` | Soi **đuôi chuỗi `REMARKS`** của các dòng có `QTY_CANCELED > 0` để tìm dấu hiệu phân biệt **hủy** với **trả**: liệt kê **từ cuối cùng** và **8/12/20 ký tự cuối** hay gặp nhất kèm số lần, cộng 20 remark nguyên văn. **Chỉ đọc. Chỉ IP quản trị.** |
 | `GET /api/admin/diag/rnr` | Chẩn đoán báo cáo *Tháo chưa trả US*: đếm **6 bước cộng dồn** (tháo trong kỳ → chưa trả US → `higher_par IS NULL` → có trong ROTABLES → `MUTATION > đầu kỳ` → `condition = 'US'`) để thấy điều kiện nào cắt bớt bao nhiêu dòng, kèm phân bố `condition` hiện tại của nhóm bị loại. **Chỉ đọc. Chỉ IP quản trị.** |
+| `GET /api/admin/diag/cuvt-loc` | Soi vì sao **“SL nhận / SL giao (CUVT)”** ra con số nhỏ bất thường. Nhận đúng bộ lọc đang hiển thị rồi bóc **từng điều kiện**: `khongLoc` · `chiStation` · `chiStore` · `chiDept` · `cachCu` (lọc thẳng vào `real_us1` — cách **sai** đã bỏ) · `cachMoi` (lọc qua **phiếu xuất** — cách đang dùng). Kèm `boGiaTriCuaRealUs1.store` / `.station` là **bộ giá trị thật** của `real_us1` để đối chiếu với các kho trên thanh lọc — nhìn là biết ngay hai bảng có cùng “từ điển” hay không. Xem §7p. **Chỉ đọc. Chỉ IP quản trị.** |
 | `GET /api/admin/diag/dept` | Soi vì sao một **Trung tâm** lại xuất hiện dưới một **Station** khác: nêu rõ hai nhánh số liệu đang dùng **hai cách suy ra Trung tâm khác nhau** (*đã đối ứng* → `real_us1.department` → `SIGN(action_per)`; *chưa đối ứng* → `SIGN(created_b2)`), trong khi **Station luôn lấy từ `kho_ser1.station`**. Trả về 30 dòng ví dụ kèm đủ nguồn (`dept_ghi_trong_real_us1`, `dept_tu_SIGN_theo_nguoi_tra`, `station_phieu_xuat`, `station_tra_us`) và bảng đếm 2 nhánh theo từng Trung tâm. Tham số: `?department=<mã>` + các bộ lọc thường dùng. **Chỉ đọc. Chỉ IP quản trị.** |
 | `GET /api/admin/diag/higher` | Soi nhóm **lắp vào cụm cao hơn**: `bookingStatus` cho biết phân bố `WO_PART_ON_OFF.STATUS` (0 = Not Booked · 1 = Booked) trong kỳ, tách theo dòng một phía / hai phía; `ketQuaTach` cho biết trước khi loại bao nhiêu, còn lại bao nhiêu, bị chuyển sang *Chi tiết TAT* bao nhiêu (kèm 5 ví dụ có giờ lắp + TAT install); `chiThaoKhongCoLap` đếm chiều ngược lại — thiết bị **bị thay ra khỏi cụm** mà không có `on_off vm='YA'`, tách theo đã / chưa trả unservice; ngoài ra liệt kê cột thật của `WO_PART_ON_OFF` và thống kê phân bố giá trị từng cột. **Chỉ đọc. Chỉ IP quản trị.** |
 | `GET /api/admin/report-status` | Trạng thái báo cáo định kỳ Teams/SharePoint (lịch, kỳ, kênh đã bật). **Chỉ IP quản trị.** |
