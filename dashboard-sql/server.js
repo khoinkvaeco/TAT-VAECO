@@ -6518,10 +6518,34 @@ app.get('/api/admin/diag/receiving-loai', h(async (req, res) => {
                   WHEN RTRIM(h.[VOUCHERNO]) LIKE 'R-%'    THEN 'R-…'
                   ELSE 'khac' END
     ORDER BY COUNT(*) DESC`);
+  // ⚠️ Bo loc "CONDITION khong chua US" AP CHO CA dong return (nghiep vu chon).
+  // Hang tra ve kho phan lon la unserviceable, nen con so bi loai o day co the
+  // rat lon - phai dem ra cho thay, khong de nguoi dung tu hoi "sao it the".
+  const loc = await query(`
+    SELECT RTRIM(h.[VM]) AS vm,
+           COUNT(*) AS so_dong,
+           SUM(CASE WHEN LOWER(ISNULL(h.[CONDITION], '')) LIKE '%us%'
+                    THEN 1 ELSE 0 END) AS bi_loai_vi_us
+    FROM [DWH_DB]..[STG_AMOS].[HISTORY] h
+    WHERE h.[VM] IN ('EA', 'TC')
+      AND h.[MUTATION] >= ${dx.fromDayX} AND h.[MUTATION] < ${dx.toDayX}
+    GROUP BY RTRIM(h.[VM])`);
+  const tong = loc.reduce((a, r) => a + (Number(r.so_dong) || 0), 0);
+  const loai = loc.reduce((a, r) => a + (Number(r.bi_loai_vi_us) || 0), 0);
   res.json({
     ky: range.label,
     giaiThich: 'Dong duoc xep RETURN khi VM ∈ {EA, TC} - dung bo ma ma tab '
       + 'Quan ly xuat kho dung de tra phieu tra.',
+    // Bao nhieu dong return bi bo loc CONDITION cat mat
+    returnBiLocUS: {
+      ghiChu: 'Bo loc CONDITION NOT LIKE "%us%" ap cho CA dong return (nghiep vu '
+        + 'chon). Nhung dong duoi day KHONG hien trong tab Receiving va KHONG vao '
+        + 'KPI inspector.',
+      tongReturn: tong,
+      biLoaiViUS: loai,
+      conLai: tong - loai,
+      theoVM: loc,
+    },
     rows,
   });
 }));
