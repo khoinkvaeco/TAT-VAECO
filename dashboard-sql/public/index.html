@@ -487,6 +487,9 @@
     <!-- ---------- LGC ▸ Receiving (nhập kho) ---------- -->
     <div id="lgc-receiving" class="hidden">
       <div id="recvPane">
+        <!-- Chỉ hiện khi bước lấy dòng Return (từ phần phiếu xuất) thất bại:
+             bảng vẫn có phiếu nhập nhưng THIẾU return — phải nói ra. -->
+        <div id="recvRetWarn" class="scanbar scanbar-warn mb-3 hidden"></div>
         <div id="recvScanBar" class="scanbar mb-3 hidden"></div>
         <div id="recvKpi" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 mb-5"></div>
 

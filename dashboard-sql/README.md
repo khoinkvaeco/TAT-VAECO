@@ -165,8 +165,8 @@ lẫn với “phiếu”.)*
 | **TAT hoàn kho** | Thiết bị hoàn kho (`vm='TC'`, voucher `P-CA-...`) đối chiếu phiếu xuất (`vm='T'`, `P-...`) cùng `partno/serialno/labelno`. TAT = thời điểm hoàn − thời điểm xuất (đơn vị: ngày). |
 | **Xuất kho chưa lắp** | `kho_ser1 vm='T'` không có `on_off vm='YE'` (link `partno,serialno,labelno`). Có cột **Event (WO)** (`kho_ser1.event_perf` — số work order của phiếu xuất) và cột **Vị trí hiện tại** (`location`, lấy từ `[DWH_DB]..[STG_AMOS].[ROTABLES]` nối qua khóa **`psn`** — thiết bị đang nằm ở đâu). *(`PARTNONEW`/`SERIALNONEW` vẫn được lấy về nhưng **không hiển thị** — chỉ dùng nội bộ cho việc nhận diện nhóm “lắp vào cụm cao hơn” và cho `/api/admin/diag/higher`.)* Khóa `psn` ưu tiên lấy từ `kho_ser1`; bảng đó không có thì tra từ `on_off` theo part+serial (dò `INFORMATION_SCHEMA`, thiếu cột thì 3 cột này để trống chứ không lỗi). ROTABLES nằm trên linked server nên cả 3 cột được lấy trong **cùng một lượt hỏi theo lô** (`WHERE psn IN (…)`, 500/lượt) **sau khi** đã có kết quả — không hỏi từng dòng. **Đã loại nhóm "lắp vào cụm cao hơn"** — xem dòng dưới. |
 | **Lắp vào cụm cao hơn** (*higher assembly*) | Thiết bị **không lắp lên tàu** (không sinh `on_off vm='YE'`) mà được gắn vào một **cụm cha** — `ROTABLES.PARTNONEW`/`SERIALNONEW` có giá trị. Lần lắp này **chỉ** được ghi ở `[DWH_DB]..[STG_AMOS].[WO_PART_ON_OFF]`. **Nhận diện:** thiết bị nằm trong tập *Xuất kho chưa lắp* **và** có dòng `WO_PART_ON_OFF` trùng `(PARTNO, SERIALNO)` với thời điểm lắp **sau** giờ xuất kho → lấy **lần lắp sớm nhất** sau giờ xuất. (Đã đo thực tế: không có cột nào trong `WO_PART_ON_OFF` đánh dấu "lắp vào cụm" — `LOCID_PK` rỗng 55% ở nhóm này so với 52% ở nhóm lắp lên tàu, tức không phân biệt được; nên dùng chính **sự tồn tại của bản ghi lắp** làm căn cứ.) Nhóm này bị **loại khỏi** *Xuất kho chưa lắp* và **thêm vào** bảng *Chi tiết TAT* với `return_type = 'INSTALL'` (**"Chỉ lắp lên"**): chỉ có **Ngày lắp** và **TAT install**; Ngày tháo / Ngày trả / TAT tổng để trống. **Hai cột `Part No (off)` / `Serial No (off)` cũng để trống**: trong `WO_PART_ON_OFF` mỗi dòng là một lần **thay thế** trên cụm, nên `PARTNO_OFF`/`SERIALNO_OFF` là **thiết bị cũ bị thay ra** — một thiết bị **khác**, không phải thiết bị của dòng này bị tháo xuống. Giá trị vẫn được giữ ở `wo_partno_off`/`wo_serialno_off` (không hiển thị) và xem được qua `/api/admin/diag/higher`. Linked server được hỏi **theo lô** (`SERIALNO IN (…)`, 400/lượt) sau khi truy vấn chính đã trả về. Số đo 1 tháng: **110** thiết bị *xuất kho chưa lắp* → **18** thuộc nhóm này (16%), trong đó **13** có `higher_pn`/`higher_sn`. |
-| **Quản lý xuất kho** (LGC ▸ Quản lý xuất kho) | `[DWH_DB]..[STG_AMOS].[PICKSLIP_BOOKED]` × `[PICKSLIP_HEADER]` (nối `PICKSLIPNO`). Kỳ tính theo **`PICKSLIP_DATE`**; đơn vị đếm là **item**; **ngày giờ xuất kho = `PICKSLIP_DATE` + `BOOKING_TIME`** (đơn vị **phút** kể từ 00:00 — xem §5b); **“hủy” = `QTY_CANCELED > 0`** (kể cả hủy một phần). KPI: số dòng · thực xuất · dòng bị hủy · **tỷ lệ hủy %** · số phiếu · phiếu có hủy. Biểu đồ: cột xếp chồng theo Trung tâm (thực xuất/hủy, tooltip có % hủy) · xu hướng theo ngày (cột số dòng + **đường % hủy** ở trục phải) · top 10 Part No bị hủy. Bảng chi tiết có ô tích **Chỉ dòng bị hủy** và xuất Excel. **Trung tâm** = `SIGN(MECH_SIGN)` → `PA`. ⚠️ Câu SQL gốc dùng `JOIN SIGN_CACHE` (INNER) — đã đổi thành **`LEFT JOIN`** vì `SIGN_CACHE` là bảng cache **tự tắt khi tài khoản chỉ có quyền đọc**, INNER JOIN sẽ làm lỗi truy vấn hoặc mất im lặng toàn bộ phiếu của nhân viên chưa có trong cache. Hai bảng AMOS được kéo về `#temp` **một lần**, mọi phép gom (KPI, 3 biểu đồ, bảng) chạy nội bộ trên `#temp`. `PICKSLIP_DATE` là **số ngày AMOS** (nghiệp vụ xác nhận) — `detectDateKind` nhận giá trị này làm mặc định và vẫn dò kiểu thật để **cảnh báo nếu lệch**, nên không lặp lại lỗi đọc `CREATED_DATE` ra năm 1954. **Phân loại Cancel / Return.** **Mốc để biết CÓ hủy/trả hay không là `QTY_CANCELED ≠ 0`**; sau đó mới dò **đuôi của `PICKSLIP_TEXT`** (lấy từ công cụ `AMOS_GUI`): `…cancel` / `…cancel booking` → **Cancel**; `…return` → **Return**; **không có từ khóa nào → “Hủy/trả khác”**. ⚠️ Nhóm *Hủy/trả khác* **vẫn được tính là hủy/trả** — trước đây bị xếp nhầm vào *Thực xuất* nên **đếm THIẾU** số dòng hủy/trả. **Bộ lọc nghiệp vụ** áp luôn trong truy vấn: `QTY_BOOKED ≠ 0` · `STATUS ∉ {1, 11}` · `LOCATION_FROM` không chứa `U/S`. ⚠️ Điều kiện **`STORE` kết thúc `MAIN`/`VNA` ĐÃ BỎ** — xem §6e; lọc **Station theo đuôi chuỗi** (`LIKE '%HAN'`) vì cột `STATION` có dạng `VNA-HAN`. **Đối chiếu file scan** (cột *Scan*): có file `<PICKING_LISTNO_I>-….pdf` trong thư mục scan hay chưa — xem §6c. Thẻ KPI *Đã scan / Chưa scan* **đếm theo PHIẾU** (`DISTINCT PICKING_LISTNO_I`) và **tính trên TOÀN KỲ**, xem §6d. **TAT return** (chỉ dòng *Return*): hỏi `[STG_AMOS].[HISTORY]` với `VM ∈ {EA, TC}` **theo lô** `PICKSLIPSEQNO_I IN (…)` (400/lượt, **sau khi** truy vấn chính trả về — không join qua linked server theo từng dòng), lấy `HISTORYNO_I` → **Phiếu trả** = `<HISTORYNO_I>-R`, `MUTATION` (số ngày AMOS) → **Ngày trả kho**, và **TAT return = (ngày giờ về kho − ngày giờ xuất kho), quy ra NGÀY** (số lẻ, không làm tròn) — xem §5b. Một `PICKSLIPSEQNO_I` có nhiều dòng lịch sử thì lấy **lần trả sớm nhất**. Không tìm được → **NOT FOUND**. Cột *Scan phiếu trả* dò file `<HISTORYNO_I>-….pdf` trong **cùng thư mục picking list**. ⚠️ **Item CANCEL KHÔNG cần đối chiếu file scan** — hàng không ra khỏi kho thì không có phiếu để ký và lưu; cột *Scan* ghi **“không cần”**, và phiếu nào **chỉ toàn** item cancel thì bị **bỏ hẳn khỏi mẫu số** tỷ lệ scan (nếu không, tỷ lệ sẽ không bao giờ đạt 100% vì một số file không bao giờ tồn tại). Biểu đồ **TAT return theo Trung tâm** (trung bình / lâu nhất) đơn vị **ngày**. |
-| **Receiving** (LGC ▸ Receiving) | Phiếu **nhập kho**: `[DWH_DB]..[STG_AMOS].[HISTORY]` với `VM = 'B1'`, kỳ theo **`DEL_DATE`** (số ngày AMOS, khoảng **chính xác** không đệm ±2 ngày); đơn vị đếm là **item**. **Ngày giờ receive = `MUTATION` + `MUTATION_TIME`** → giờ VN (+7): `DEL_DATE` chỉ có NGÀY nên chỉ dùng làm mốc kỳ báo cáo, còn cột hiện trên bảng là mốc đầy đủ này. Hai cột `SERIALNO` / `BATCHNO` được **gộp thành một cột `Serial / Batch`** (mỗi item chỉ có một trong hai) và cột *Tên file scan* đã **bỏ** (cột *Scan* đã trả lời đủ câu hỏi cần biết). **Loại phiếu đã hủy nhập:** cùng lượt kéo cả `VM = 'CR'` về `#temp`, rồi bỏ mọi dòng `B1` có `RECDETAILNO_I` trùng với một dòng `CR` (KPI *Phiếu bị hủy nhập* cho biết loại bao nhiêu). **Bộ lọc nghiệp vụ** (lấy nguyên từ `AMOS_GUI`): `STATION` **chứa** station đang chọn · `CONDITION` **không chứa** `us`. ⚠️ Hai điều kiện về `STORE` (kết thúc `MAIN`/`VNA`, và loại riêng `STORE = 'MAIN'` ở `LOCATION ∈ {SHOPLOC, LG5}`) **ĐÃ BỎ** — xem §6e. **Đối chiếu file scan**: tên file cần có = `VOUCHERNO` **đã bỏ tiền tố `R-`**, so **nguyên tên** (không cắt trước dấu `-` như picking list). KPI **và biểu đồ** *đã scan / chưa scan* **đếm theo PHIẾU** (`DISTINCT VOUCHERNO`) và **tính trên TOÀN KỲ**, xem §6d. **Thống kê theo STATION và STORE, KHÔNG theo Trung tâm** (nhập kho là việc của kho, không quy về trung tâm bảo dưỡng) — nhờ vậy bỏ được cả phép nối sang bảng `SIGN`. Biểu đồ: cột xếp chồng *đã scan / chưa scan* theo **Station** và theo **Store** · số dòng nhập theo ngày. Ô lọc *Trung tâm* được ẩn ở tab này. Bảng chi tiết có ô tích **Chỉ phiếu chưa scan** và xuất Excel. |
+| **Quản lý xuất kho** (LGC ▸ Quản lý xuất kho) | `[DWH_DB]..[STG_AMOS].[PICKSLIP_BOOKED]` × `[PICKSLIP_HEADER]` (nối `PICKSLIPNO`). Kỳ tính theo **`PICKSLIP_DATE`**; đơn vị đếm là **item**; **ngày giờ xuất kho = `PICKSLIP_DATE` + `BOOKING_TIME`** (đơn vị **phút** kể từ 00:00 — xem §5b); **“hủy” = `QTY_CANCELED > 0`** (kể cả hủy một phần). KPI: số dòng · thực xuất · dòng bị hủy · **tỷ lệ hủy %** · số phiếu · phiếu có hủy. Biểu đồ: cột xếp chồng theo Trung tâm (thực xuất/hủy, tooltip có % hủy) · xu hướng theo ngày (cột số dòng + **đường % hủy** ở trục phải) · top 10 Part No bị hủy. Bảng chi tiết có ô tích **Chỉ dòng bị hủy** và xuất Excel. **Trung tâm** = `SIGN(MECH_SIGN)` → `PA`. ⚠️ Câu SQL gốc dùng `JOIN SIGN_CACHE` (INNER) — đã đổi thành **`LEFT JOIN`** vì `SIGN_CACHE` là bảng cache **tự tắt khi tài khoản chỉ có quyền đọc**, INNER JOIN sẽ làm lỗi truy vấn hoặc mất im lặng toàn bộ phiếu của nhân viên chưa có trong cache. Hai bảng AMOS được kéo về `#temp` **một lần**, mọi phép gom (KPI, 3 biểu đồ, bảng) chạy nội bộ trên `#temp`. `PICKSLIP_DATE` là **số ngày AMOS** (nghiệp vụ xác nhận) — `detectDateKind` nhận giá trị này làm mặc định và vẫn dò kiểu thật để **cảnh báo nếu lệch**, nên không lặp lại lỗi đọc `CREATED_DATE` ra năm 1954. **Phân loại Cancel / Return.** **Mốc để biết CÓ hủy/trả hay không là `QTY_CANCELED ≠ 0`**; sau đó mới dò **đuôi của `PICKSLIP_TEXT`** (lấy từ công cụ `AMOS_GUI`): `…cancel` / `…cancel booking` → **Cancel**; `…return` → **Return**; **không có từ khóa nào → “Hủy/trả khác”**. ⚠️ Nhóm *Hủy/trả khác* **vẫn được tính là hủy/trả** — trước đây bị xếp nhầm vào *Thực xuất* nên **đếm THIẾU** số dòng hủy/trả. **Bộ lọc nghiệp vụ** áp luôn trong truy vấn: `QTY_BOOKED ≠ 0` · `STATUS ∉ {1, 11}` · `LOCATION_FROM` không chứa `U/S`. ⚠️ Điều kiện **`STORE` kết thúc `MAIN`/`VNA` ĐÃ BỎ** — xem §6e; lọc **Station theo đuôi chuỗi** (`LIKE '%HAN'`) vì cột `STATION` có dạng `VNA-HAN`. **Đối chiếu file scan** (cột *Scan*): có file `<PICKING_LISTNO_I>-….pdf` trong thư mục scan hay chưa — xem §6c. Thẻ KPI *Đã scan / Chưa scan* **đếm theo PHIẾU** (`DISTINCT PICKING_LISTNO_I`) và **tính trên TOÀN KỲ**, xem §6d. **TAT return** (chỉ dòng *Return*): hỏi `[STG_AMOS].[HISTORY]` với `VM ∈ VM_PHIEU_TRA = {EA, TC, ES}` **theo lô** `PICKSLIPSEQNO_I IN (…)` (400/lượt, **sau khi** truy vấn chính trả về — không join qua linked server theo từng dòng), lấy `HISTORYNO_I` → **Phiếu trả** = `<HISTORYNO_I>-R`, `MUTATION` (số ngày AMOS) → **Ngày trả kho**, và **TAT return = (ngày giờ về kho − ngày giờ xuất kho), quy ra NGÀY** (số lẻ, không làm tròn) — xem §5b. Một `PICKSLIPSEQNO_I` có nhiều dòng lịch sử thì lấy **lần trả sớm nhất**. Không tìm được → **NOT FOUND**. Cột *Scan phiếu trả* dò file `<HISTORYNO_I>-….pdf` trong **cùng thư mục picking list**. ⚠️ **Item CANCEL KHÔNG cần đối chiếu file scan** — hàng không ra khỏi kho thì không có phiếu để ký và lưu; cột *Scan* ghi **“không cần”**, và phiếu nào **chỉ toàn** item cancel thì bị **bỏ hẳn khỏi mẫu số** tỷ lệ scan (nếu không, tỷ lệ sẽ không bao giờ đạt 100% vì một số file không bao giờ tồn tại). Biểu đồ **TAT return theo Trung tâm** (trung bình / lâu nhất) đơn vị **ngày**. |
+| **Receiving** (LGC ▸ Receiving) | Phiếu **nhập kho**: `[DWH_DB]..[STG_AMOS].[HISTORY]` với `VM = 'B1'`, kỳ theo **`DEL_DATE`** — **cộng thêm dòng `RETURN`** (`VM_PHIEU_TRA = EA · TC · ES`) lấy từ **phần phiếu xuất**, xem §7o (số ngày AMOS, khoảng **chính xác** không đệm ±2 ngày); đơn vị đếm là **item**. **Ngày giờ receive = `MUTATION` + `MUTATION_TIME`** → giờ VN (+7): `DEL_DATE` chỉ có NGÀY nên chỉ dùng làm mốc kỳ báo cáo, còn cột hiện trên bảng là mốc đầy đủ này. Hai cột `SERIALNO` / `BATCHNO` được **gộp thành một cột `Serial / Batch`** (mỗi item chỉ có một trong hai) và cột *Tên file scan* đã **bỏ** (cột *Scan* đã trả lời đủ câu hỏi cần biết). **Loại phiếu đã hủy nhập:** cùng lượt kéo cả `VM = 'CR'` về `#temp`, rồi bỏ mọi dòng `B1` có `RECDETAILNO_I` trùng với một dòng `CR` (KPI *Phiếu bị hủy nhập* cho biết loại bao nhiêu). **Bộ lọc nghiệp vụ** (lấy nguyên từ `AMOS_GUI`): `STATION` **chứa** station đang chọn · `CONDITION` **không chứa** `us`. ⚠️ Hai điều kiện về `STORE` (kết thúc `MAIN`/`VNA`, và loại riêng `STORE = 'MAIN'` ở `LOCATION ∈ {SHOPLOC, LG5}`) **ĐÃ BỎ** — xem §6e. **Đối chiếu file scan**: tên file cần có = `VOUCHERNO` **đã bỏ tiền tố `R-`**, so **nguyên tên** (không cắt trước dấu `-` như picking list). KPI **và biểu đồ** *đã scan / chưa scan* **đếm theo PHIẾU** (`DISTINCT VOUCHERNO`) và **tính trên TOÀN KỲ**, xem §6d. **Thống kê theo STATION và STORE, KHÔNG theo Trung tâm** (nhập kho là việc của kho, không quy về trung tâm bảo dưỡng) — nhờ vậy bỏ được cả phép nối sang bảng `SIGN`. Biểu đồ: cột xếp chồng *đã scan / chưa scan* theo **Station** và theo **Store** · số dòng nhập theo ngày. Ô lọc *Trung tâm* được ẩn ở tab này. Bảng chi tiết có ô tích **Chỉ phiếu chưa scan** và xuất Excel. |
 | **Tháo chưa trả US** | `on_off vm='YA'` không có `real_us1` (link `historyno_`). Cột **Store** và **Location** là **vị trí hiện tại** của thiết bị: `ROTABLES` nối qua `psn`, rồi `LOCATION` nối theo `locationno_i` (`LEFT JOIN` nên không thể làm mất dòng; thiếu dữ liệu thì Store lùi về `on_off.store`). **Báo cáo tự cập nhật theo thực tế (đúng ý đồ):** điều kiện *chưa trả US* được xét tại **thời điểm xem**, nên thiết bị tháo tháng 7 mà trả US sang tháng 8 sẽ **tự biến mất** khỏi báo cáo tháng 7. Cùng một kỳ xem lại lúc khác ra số khác là bình thường. Điều kiện *chưa trả US* dùng **2 vế**: (1) không có `real_us1` khớp **`historyno_`** (khóa chính xác của lần tháo đó) **và** (2) không có `real_us1` cùng `labelno` với `del_time` **sau giờ tháo** (dự phòng cho bản ghi thiếu `historyno_`). *Trước đây chỉ so `labelno` không kèm điều kiện thời gian → một lần trả US của **chu kỳ trước** cũng làm mất dòng; đo thực tế 1 tháng: **loại oan 672 dòng**.* ⚠️ `WHERE` còn `RO.condition = 'US'` — tiêu chí **khác** với *đã trả US hay chưa*, lọc 468 → 238 dòng (nhóm bị loại có `condition` = I/RC/R/S/IT/CF…, tức đã được xử lý qua luồng khác). `RO.MUTATION > @fromDay` thực tế **không cắt dòng nào**. Đo bằng `diag/rnr`. Dùng **`GET /api/admin/diag/rnr`** để xem từng điều kiện cắt bớt bao nhiêu dòng (6 bước cộng dồn) và phân bố `condition` hiện tại của các dòng bị loại. |
 | **Chưa đối ứng** | Có xuất service nhưng không có trả unservice. |
 | **Chỉ lắp / Chỉ tháo** (trước đây: *Tháo trước lắp sau*) | Có cột **Booking** (`WO_PART_ON_OFF.STATUS` — xem dòng dưới): lần thay thiết bị **chưa booking** là một lý do rất hay gặp khiến `on_off` không có sự kiện tương ứng, nên hai cột *Booking* và *Có on_off* nên đọc cùng nhau. Liệt kê các dòng `WO_PART_ON_OFF` **chỉ có một phía**: **ON** = có `PARTNO`/`SERIALNO` mà `PARTNO_OFF`/`SERIALNO_OFF` rỗng (lắp mà không tháo) · **OFF** = ngược lại (tháo mà chưa lắp). Đây là hai đầu của nghiệp vụ *tháo trước – lắp sau*, được AMOS ghi thành 2 dòng riêng nên không tự ghép với nhau bằng label. Cột **Có on_off** cho biết có sự kiện `YE` (phía ON) / `YA` (phía OFF) tương ứng không — **Không** nghĩa là các báo cáo dựa trên `on_off` (*Tháo chưa trả US*, *Xuất kho chưa lắp*) đang **bỏ sót** thiết bị đó. Kèm phiếu xuất kho gần nhất trước thời điểm và dòng trả unservice đầu tiên sau đó. Đo thực tế 1 tháng: trong **4.861** thiết bị bị thay ra khỏi cụm có **154** cái không có `on_off vm='YA'` (**22** đã trả US, **132** chưa). Bộ lọc Station/Center chỉ áp dụng khi tra ra được từ phiếu xuất hoặc dòng trả US; dòng không tra ra được vẫn hiển thị. Hiệu năng: `WO_PART_ON_OFF` kéo về `#temp` **một lần**; `kho_ser1`/`real_us1`/`on_off` cũng kéo về `#temp` **có index** theo `(partno, serialno)` rồi mới join — không tra linked server hay quét bảng theo từng dòng. |
@@ -720,7 +720,7 @@ dòng rồi mới lọc tại chỗ.
 | Báo cáo | Câu gửi xuống AMOS | Làm tại chỗ |
 |---|---|---|
 | **Quản lý xuất kho** | `#raw` ← nối `PICKSLIP_BOOKED × PICKSLIP_HEADER`, `WHERE PICKSLIP_DATE >= 19911 AND < 19918` | `#ps` ← cắt gọt + phân loại Cancel/Return + bộ lọc nghiệp vụ |
-| **Receiving** | `#hraw` ← `HISTORY`, `WHERE VM IN ('B1','CR') AND DEL_DATE >= … AND < …` | `#hi` ← cắt gọt + đổi ngày AMOS; lọc station/store/condition |
+| **Receiving** | `#hraw` ← `HISTORY`, `WHERE VM IN ('B1','CR') AND DEL_DATE >= … AND < …`; rồi `INSERT` thêm dòng trả bằng `WHERE PICKSLIPSEQNO_I IN (…)` chia lô 400 — **một cột ngày mỗi câu**, xem §7o | `#hi` ← cắt gọt + đổi ngày AMOS; lọc station/store/condition |
 | **Repair Admin** | nối 3 bảng, `WHERE location_type = -4 AND status = 0` | cắt gọt chuỗi ở Node |
 
 ### Đo lại bất cứ lúc nào — `GET /api/admin/diag/linkserver`
@@ -1398,9 +1398,10 @@ vẫn đăng nhập được `HTTP 200`.
 
 ### Return vào tab Receiving — “trả lại kho cũng là một lần nhập kho”
 
-`qReceiving` nay kéo `VM IN ('B1','CR','EA','TC')` và thêm cột **`loai`**: `RECEIVE` (VM = B1) ·
-`RETURN` (VM = EA/TC — **cùng bộ mã** mà tab *Quản lý xuất kho* dùng để tra phiếu trả). Gộp chung
-một bảng, cột *Loại* lọc được; KPI inspector cộng cả hai và tách cột **Receive / Return**.
+`qReceiving` kéo `VM IN ('B1','CR')` theo `DEL_DATE` rồi **ghép thêm** dòng `RETURN` lấy từ **phần
+phiếu xuất** (`VM_PHIEU_TRA = EA · TC · ES`) — xem §7o cho lý do và cách làm. Cột **`loai`**:
+`RECEIVE` · `RETURN` · `CR`. Gộp chung một bảng, cột *Loại* lọc được; KPI inspector cộng cả hai và
+tách cột **Receive / Return**.
 
 Ba chỗ dễ sai, đều đã xử lý:
 
@@ -1413,10 +1414,10 @@ Ba chỗ dễ sai, đều đã xử lý:
 3. **Phiếu CR chỉ huỷ dòng B1** — AMOS không huỷ phiếu trả bằng cơ chế `RECDETAILNO_I`, nên điều
    kiện “còn hiệu lực” chỉ áp `NOT EXISTS(CR)` cho B1.
 
-> ⚠️ **Bộ lọc `CONDITION NOT LIKE '%us%'` áp cho CẢ HAI loại** (nghiệp vụ chọn). Hệ quả phải biết:
-> dòng return có `CONDITION` là **US sẽ không xuất hiện** và **không vào KPI inspector** — mà hàng
-> trả về kho phần lớn là unserviceable, nên đây là một bộ phận đáng kể. Muốn xem hết thì bỏ điều
-> kiện đó trong biến `w` của `qReceiving`.
+> **Bộ lọc `CONDITION NOT LIKE '%us%'` áp cho CẢ HAI loại** (nghiệp vụ chọn). Từng lo bộ lọc này
+> cắt mất phần lớn dòng return (hàng trả về kho đa số là unserviceable), nhưng **đã đo trên dữ liệu
+> thật**: trong 1.542 dòng return chỉ **5 dòng** bị cắt → giữ nguyên. Xem khối `returnBiLocUS` của
+> `/api/admin/diag/receiving-loai`.
 
 `tools/kpicheck.js` thêm 5 trường hợp: có dòng RETURN thật · `Receive + Return = Item` ở **từng
 người** · tổng khớp KPI cả tab · dòng RETURN chỉ đúng thư mục `picking` · dòng RECEIVE chỉ đúng
@@ -1499,10 +1500,15 @@ không thể bị che mất bởi dữ liệu mẫu. Luật mới: với mỗi e
 có trong câu SQL mà endpoint đó sinh ra.
 
 ```
-/api/receiving : loai · voucherno · voucherno_goc · dong_receive · dong_return · so_receive · so_return
+/api/receiving : loai · voucherno · voucherno_goc · dong_receive · dong_return
+                 so_receive · so_return · seq_ret
 /api/dashboard : tat_days · sla_n · sla_dat · sla_p50 · sla_p90
 /api/pickslip  : so_item · so_huy · so_can_scan
 ```
+
+`seq_ret` là **cầu nối**: nó chỉ xuất hiện nếu `/api/receiving` thật sự chạy bước lấy dòng Return từ
+phần phiếu xuất. Mất cột này nghĩa là ai đó đã quay lại kiểu “lọc `HISTORY` theo `MUTATION`” — cách
+làm đã khiến tab Receiving chạy rất lâu và thất bại trên dữ liệu thật (xem §7o).
 
 Hai điều đã **đo thật**, không suy đoán:
 
@@ -1514,6 +1520,16 @@ Hai điều đã **đo thật**, không suy đoán:
   ra. Nó **không** bắt trường hợp cột bị *đổi tên* ở một lệnh trong khi lệnh khác vẫn dùng tên cũ;
   nhưng trường hợp đó **SQL Server báo lỗi ngay** khi chạy thật, chứ không âm thầm sai.
 
+### LUẬT 6 — câu kéo phiếu nhập chỉ được lọc trên MỘT cột ngày
+
+Sinh ra từ sự cố thứ hai (18/08/2026): câu kéo `#hraw` lọc trên **cả** `DEL_DATE` **lẫn** `MUTATION`
+trong một `OR` → AMOS quét cả bảng `HISTORY` → **chạy rất lâu và hỏng** (xem §7o). Luật soi riêng
+câu `SELECT … INTO #hraw`; thấy cả hai cột ngày là **TRƯỢT**.
+
+Đã **đo thật**, không suy đoán: viết lại đúng câu `OR` cũ → `✖ Câu kéo phiếu nhập (INTO #hraw) lọc
+trên CẢ HAI cột [DEL_DATE] và [MUTATION]`. Bỏ lời gọi `layReturnSeqnos` → LUẬT 5 báo
+`✖ /api/receiving: câu SQL THIẾU cột "seq_ret"`. Hai lỗi, hai luật, mỗi luật bắt đúng lỗi của mình.
+
 ## 7o. Vì sao RETURN vào tab Receiving mà CANCEL thì không
 
 **Nghiệp vụ chốt** — đây là lý do của cả tính năng, không phải chi tiết kỹ thuật:
@@ -1523,24 +1539,76 @@ Hai điều đã **đo thật**, không suy đoán:
 | **Cancel** | **thủ kho huỷ** khi người nhận **không lấy**. Hàng **chưa hề ra khỏi kho**. | **Không** — không có gì để kiểm |
 | **Return** | người nhận **đã lấy ra khỏi kho** rồi không dùng (hoặc **không dùng hết số lượng**) nên mang trả lại. Hàng từ ngoài **quay về**. | **Có** — phải kiểm **như một thao tác nhập hàng**, nên được tính công |
 
-Nhận biết dòng return dùng **đúng bộ mã mà tab *Quản lý xuất kho* đang dùng** để tra phiếu trả:
-**`VM ∈ {EA, TC}`** (xem `fetchReturnHistory`). Không tự nghĩ thêm quy tắc nào khác — phân loại
-return đã có sẵn ở phía xuất kho, tab Receiving chỉ lấy dữ liệu đó về.
+Nhận biết dòng return dùng **đúng bộ mã mà tab *Quản lý xuất kho* đang dùng** để tra phiếu trả.
+Bộ mã đó nằm ở **một hằng số duy nhất** `VM_PHIEU_TRA` trong `server.js`:
+
+```js
+const VM_PHIEU_TRA = ['EA', 'TC', 'ES'];
+```
+
+`EA`, `TC` là bộ mã gốc lấy từ công cụ `AMOS_GUI`. **`ES` bổ sung 18/08/2026** theo nghiệp vụ —
+cũng là phiếu trả/huỷ, số phiếu cũng dạng `P-CA-…` (đo được bằng `/api/admin/diag/receiving-loai`).
+Vì cả `fetchReturnHistory` (tab xuất kho) lẫn `qReceiving` (tab Receiving) đều đọc từ hằng số này,
+hai tab **không thể hiểu “phiếu trả” khác nhau**.
 
 Đối chiếu trên dữ liệu thật bằng **`GET /api/admin/diag/receiving-loai`** — đếm số dòng `HISTORY`
 theo (`VM` × tiền tố `VOUCHERNO`) trong kỳ, để trả lời “có dòng RETURN nào không / VM nào đang
 chiếm bao nhiêu” mà không phải đoán.
 
-### ⚠️ Kỳ báo cáo dùng HAI cột ngày khác nhau
+### ⚠️ Dòng RETURN lấy từ PHẦN PHIẾU XUẤT, không lọc HISTORY theo ngày
 
-| Loại | Cột ngày |
+**Sự cố thật (18/08/2026).** Bản đầu tiên ghép return bằng cách nới câu kéo `#hraw`:
+
+```sql
+WHERE VM IN ('B1','CR','EA','TC')
+  AND ( (VM IN ('B1','CR') AND DEL_DATE trong kỳ)
+     OR (VM IN ('EA','TC') AND MUTATION trong kỳ) )
+```
+
+**Hai cột ngày khác nhau trong cùng một `OR`** → AMOS không dùng được chỉ mục nào nên phải **quét
+cả bảng `HISTORY`**. Trên dữ liệu thật câu này **chạy rất lâu và hỏng**.
+
+**Cách làm hiện tại** (ba bước, xem `layReturnSeqnos`):
+
+| Bước | Làm gì | Vì sao nhanh |
+|---|---|---|
+| 1 | Kéo phiếu nhập **như ban đầu**: `VM IN ('B1','CR')` **chỉ** theo `DEL_DATE` | một khoảng trên **một** cột → dùng được chỉ mục |
+| 2 | Lấy `PICKSLIPSEQNO_I` của các dòng `loai = 'RETURN'` trong `#ps` (**phần phiếu xuất**). Đã có sẵn trong bộ nhớ đệm thì **không chạy lại** | `#ps` là bảng tạm ở local |
+| 3 | `INSERT INTO #hraw … WHERE PICKSLIPSEQNO_I IN (…)` chia lô **400 ID/lần** | tra cứu theo khoá có chỉ mục, không quét bảng |
+
+⚠️ **Không** dùng `IN (SELECT … FROM #bảng_tạm)`: bảng tạm nằm ở SQL Server còn `HISTORY` nằm ở
+AMOS, phép nối đó **không đẩy được xuống linked server** nên sẽ kéo về cả bảng. Danh sách ID phải
+**nhúng thẳng** vào câu SQL dưới dạng số — đúng cách `fetchReturnHistory` đã làm.
+
+### ⚠️ Hệ quả về ĐỊNH NGHĨA kỳ — phải biết
+
+Tập dòng RETURN nay là **“phiếu trả của các PHIẾU XUẤT trong kỳ”**, *không* phải “phiếu trả **phát
+sinh** trong kỳ”. Một lần trả tháng 8 của phiếu xuất tháng 7 thuộc kỳ **tháng 7**.
+
+Đây **đúng** là cách cột *Phiếu trả* bên tab *Quản lý xuất kho* vẫn làm → hai tab luôn khớp nhau.
+Muốn thấy chênh lệch giữa hai cách đếm, xem khối `demPhieuTra` của
+`GET /api/admin/diag/receiving-loai`:
+
+| Trường | Nghĩa |
 |---|---|
-| `B1` / `CR` (nhập mới) | **`DEL_DATE`** |
-| `EA` / `TC` (trả lại kho) | **`MUTATION`** — đúng cột mà tab *Quản lý xuất kho* dùng làm “ngày trả kho” |
+| `theoNgayTra` | dòng trả có `MUTATION` trong kỳ (bất kể phiếu xuất ngày nào) |
+| `theoPhieuXuat` | dòng trả của các phiếu xuất trong kỳ — **con số tab Receiving đang dùng** |
 
-Lọc cả hai bằng `DEL_DATE` là **dòng trả rơi hết khỏi kỳ mà không báo gì** — tab Receiving không có
-dòng RETURN nào. Cột `del_date` trả về cũng lấy theo đúng quy tắc này, nếu không biểu đồ theo ngày
-mất hết dòng trả.
+Cột `del_date` của dòng trả vẫn lấy theo **`MUTATION`** (ngày trả về kho thật), nếu không biểu đồ
+theo ngày mất hết dòng trả.
+
+### Hỏng bước lấy return thì PHẢI nói ra
+
+Bước 2 hỏng (linked server lỗi, kỳ quá lớn…) thì tab vẫn trả về phần phiếu nhập — nhưng response
+mang thêm trường **`loiReturn`** và giao diện hiện băng cảnh báo **“⚠ Thiếu dòng Return”**. Tuyệt
+đối không im lặng hiện con số nhỏ hơn rồi để người dùng tưởng thật.
+
+### Bộ lọc `CONDITION` không cắt mất return
+
+Bộ lọc `CONDITION NOT LIKE '%us%'` áp cho **cả** dòng return. Hàng trả về kho phần lớn là
+unserviceable nên đây từng là mối lo. **Đã đo trên dữ liệu thật** (tháng 08/2026): trong 1.542 dòng
+return chỉ **5 dòng** bị bộ lọc này cắt → không đáng kể, giữ nguyên bộ lọc cho cả hai loại. Số này
+đọc lại được bất cứ lúc nào ở khối `returnBiLocUS` của `/api/admin/diag/receiving-loai`.
 
 ### Một số phiếu — MỘT cách viết
 

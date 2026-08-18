@@ -3023,8 +3023,21 @@ function pickslipWhere(f, dept, params) {
 }
 
 /**
+ * MA VM CUA "PHIEU TRA" (nhap lai kho) - DINH NGHIA DUY NHAT CHO CA CHUONG
+ * TRINH. Tab Quan ly xuat kho (cot "Phiếu trả", TAT hoan kho) va tab Receiving
+ * (dong loai RETURN) deu doc tu day, nen khong the co chuyen hai tab hieu
+ * "phieu tra" khac nhau.
+ *   EA, TC - bo ma goc lay tu cong cu AMOS_GUI.
+ *   ES     - nghiep vu bo sung (18/08/2026): cung la phieu tra/huy, so phieu
+ *            cung dang 'P-CA-…' (do duoc bang /api/admin/diag/receiving-loai).
+ */
+const VM_PHIEU_TRA = ['EA', 'TC', 'ES'];
+/** Chuoi de nhung vao SQL: "'EA', 'TC', 'ES'". */
+const VM_PHIEU_TRA_SQL = VM_PHIEU_TRA.map((v) => `'${v}'`).join(', ');
+
+/**
  * PHIEU NHAP LAI KHO (return) cua cac dong "RETURN": tra ve theo PICKSLIPSEQNO_I.
- * Nguon: [STG_AMOS].HISTORY voi VM IN ('EA','TC') - dung y het cong cu AMOS_GUI.
+ * Nguon: [STG_AMOS].HISTORY voi VM IN (VM_PHIEU_TRA) - dung y het AMOS_GUI.
  * MUTATION = SO NGAY AMOS -> ngay tra ve kho thuc te.
  *
  * LINKED SERVER: KHONG join theo tung dong. Goi theo LO (400 ID/lan) bang
@@ -3056,7 +3069,7 @@ async function fetchReturnHistory(seqnos) {
                 RTRIM(HIS.[VM]) AS vm
          FROM [DWH_DB]..[STG_AMOS].[HISTORY] HIS
          WHERE HIS.[PICKSLIPSEQNO_I] IN (${names.join(', ')})
-           AND HIS.[VM] IN ('EA', 'TC')`,
+           AND HIS.[VM] IN (${VM_PHIEU_TRA_SQL})`,
         params
       );
       for (const r of res) {
@@ -3078,6 +3091,68 @@ async function fetchReturnHistory(seqnos) {
     }
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// DANH SACH SEQNO CUA CAC DONG RETURN TRONG KY (nguon cho tab Receiving)
+// ---------------------------------------------------------------------------
+/**
+ * VI SAO PHAI CO CAI NAY (nghiep vu + toc do, 18/08/2026):
+ *
+ * Truoc day tab Receiving keo dong RETURN thang tu HISTORY bang
+ *     VM IN ('EA','TC') AND MUTATION trong ky
+ * dat CANH dieu kien B1/CR theo DEL_DATE bang mot menh de OR. Hai cot ngay
+ * khac nhau trong cung mot OR lam AMOS KHONG dung duoc chi muc nao -> phai
+ * quet CA BANG HISTORY. Tren du lieu that cau nay CHAY RAT LAU VA HAY HONG.
+ *
+ * Cach lam moi (nguoi dung chot):
+ *   1. Receiving keo NHU BAN DAU: chi VM IN ('B1','CR') theo DEL_DATE - mot
+ *      dieu kien khoang tren MOT cot -> nhanh nhu truoc khi co return.
+ *   2. Dong RETURN lay o PHAN PHIEU XUAT: #ps da phan loai san dong 'RETURN'
+ *      (PICKSLIP_TEXT ket thuc 'return' + QTY_CANCELED <> 0). Tu do co danh
+ *      sach PICKSLIPSEQNO_I, roi hoi HISTORY bang "PICKSLIPSEQNO_I IN (...)"
+ *      - tra cuu theo khoa, khong quet bang.
+ *   3. Ghep hai phan lai o buoc sau.
+ *
+ * LOI THEM: so phieu tra o tab Receiving va cot "Phiếu trả" o tab Quan ly xuat
+ * kho tu nay la CUNG MOT TAP - khong the lech nhau nua.
+ *
+ * HE QUA PHAI BIET: tap nay la "phieu tra CUA CAC PHIEU XUAT TRONG KY", khong
+ * phai "phieu tra PHAT SINH TRONG KY". Mot lan tra thang 8 cua phieu xuat
+ * thang 7 se KHONG nam o ky thang 8. Day dung la cach cot "Phiếu trả" ben tab
+ * xuat kho van dang lam.
+ *
+ * KHONG ap bo loc station/store o day: bo loc duoc ap sau tren chinh cot cua
+ * HISTORY (xem bien `w` trong qReceiving). Nho vay khoa cache chi phu thuoc KY
+ * -> doi station/store khong phai chay lai buoc nay.
+ */
+const returnSeqCache = new Map(); // 'from|to' -> { t, ids }
+/** TTL = TTL cua cache API (cung mot loai du lieu nang doc qua linked server). */
+const RETURN_SEQ_TTL = Math.round(CONFIG.cacheMinutes * 60 * 1000);
+
+async function layReturnSeqnos(range, ghi = () => {}) {
+  const key = `${range.from}|${range.to}`;
+  const hit = returnSeqCache.get(key);
+  if (hit && Date.now() - hit.t < RETURN_SEQ_TTL) {
+    ghi(`✔ Danh sách dòng Return của kỳ đã có sẵn (${hit.ids.length} dòng) — không hỏi lại phiếu xuất`);
+    return hit.ids;
+  }
+  // Chua co -> moi phai chay phan phieu xuat
+  const { pull, drop } = await pickslipTemp(range, {});
+  const params = { from: range.from, to: range.to, ...amosDayParams(range) };
+  const sets = await buoc(ghi,
+    'Chưa có dữ liệu phiếu xuất của kỳ — chạy để lấy danh sách dòng Return',
+    () => queryMulti(`${pull}
+    -- CHI lay seqno: bang nay chi de tra cuu HISTORY, khong hien ra dau ca.
+    SELECT DISTINCT x.seqno AS seq_ret
+    FROM #ps x WHERE x.loai = 'RETURN' AND x.seqno IS NOT NULL;
+    ${drop}`, params));
+  const bang = sets.find((s) => s.length && 'seq_ret' in s[0]) || [];
+  const ids = [...new Set(bang.map((r) => idStr(r.seq_ret)).filter((v) => v && v !== '0'))];
+  // Don cache cu truoc khi chen (tranh phinh RAM khi nguoi dung doi ky lien tuc)
+  if (returnSeqCache.size >= 40) returnSeqCache.delete(returnSeqCache.keys().next().value);
+  returnSeqCache.set(key, { t: Date.now(), ids });
+  return ids;
 }
 
 /**
@@ -3509,11 +3584,14 @@ async function qPickslip(range, f, ghi = () => {}) {
 }
 
 // ---------------------------------------------------------------------------
-// 5d. RECEIVING (nhap kho) - [STG_AMOS].HISTORY, VM = 'B1'
+// 5d. RECEIVING (nhap kho) - [STG_AMOS].HISTORY
 //     Nghiep vu (lay tu cong cu AMOS_GUI cua nguoi dung):
 //       - Keo ca VM 'B1' (phieu nhap) va 'CR' (huy nhap) trong ky theo DEL_DATE.
 //       - LOAI BO dong B1 nao co RECDETAILNO_I trung voi mot dong CR
 //         -> do la phieu nhap DA BI HUY.
+//       - GHEP THEM dong RETURN (VM_PHIEU_TRA) lay tu PHAN PHIEU XUAT - xem
+//         layReturnSeqnos(). Return = nguoi nhan da lay hang ra khoi kho roi
+//         mang tra lai, inspector phai kiem nhu mot thao tac nhap hang.
 //       - Loc: STATION CHUA station chon; CONDITION KHONG chua 'us';
 //         STORE ket thuc 'main' hoac 'vna'; loai rieng STORE = 'main' ma
 //         LOCATION thuoc ('shoploc','lg5').
@@ -3569,24 +3647,67 @@ async function qReceiving(range, f, ghi = () => {}) {
 
   // Dong con hieu luc:
   //   - RECEIVE (B1): khong co dong CR nao cung RECDETAILNO_I (phieu bi huy)
-  //   - RETURN (EA/TC): giu het - AMOS khong huy phieu tra bang co che CR
+  //   - RETURN (EA/TC/ES): giu het - AMOS khong huy phieu tra bang co che CR
   // ⚠️ Bo loc "CONDITION khong chua US" o bien `w` AP CHO CA HAI loai (nghiep
-  // vu chon). He qua phai biet: dong return co CONDITION la US se KHONG hien
-  // ra va KHONG vao KPI inspector - hang tra ve kho phan lon la unserviceable
-  // nen day la mot bo phan dang ke. Muon xem het thi bo dieu kien o `w`.
+  // vu chon). DA DO TREN DU LIEU THAT (/api/admin/diag/receiving-loai, thang
+  // 08/2026): 1.542 dong return chi co 5 dong bi bo loc nay cat -> khong dang
+  // ke, giu nguyen bo loc cho ca hai loai.
   const conLai = `(
         (x.vm = 'B1' AND NOT EXISTS (
           SELECT 1 FROM #hi c WHERE c.vm = 'CR' AND c.recdetailno = x.recdetailno))
-        OR x.vm IN ('EA', 'TC')
+        OR x.vm IN (${VM_PHIEU_TRA_SQL})
       )`;
+
+  // --- DONG RETURN: lay tu PHAN PHIEU XUAT truoc (xem layReturnSeqnos) ------
+  // Danh sach seqno duoc nhung THANG vao cau SQL duoi dang so, chia lo 400 -
+  // giong fetchReturnHistory. KHONG dung "IN (SELECT ... FROM #tam)": bang tam
+  // nam o SQL Server con HISTORY nam o AMOS, phep noi do KHONG day duoc xuong
+  // linked server nen se keo ve ca bang.
+  //
+  // KHONG DE PHAN NAY LAM VO CA TAB: truoc day Receiving chay doc lap. Neu
+  // buoc phieu xuat hong (linked server loi, ky qua lon…) thi van phai tra ve
+  // phan phieu nhap - nhung PHAI NOI RA la thieu return, khong duoc im lang
+  // hien so nho hon roi de nguoi dung tuong that.
+  let retIds = [];
+  let loiReturn = '';
+  try {
+    retIds = await layReturnSeqnos(range, ghi);
+  } catch (e) {
+    loiReturn = e.message || String(e);
+    console.warn('[RECEIVING] Khong lay duoc danh sach dong Return:', loiReturn);
+    ghi(`⚠️ Không lấy được dòng Return từ phần phiếu xuất (${loiReturn}) — bảng chỉ có phiếu nhập`);
+  }
+  const RET_CHUNK = 400;
+  const cauReturn = [];
+  for (let i = 0; i < retIds.length; i += RET_CHUNK) {
+    const lo = retIds.slice(i, i + RET_CHUNK)
+      .map((v) => Number(v)).filter((v) => Number.isSafeInteger(v));
+    if (!lo.length) continue;
+    cauReturn.push(`
+    INSERT INTO #hraw
+    SELECT
+      h.[VOUCHERNO], h.[PARTNO], h.[SERIALNO], h.[BATCHNO], h.[PSN], h.[LABELNO],
+      h.[HISTORYNO_I], h.[RECDETAILNO_I], h.[STATION], h.[STORE], h.[LOCATION],
+      h.[VM], h.[CONDITION], h.[MAT_CLASS], h.[ORDERNO], h.[OWNER], h.[CREATED_BY],
+      h.[QTY], h.[DEL_DATE], h.[ORDERDATE], h.[MUTATION], h.[MUTATION_TIME]
+    FROM [DWH_DB]..[STG_AMOS].[HISTORY] h
+    WHERE h.[PICKSLIPSEQNO_I] IN (${lo.join(', ')})
+      AND h.[VM] IN (${VM_PHIEU_TRA_SQL});`);
+  }
 
   const text = `
     IF OBJECT_ID('tempdb..#hraw') IS NOT NULL DROP TABLE #hraw;
     IF OBJECT_ID('tempdb..#hi') IS NOT NULL DROP TABLE #hi;
 
-    -- BUOC 1 (hoi AMOS): CHI cot THO, WHERE chi co dieu kien thuan (VM va
-    --   khoang ngay dang SO TRUC TIEP). Khong RTRIM/TRY_CONVERT/DATEADD o day:
-    --   da do duoc rang cac ham trong cau gui xuong AMOS lam cham gap nhieu lan.
+    -- BUOC 1a (hoi AMOS): PHIEU NHAP - CHI cot THO, WHERE chi co dieu kien
+    --   thuan (VM va khoang ngay dang SO TRUC TIEP). Khong RTRIM/TRY_CONVERT/
+    --   DATEADD o day: da do duoc rang cac ham trong cau gui xuong AMOS lam
+    --   cham gap nhieu lan.
+    --   ⚠️ CHI B1 + CR va CHI mot khoang tren MOT cot (DEL_DATE) - dung nhu
+    --   ban dau. Truoc day co them nhanh "OR (VM IN ('EA','TC') AND MUTATION
+    --   trong ky)": hai cot ngay khac nhau trong cung mot OR lam AMOS khong
+    --   dung duoc chi muc -> quet ca bang HISTORY, chay rat lau va hay hong.
+    --   Dong tra nay lay o BUOC 1b, tra cuu theo khoa (xem layReturnSeqnos).
     SELECT
       h.[VOUCHERNO], h.[PARTNO], h.[SERIALNO], h.[BATCHNO], h.[PSN], h.[LABELNO],
       h.[HISTORYNO_I], h.[RECDETAILNO_I], h.[STATION], h.[STORE], h.[LOCATION],
@@ -3594,17 +3715,13 @@ async function qReceiving(range, f, ghi = () => {}) {
       h.[QTY], h.[DEL_DATE], h.[ORDERDATE], h.[MUTATION], h.[MUTATION_TIME]
     INTO #hraw
     FROM [DWH_DB]..[STG_AMOS].[HISTORY] h
-    WHERE h.[VM] IN ('B1', 'CR', 'EA', 'TC')
-      -- ⚠️ HAI COT NGAY KHAC NHAU cho hai loai dong:
-      --   B1/CR (nhap moi)  -> DEL_DATE  (ngay nhap kho)
-      --   EA/TC (tra lai kho) -> MUTATION (dung cot ma tab Quan ly xuat kho
-      --        dang dung lam "ngay tra kho" - xem fetchReturnHistory).
-      -- Loc CA HAI bang DEL_DATE la dong tra bi rot het khoi ky ma khong bao
-      -- gi -> tab Receiving khong co dong RETURN nao, dung nhu da gap that.
-      AND (
-        (h.[VM] IN ('B1', 'CR') AND h.[DEL_DATE] >= ${dFrom} AND h.[DEL_DATE] < ${dTo})
-        OR (h.[VM] IN ('EA', 'TC') AND h.[MUTATION] >= ${dFrom} AND h.[MUTATION] < ${dTo})
-      );
+    WHERE h.[VM] IN ('B1', 'CR')
+      AND h.[DEL_DATE] >= ${dFrom} AND h.[DEL_DATE] < ${dTo};
+
+    -- BUOC 1b (hoi AMOS): PHIEU TRA cua cac phieu xuat trong ky, tra cuu bang
+    --   PICKSLIPSEQNO_I (co chi muc) chia lo 400 ID/lan. Khong co lo nao thi
+    --   ky do khong co phieu tra - #hraw giu nguyen.
+    ${cauReturn.join('\n') || '-- (ky nay khong co dong Return nao)'}
 
     -- BUOC 2 (TAI CHO): cat got chuoi + doi ngay AMOS sang datetime.
     SELECT
@@ -3628,10 +3745,10 @@ async function qReceiving(range, f, ghi = () => {}) {
       RTRIM(h.[OWNER])                      AS owner,
       RTRIM(h.[CREATED_BY])                 AS created_by,
       TRY_CONVERT(float, h.[QTY])           AS qty,
-      -- Ngay thuoc ve KY BAO CAO: B1/CR theo DEL_DATE, EA/TC theo MUTATION
-      -- (giong dung dieu kien loc o buoc keo du lieu ben tren). Neu de nguyen
-      -- DEL_DATE thi dong tra co ngay rong -> bieu do theo ngay mat het.
-      CASE WHEN RTRIM(h.[VM]) IN ('EA', 'TC') THEN ${d2v('h.[MUTATION]')}
+      -- Ngay thuoc ve KY BAO CAO: B1/CR theo DEL_DATE, phieu tra theo
+      -- MUTATION (ngay tra ve kho that). Neu de nguyen DEL_DATE thi dong tra
+      -- co ngay rong -> bieu do theo ngay mat het.
+      CASE WHEN RTRIM(h.[VM]) IN (${VM_PHIEU_TRA_SQL}) THEN ${d2v('h.[MUTATION]')}
            ELSE ${d2v('h.[DEL_DATE]')} END   AS del_date,
       ${d2v('h.[ORDERDATE]')}               AS orderdate,
       ${d2v('h.[MUTATION]')}                AS mutation_date,
@@ -3640,9 +3757,15 @@ async function qReceiving(range, f, ghi = () => {}) {
       -- ky bao cao, con cot hien tren bang la moc nay.
       ${amosDayTimeToVN('h.[MUTATION]', 'h.[MUTATION_TIME]')} AS receive_time_vn,
       -- ===================== PHAN LOAI DONG ==========================
-      -- RETURN = hang TRA LAI KHO, nhan biet bang VM IN ('EA','TC') - DUNG BO
-      -- MA ma tab Quan ly xuat kho dang dung de tra "phieu tra" (xem
-      -- fetchReturnHistory). KHONG tu nghi them quy tac nao khac.
+      -- RETURN = hang TRA LAI KHO. Bo ma VM lay tu HANG SO DUY NHAT
+      -- VM_PHIEU_TRA (EA, TC, ES) - cung bo ma ma tab Quan ly xuat kho dung
+      -- de tra "phieu tra". KHONG tu nghi them quy tac nao khac.
+      --
+      -- ⚠️ Dong RETURN o #hraw KHONG loc theo ngay: chung duoc chon boi
+      -- PICKSLIPSEQNO_I cua cac dong Return thuoc PHIEU XUAT TRONG KY (xem
+      -- layReturnSeqnos). Nghia la mot lan tra thang 8 cua phieu xuat thang 7
+      -- thuoc ky THANG 7. Day dung la cach cot "Phiếu trả" ben tab xuat kho
+      -- van dang lam - hai tab nho vay luon khop nhau.
       --
       -- VI SAO RETURN VAO DAY MA CANCEL THI KHONG (nghiep vu chot):
       --   CANCEL - thu kho huy khi nguoi nhan KHONG LAY. Hang chua he ra khoi
@@ -3653,13 +3776,13 @@ async function qReceiving(range, f, ghi = () => {}) {
       --            ly do no duoc tinh cong cho inspector.
       -- CR = phieu huy nhap (chi dung de loai dong B1 tuong ung).
       CASE WHEN RTRIM(h.[VM]) = 'CR' THEN 'CR'
-           WHEN RTRIM(h.[VM]) IN ('EA', 'TC') THEN 'RETURN'
+           WHEN RTRIM(h.[VM]) IN (${VM_PHIEU_TRA_SQL}) THEN 'RETURN'
            ELSE 'RECEIVE' END                 AS loai,
       -- SO PHIEU hien tren cot "Receiving No".
       -- Phieu tra dung dang <HISTORYNO_I>-R, GIONG HET cot "Phiếu trả" cua tab
       -- Quan ly xuat kho - de mot so phieu tra chi co MOT cach viet trong ca
       -- chuong trinh. So goc trong AMOS van giu o cot voucherno_goc.
-      CASE WHEN RTRIM(h.[VM]) IN ('EA', 'TC')
+      CASE WHEN RTRIM(h.[VM]) IN (${VM_PHIEU_TRA_SQL})
              THEN CONVERT(varchar(32), TRY_CONVERT(bigint, h.[HISTORYNO_I])) + '-R'
            ELSE RTRIM(h.[VOUCHERNO]) END      AS voucherno
     INTO #hi
@@ -3740,7 +3863,8 @@ async function qReceiving(range, f, ghi = () => {}) {
 
   ghi(`Kỳ báo cáo: ${range.label} (${String(range.from).slice(0, 10)} → ${String(range.to).slice(0, 10)})`);
   const sets = await buoc(ghi,
-    'Kéo HISTORY (VM = B1 + CR + EA/TC) về #temp rồi gom số liệu (qua linked server — bước lâu nhất)',
+    `Kéo HISTORY về #temp rồi gom số liệu — phiếu nhập (B1+CR theo ngày nhập) `
+    + `+ ${retIds.length} dòng trả tra theo mã phiếu xuất (qua linked server — bước lâu nhất)`,
     () => queryMulti(text, params));
   const pick = (k) => sets.find((s) => s.length && k in s[0]) || [];
   const cnt = pick('b1_tho')[0] || {};
@@ -3866,6 +3990,9 @@ async function qReceiving(range, f, ghi = () => {}) {
       daScanDong, chuaScanDong,
     },
     scanFolder: scanIndexStatus(index, dirs.receiving),
+    // Rong = binh thuong. Co chu = buoc lay dong Return that bai, con so
+    // RETURN trong bang dang THIEU - phai bao ra, khong duoc im lang.
+    loiReturn,
     // KPI INSPECTOR NHAP KHO: so lieu dem tu SQL (#hi) + so phieu da/chua scan
     // tinh o Node -> ghep lai theo ma nhan vien.
     kpiInspector: (pick('ma_nv') || [])
@@ -6527,15 +6654,28 @@ app.get('/api/admin/diag/receiving-loai', h(async (req, res) => {
            SUM(CASE WHEN LOWER(ISNULL(h.[CONDITION], '')) LIKE '%us%'
                     THEN 1 ELSE 0 END) AS bi_loai_vi_us
     FROM [DWH_DB]..[STG_AMOS].[HISTORY] h
-    WHERE h.[VM] IN ('EA', 'TC')
+    WHERE h.[VM] IN (${VM_PHIEU_TRA_SQL})
       AND h.[MUTATION] >= ${dx.fromDayX} AND h.[MUTATION] < ${dx.toDayX}
     GROUP BY RTRIM(h.[VM])`);
   const tong = loc.reduce((a, r) => a + (Number(r.so_dong) || 0), 0);
   const loai = loc.reduce((a, r) => a + (Number(r.bi_loai_vi_us) || 0), 0);
+
+  // HAI CACH DEM PHIEU TRA - de nguoi dung thay ro chenh lech cua dinh nghia.
+  //   theoNgayTra : dong tra co MUTATION trong ky (bat ke phieu xuat ngay nao)
+  //   theoPhieuXuat: dong tra cua cac PHIEU XUAT trong ky (bat ke tra ngay nao)
+  // Tab Receiving dung cach THU HAI - giong het cot "Phiếu trả" ben tab Quan
+  // ly xuat kho, nho vay hai tab khong bao gio lech nhau.
+  let theoPhieuXuat = null;
+  try {
+    theoPhieuXuat = (await layReturnSeqnos(range)).length;
+  } catch (e) {
+    theoPhieuXuat = `loi: ${e.message}`;
+  }
+
   res.json({
     ky: range.label,
-    giaiThich: 'Dong duoc xep RETURN khi VM ∈ {EA, TC} - dung bo ma ma tab '
-      + 'Quan ly xuat kho dung de tra phieu tra.',
+    giaiThich: `Dong duoc xep RETURN khi VM ∈ {${VM_PHIEU_TRA.join(', ')}} - dung `
+      + 'bo ma ma tab Quan ly xuat kho dung de tra phieu tra.',
     // Bao nhieu dong return bi bo loc CONDITION cat mat
     returnBiLocUS: {
       ghiChu: 'Bo loc CONDITION NOT LIKE "%us%" ap cho CA dong return (nghiep vu '
@@ -6545,6 +6685,13 @@ app.get('/api/admin/diag/receiving-loai', h(async (req, res) => {
       biLoaiViUS: loai,
       conLai: tong - loai,
       theoVM: loc,
+    },
+    demPhieuTra: {
+      ghiChu: 'Tab Receiving lay theo "phieu xuat trong ky" (giong tab Quan ly '
+        + 'xuat kho). Hai con so lech nhau la binh thuong: hang xuat cuoi thang '
+        + 'truoc co the duoc tra dau thang nay va nguoc lai.',
+      theoNgayTra: tong,
+      theoPhieuXuat,
     },
     rows,
   });

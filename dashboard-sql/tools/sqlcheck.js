@@ -195,6 +195,11 @@ const COT_BAT_BUOC = {
     'dong_receive', 'dong_return',
     // KPI inspector: so dong receive/return cua tung nguoi
     'so_receive', 'so_return',
+    // ⚠️ Dong RETURN phai lay tu PHAN PHIEU XUAT (#ps): endpoint nay bat buoc
+    // phai sinh ra cau lay seqno cua cac dong Return. Mat cot nay nghia la ai
+    // do da quay lai kieu "loc HISTORY theo MUTATION" - cach lam da lam tab
+    // Receiving chay rat lau va that bai tren du lieu that.
+    'seq_ret',
   ],
   '/api/dashboard': [
     // Chi so SLA phai tinh o SQL (khong phai o trinh duyet tren bang bi cat)
@@ -227,8 +232,48 @@ function soiCotBatBuoc(theoEndpoint) {
   return loi;
 }
 
+/**
+ * LUAT 6: CAU KEO PHIEU NHAP (INTO #hraw) CHI DUOC LOC TREN MOT COT NGAY.
+ * ---------------------------------------------------------------------------
+ * ⚠️ LUAT NAY CUNG SINH RA TU MOT SU CO THAT (18/08/2026).
+ * De ghep dong RETURN vao tab Receiving, cau keo #hraw tung duoc viet thanh:
+ *     WHERE VM IN ('B1','CR','EA','TC')
+ *       AND ( (VM IN ('B1','CR') AND DEL_DATE trong ky)
+ *          OR (VM IN ('EA','TC') AND MUTATION trong ky) )
+ * HAI COT NGAY KHAC NHAU trong cung mot OR: AMOS khong dung duoc chi muc nao
+ * nen phai QUET CA BANG HISTORY. Tren du lieu that cau nay chay rat lau va
+ * HONG - nguoi dung bao "lay du lieu nhap kho rat lau va that bai".
+ *
+ * Cach sua da chon: keo phieu nhap NHU BAN DAU (chi B1+CR theo DEL_DATE), con
+ * dong tra lay o phan phieu xuat roi tra cuu HISTORY theo PICKSLIPSEQNO_I (co
+ * chi muc). Luat nay khoa cach lam do lai.
+ *
+ * Bai kiem chi soi CAU KEO (`INTO #hraw`), khong dung den ca cau - cac cau
+ * chan doan co quyen loc kieu khac.
+ */
+function findHaiCotNgayTrongPull(sql) {
+  const loi = [];
+  const s = stripComments(sql);
+  // Chi soi cau tao #hraw (SELECT ... INTO #hraw FROM ... HISTORY)
+  const vt = s.search(/INTO\s+#hraw\b/i);
+  if (vt < 0) return loi;
+  // Cat tu INTO #hraw den dau cham phay ket thuc cau
+  const dau = s.indexOf(';', vt);
+  const cau = dau < 0 ? s.slice(vt) : s.slice(vt, dau);
+  const coDel = /\[DEL_DATE\]\s*(>=|<|>|<=)/i.test(cau);
+  const coMut = /\[MUTATION\]\s*(>=|<|>|<=)/i.test(cau);
+  if (coDel && coMut) {
+    loi.push('Cau keo phieu nhap (INTO #hraw) loc tren CA HAI cot [DEL_DATE] va '
+      + '[MUTATION] - AMOS se quet ca bang HISTORY. Lay dong Return theo '
+      + 'PICKSLIPSEQNO_I (xem layReturnSeqnos) thay vi loc theo MUTATION.');
+  }
+  return loi;
+}
+
 const RULES = [
   { ten: 'Ghi vao bang KHONG phai cua app', tim: findWriteOutsideAppTables },
+  { ten: 'Cau keo phieu nhap loc tren 2 cot ngay (quet ca bang HISTORY)',
+    tim: findHaiCotNgayTrongPull },
   { ten: 'Ham gom chua subquery (Msg 130)', tim: findAggWithSubquery },
   { ten: 'APPLY vao linked server', tim: findApplyOnLinkedServer },
   // Luat 5 chay MOT LAN tren toan bo (khong theo tung cau) - xem duoi main()

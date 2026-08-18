@@ -3399,9 +3399,25 @@ async function loadReceiving() {
     renderRecvCharts(data.charts);
     veKpiNhanVien('#recvKpiNv', data.kpiInspector, 'receiving');
     renderScanBar('#recvScanBar', data.scanFolder);
+    // Bước lấy dòng Return hỏng thì bảng đang THIẾU return — nói thẳng ra,
+    // không để người dùng nhìn con số nhỏ hơn mà tưởng thật.
+    const wRet = $('#recvRetWarn');
+    if (wRet) {
+      if (data.loiReturn) {
+        wRet.classList.remove('hidden');
+        wRet.innerHTML = '<div class="font-semibold mb-1">⚠ Thiếu dòng Return</div>'
+          + '<div>Không lấy được danh sách phiếu trả từ phần phiếu xuất — '
+          + `bảng dưới đây CHỈ có phiếu nhập. Lý do: <code>${escapeHtml(data.loiReturn)}</code></div>`;
+      } else {
+        wRet.classList.add('hidden');
+      }
+    }
     $('#recvDesc').textContent =
       'HISTORY với VM = B1 (phiếu receive), kỳ theo DEL_DATE (ngày AMOS); đơn vị đếm là ITEM. '
       + 'Đã LOẠI các item B1 có RECDETAILNO_I trùng với dòng VM = CR (phiếu receive đã bị hủy). '
+      + 'Dòng RETURN (VM = EA/TC/ES) lấy từ PHẦN PHIẾU XUẤT: là phiếu trả của các phiếu xuất '
+      + 'TRONG KỲ — đúng cùng một tập với cột “Phiếu trả” ở tab Quản lý xuất kho, nên hai tab '
+      + 'không bao giờ lệch nhau. Hệ quả: một lần trả tháng 8 của phiếu xuất tháng 7 thuộc kỳ THÁNG 7. '
       + 'Bộ lọc: STATION chứa station đang chọn, CONDITION không chứa “us”. '
       + 'Thống kê theo STATION và STORE (receive không quy về Trung tâm). '
       + 'Ngày giờ receive = MUTATION + MUTATION_TIME → giờ VN (+7); DEL_DATE chỉ có ngày nên chỉ dùng làm mốc kỳ. '
