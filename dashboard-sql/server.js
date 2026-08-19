@@ -960,13 +960,32 @@ function saveKpiTargets(body, ip) {
  * TUONG THICH NGUOC: ban ghi cu luu picking/receiving la MOT CHUOI -> coi do
  * la thu muc mac dinh '*'.
  */
-function loadScanDirs() {
-  let saved = {};
-  try {
-    if (fs.existsSync(SCAN_DIR_FILE)) saved = JSON.parse(fs.readFileSync(SCAN_DIR_FILE, 'utf8')) || {};
-  } catch (e) {
-    console.warn('[SCAN] Khong doc duoc scan-folders.json:', e.message);
+// ⚠️ loadScanDirs() nam TREN DUONG XU LY REQUEST (qPickslip, qReceiving,
+// trang thai scan, ca hai API tra cuu chung tu). Truoc day moi lan goi deu
+// existsSync + readFileSync + JSON.parse - I/O DONG BO chan luong chinh cua
+// Node, tuc la chan CA cac request khac. Nay nho ket qua va chi doc lai khi
+// tep THAT SU doi (so theo mtime + kich thuoc), nen bam "Luu duong dan" o
+// /admin van co hieu luc ngay.
+let _scanDirsCache = null;   // { key, val }
+function docScanDirFile() {
+  let st = null;
+  try { st = fs.statSync(SCAN_DIR_FILE); } catch (_) { st = null; }
+  const key = st ? `${st.mtimeMs}|${st.size}` : 'khong-co-tep';
+  if (_scanDirsCache && _scanDirsCache.key === key) return _scanDirsCache.val;
+  let val = {};
+  if (st) {
+    try {
+      val = JSON.parse(fs.readFileSync(SCAN_DIR_FILE, 'utf8')) || {};
+    } catch (e) {
+      console.warn('[SCAN] Khong doc duoc scan-folders.json:', e.message);
+    }
   }
+  _scanDirsCache = { key, val };
+  return val;
+}
+
+function loadScanDirs() {
+  const saved = docScanDirFile();
   const sach = (v) => (typeof v === 'string' && v.trim() ? v.trim() : '');
 
   /** Gop 3 nguon theo thu tu uu tien: file JSON > bien moi truong > mac dinh. */
@@ -1027,7 +1046,8 @@ function saveScanDirs(body, ip) {
     updatedAt: new Date().toISOString(),
     updatedBy: ip || 'unknown',
   });
-  _scanCache.clear(); // duong dan doi -> bo cache danh sach file cu
+  _scanCache.clear();   // duong dan doi -> bo cache danh sach file cu
+  _scanDirsCache = null; // ep doc lai tep ngay, khong doi mtime
   return loadScanDirs();
 }
 
@@ -1129,7 +1149,14 @@ async function readScanFolder(dir, mode) {
   // Day cung la DANH SACH TRANG DUY NHAT de mo file: xem /api/scan/file.
   const out = {
     at: Date.now(), dir, mode, ok: false, count: 0,
-    keys: new Set(), tenFile: new Map(), error: '',
+    keys: new Set(), tenFile: new Map(),
+    // dsFile: bang PHANG cho tab "Tra cuu chung tu" - moi phan tu la
+    //   { ten, tim } voi `tim` = ten goc + ten DA BO dau phan cach, viet
+    //   thuong, noi bang '\n'.
+    // ⚠️ Tinh MOT LAN o day thay vi moi lan tim: thu muc that co the co vai
+    // chuc nghin file, chuan hoa lai toan bo o moi lan bam Tim la lang phi
+    // thay ro (va chay tren luong chinh cua Node).
+    dsFile: [], error: '',
   };
   if (!dir) {
     out.error = 'Chua cau hinh duong dan thu muc scan.';
@@ -1150,8 +1177,11 @@ async function readScanFolder(dir, mode) {
       // lay mot cai roi giau cac cai con lai.
       const ds = out.tenFile.get(khoa);
       if (ds) ds.push(f); else out.tenFile.set(khoa, [f]);
+      const chuan = chuanHoaSoChungTu(f);
+      out.dsFile.push({ ten: f, tim: (chuan === f ? f : `${f}\n${chuan}`).toLowerCase() });
     }
     for (const ds of out.tenFile.values()) ds.sort((a, b) => a.localeCompare(b));
+    out.dsFile.sort((a, b) => a.ten.localeCompare(b.ten, 'vi'));
     out.ok = true;
     out.count = out.keys.size;
     out.ms = Date.now() - t0;
@@ -6890,20 +6920,21 @@ function timChungTu(index, station, tuKhoa) {
   if (!folder) return { ok: false, dir: '', files: [], tong: 0, loi: 'Chưa cấu hình thư mục cho station này.' };
   if (!folder.ok) return { ok: false, dir: folder.dir, files: [], tong: 0, loi: folder.error || 'Không đọc được thư mục.' };
   const tk = String(tuKhoa || '').toLowerCase();
+  // `dsFile` da duoc chuan hoa + sap xep SAN luc doc thu muc (readScanFolder),
+  // nen o day chi con mot phep includes() tren moi dong.
   const ra = [];
-  // Duyet CHINH danh sach ten file that (khong duyet khoa da bi cat got):
-  // nguoi dung nho so nao thi so do nam trong TEN FILE.
-  for (const ds of folder.tenFile.values()) {
-    for (const f of ds) {
-      const ten = String(f);
-      // So sanh ca ten goc lan ten da bo dau phan cach, de tim duoc ca khi
-      // CHINH TEN FILE co dau phan cach.
-      if (ten.toLowerCase().includes(tk)
-        || chuanHoaSoChungTu(ten).toLowerCase().includes(tk)) ra.push(ten);
+  for (const f of folder.dsFile) {
+    if (f.tim.includes(tk)) {
+      ra.push(f.ten);
+      // Da du de hien + biet la con nua thi dung dem tiep cho het thu muc.
+      if (ra.length > CT_TOI_DA) break;
     }
   }
-  ra.sort((a, b) => a.localeCompare(b, 'vi'));
-  return { ok: true, dir: folder.dir, files: ra.slice(0, CT_TOI_DA), tong: ra.length, loi: '' };
+  // Dem TONG that (khong cat) chi khi da cham tran - de bao "con bao nhieu nua"
+  const tong = ra.length > CT_TOI_DA
+    ? folder.dsFile.reduce((n, f) => n + (f.tim.includes(tk) ? 1 : 0), 0)
+    : ra.length;
+  return { ok: true, dir: folder.dir, files: ra.slice(0, CT_TOI_DA), tong, loi: '' };
 }
 
 /** Doc + kiem tham so chung cua hai API tra cuu chung tu. */

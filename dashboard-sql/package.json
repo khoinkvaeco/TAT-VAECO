@@ -9,7 +9,7 @@
     "dev": "node --watch server.js",
     "service:install": "node service-install.js",
     "service:uninstall": "node service-uninstall.js",
-    "smoke": "node tools/smoke.js && node tools/sqlcheck.js && node tools/gatecheck.js && node tools/loadcheck.js && node tools/snapcheck.js && node tools/chatcheck.js && node tools/wpcheck.js && node tools/kpicheck.js && node tools/scancheck.js && node tools/admincheck.js && node tools/build-assets.js --check",
+    "smoke": "node tools/smoke.js && node tools/sqlcheck.js && node tools/sqlfilecheck.js && node tools/gatecheck.js && node tools/loadcheck.js && node tools/snapcheck.js && node tools/chatcheck.js && node tools/wpcheck.js && node tools/kpicheck.js && node tools/scancheck.js && node tools/admincheck.js && node tools/build-assets.js --check",
     "sqlcheck": "node tools/sqlcheck.js",
     "build:assets": "node tools/build-assets.js",
     "gatecheck": "node tools/gatecheck.js",

@@ -1,5 +1,9 @@
 # Dashboard Báo cáo TAT (Turn-Around-Time) — VAECO
 
+> ### 📄 Mới vào dự án? Đọc `docs/HANDOFF.md` TRƯỚC
+> README này là **tài liệu tra cứu** (rất dài). `docs/HANDOFF.md` là **bản đồ**: ràng buộc bắt
+> buộc, các bẫy đã trả giá, cách chạy bài kiểm, việc còn treo — đọc 5 phút là làm việc được.
+
 Web Dashboard đọc dữ liệu từ **SQL Server** (các bảng `NQT.dbo.*` và `DWH_DB..STG_AMOS.SIGN` của hệ AMOS), tính toán **TAT** cho từng đơn vị / station / CUVT / hoàn kho, hiển thị **KPI cards, biểu đồ, bảng dữ liệu** và các **báo cáo có export Excel**.
 
 - **Frontend:** HTML5 + Tailwind CSS (CDN) + Chart.js + Tabulator.js
@@ -1613,6 +1617,61 @@ Chính đẳng thức `SL nhận ≤ SL giao` **trượt ngay lần chạy đầ
 luôn là **tập con** của “đã giao”. Nay cả hai lấy từ **một kho chung** `usPool(range)`, dòng nào có
 `reci_time` thì thuộc *đã nhận*. Bài kiểm tra chỉ có giá trị khi dữ liệu mẫu tuân đúng quan hệ của
 dữ liệu thật.
+
+## 7s. `docs/INDEXES.sql` · hai tối ưu đã ĐO được
+
+### `docs/INDEXES.sql` — tệp nghiệp vụ dán tay vào SSMS
+
+Tệp này do **người thật** chạy trên máy chủ thật, nên nó phải **chạy lại được nhiều lần**. Bản cũ
+**hứa sai**: header ghi *“tất cả đều có IF NOT EXISTS”* nhưng **ba lệnh cuối không có** — chạy lần
+hai là SSMS báo `There is already an index named …`, người chạy không biết là lỗi vô hại hay mình
+vừa làm hỏng CSDL.
+
+Ba lỗi thật của bản cũ, nay đã sửa:
+
+| Lỗi | Hậu quả |
+|---|---|
+| 3 lệnh `CREATE INDEX` không có guard | chạy lần hai báo lỗi |
+| `IX_real_us1_onac_deltime` **trùng cột khoá** `[del_time]` với `IX_real_us1_del_time` | hai index cùng vai trò — tốn đĩa, làm chậm **mọi** lệnh ghi vào `real_us1` |
+| Header lặp hai lần | — |
+
+Bản mới: 12 index đều có guard · gộp index thừa vào một · thêm câu `DROP` dọn index cũ nếu CSDL đã
+lỡ tạo · thêm `IX_real_us1_historyno` (báo cáo *Tháo chưa trả US*) · câu kiểm tra cuối file nay in
+kèm **dung lượng MB** của từng index.
+
+⚠️ **`IX_kho_ser1_label_voucher` nay `INCLUDE` thêm `[station]`, `[store]`** — bộ lọc Station/Kho
+của *TAT CUVT* và *Trả unservice* đi qua `EXISTS (… FROM kho_ser1 kx …)` (§7p); thiếu hai cột này
+thì mỗi dòng phải quay về bảng gốc lấy thêm.
+
+**`tools/sqlfilecheck.js`** (mới, trong `npm run smoke`) soi chính tệp — không cần SQL Server: mọi
+`CREATE`/`DROP INDEX` phải có guard · không trùng tên · **không hai index trùng cột khoá trên cùng
+bảng** · không có lệnh phá dữ liệu. Đã **đo thật**: chạy trên bản cũ → `✖ 3/5`.
+
+### Tối ưu 1 — chuẩn hoá tên file MỘT LẦN thay vì mỗi lần tìm
+
+`timChungTu()` bản đầu gọi `chuanHoaSoChungTu()` cho **từng file, ở mỗi lần tìm**. Nay `dsFile`
+được dựng sẵn lúc đọc thư mục (`readScanFolder`, cache 60 giây), mỗi phần tử là `{ ten, tim }` với
+`tim` đã viết thường + đã bỏ dấu phân cách.
+
+**Đo trên 40.000 file** (cỡ thật của thư mục certificates một năm):
+
+| | 5 lượt tìm |
+|---|---|
+| Cách cũ | **90 ms** |
+| Cách mới | **17 ms** (+19 ms dựng bảng, trả một lần cho mỗi 60 giây) |
+
+Kèm theo: dừng đếm khi đã đủ `CT_TOI_DA` kết quả, chỉ đếm tổng thật khi cần báo *“còn bao nhiêu
+nữa”*.
+
+### Tối ưu 2 — `scan-folders.json` không còn đọc đĩa ở mỗi request
+
+`loadScanDirs()` nằm **trên đường xử lý request** (`qPickslip`, `qReceiving`, trạng thái scan, cả
+hai API tra cứu). Mỗi lần gọi đều `existsSync` + `readFileSync` + `JSON.parse` — **I/O đồng bộ chặn
+luồng chính của Node**, tức là chặn **cả các request khác**. Nay nhớ kết quả và chỉ đọc lại khi tệp
+**thật sự đổi** (so `mtime` + kích thước).
+
+⚠️ `saveScanDirs()` xoá `_scanDirsCache` ngay, nên bấm **💾 Lưu đường dẫn** ở `/admin` vẫn có hiệu
+lực **tức thì**.
 
 ## 7r. Tab *Tra cứu chứng từ* · bỏ dò lại schema · thời gian hoàn thành · dùng lại dữ liệu phiếu xuất
 
