@@ -1,23 +1,32 @@
 #!/usr/bin/env node
 /**
- * GATECHECK - kiem tra CONG VAO TRANG LGC that su CHAN, khong phai chi an di.
+ * GATECHECK - kiem tra CONG DANG NHAP that su CHAN, khong phai chi an di.
  * ---------------------------------------------------------------------------
  * VI SAO CAN: truoc day `/lgc` chi la "don gian hoa giao dien" - ai go dung
  * dia chi deu vao duoc. Khi cong bo dashboard cho CA CONG TY thi dieu do co
  * nghia la cong bo luon nghiep vu noi bo cua kho. Nay da co XAC THUC (ma nhan
  * vien + mat khau); bai kiem tra nay bao dam no KHONG bi ho tro lai am tham.
  *
+ * ⚠️ PHAM VI DA DOI (18/08/2026 - nghiep vu chot). HAI MUC CHAN, khong duoc
+ * lan lon nhau:
+ *   MUC 1 - DANG NHAP: bat buoc cho CA CHUONG TRINH, ke ca dashboard TAT.
+ *           MOI nhan vien co ma trong SIGN deu lap duoc tai khoan.
+ *   MUC 2 - TRUNG TAM: rieng nhom LGC (xuat kho / receiving / repair admin)
+ *           con doi dung nhan vien CUVT.
+ *   Truoc day dashboard la CONG KHAI va chi CUVT moi lap duoc tai khoan -
+ *   dung nguoc lai voi bay gio.
+ *
  * Chay server o DEMO_MODE (ma bat dau bang 'CU' = thuoc CUVT) roi thu:
- *   1. Chua dang nhap -> trang /lgc ra man dang nhap, API LGC tra 401
- *   2. Trang dashboard cong khai KHONG bi chan
- *   3. Ma khong thuoc CUVT -> tu choi
- *   4. Ma CUVT nhung mat khau khoi tao sai -> tu choi
- *   5. Ma CUVT + mat khau khoi tao dung -> vao duoc NHUNG phai doi mat khau,
+ *   1. Chua dang nhap -> ra man dang nhap, moi API tra 401 (KE CA dashboard)
+ *   2. Ma KHONG thuoc CUVT -> VAN dang nhap duoc va xem duoc dashboard,
+ *      NHUNG API cua nhom LGC tra 403
+ *   3. Ma CUVT nhung mat khau khoi tao sai -> tu choi
+ *   4. Ma CUVT + mat khau khoi tao dung -> vao duoc NHUNG phai doi mat khau,
  *      va TRONG LUC CHUA DOI thi VAN BI CHAN  (cho de lam hinh thuc nhat)
- *   6. Mat khau moi khong duoc trung ma nhan vien / khong duoc qua ngan
- *   7. Doi xong -> vao duoc; mat khau CU khong dung duoc nua
- *   8. Cookie GIA MAO / SUA HAN -> tu choi  (cho de sai nhat)
- *   9. Sai mat khau nhieu lan -> KHOA tai khoan
+ *   5. Mat khau moi khong duoc trung ma nhan vien / khong duoc qua ngan
+ *   6. Doi xong -> vao duoc; mat khau CU khong dung duoc nua
+ *   7. Cookie GIA MAO / SUA HAN -> tu choi  (cho de sai nhat)
+ *   8. Sai mat khau nhieu lan -> KHOA tai khoan
  *
  * CHAY:  node tools/gatecheck.js   (da nam trong `npm run smoke`)
  */
@@ -55,25 +64,48 @@ async function main() {
       body: JSON.stringify({ ma, matKhau }),
     });
 
-    // 1. Chua dang nhap
+    // 1. Chua dang nhap -> CHAN HET, ke ca dashboard
     const trang = await fetch(`${BASE}/lgc`).then((r) => r.text());
     kiemTra('Chua dang nhap -> /lgc ra man hinh dang nhap', trang.includes('Đăng nhập'));
-    for (const ep of [API_LGC, '/api/receiving', '/api/reports/repair-admin']) {
+    const trangGoc = await fetch(`${BASE}/`).then((r) => r.text());
+    kiemTra('⚠️ Chua dang nhap -> TRANG CHU cung ra man hinh dang nhap',
+      trangGoc.includes('Đăng nhập') && !trangGoc.includes('kpiGrid'));
+    for (const ep of [API_LGC, '/api/receiving', '/api/reports/repair-admin',
+      '/api/dashboard?periodType=month&month=2026-08', '/api/tat/departments']) {
       const r = await fetch(BASE + ep);
       kiemTra(`Chua dang nhap -> ${ep.split('?')[0]} bi chan`, r.status === 401, `HTTP ${r.status}`);
     }
-
-    // 2. Trang cong khai khong bi anh huong
-    for (const ep of ['/', '/api/dashboard?periodType=month&month=2026-08']) {
+    // Trang dang nhap va tep tinh PHAI van mo, neu khong thi khong ai vao duoc
+    for (const ep of ['/login', '/style.css', '/api/lgc/me']) {
       const r = await fetch(BASE + ep);
-      kiemTra(`Trang cong khai ${ep.split('?')[0]} van vao duoc`, r.ok, `HTTP ${r.status}`);
+      kiemTra(`Duong MO ${ep} khong bi chan`, r.ok, `HTTP ${r.status}`);
     }
 
-    // 3. Ma khong thuoc CUVT
-    const paDept = await dn('VAE12345', 'VAE12345');
-    kiemTra('Ma KHONG thuoc CUVT -> tu choi', paDept.status === 403, `HTTP ${paDept.status}`);
+    // 2. Ma KHONG thuoc CUVT: dang nhap duoc, xem dashboard duoc, NHUNG khong
+    //    duoc vao nhom LGC. Day la muc chan THU HAI - de nham voi muc mot la
+    //    hoac chan oan ca cong ty, hoac mo toang nghiep vu kho.
+    const paDn = await dn('VAE12345', 'VAE12345');
+    kiemTra('Ma ngoai CUVT -> VAN lap duoc tai khoan', paDn.ok, `HTTP ${paDn.status}`);
+    const paCookie = (paDn.headers.get('set-cookie') || '').split(';')[0];
+    const paDoi = await fetch(`${BASE}/api/lgc/doi-mat-khau`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: paCookie },
+      body: JSON.stringify({ matKhauCu: 'VAE12345', matKhauMoi: 'MatKhau123' }),
+    });
+    kiemTra('Ma ngoai CUVT -> doi duoc mat khau', paDoi.ok, `HTTP ${paDoi.status}`);
+    const paDash = await fetch(`${BASE}/api/dashboard?periodType=month&month=2026-08`,
+      { headers: { Cookie: paCookie } });
+    kiemTra('Ma ngoai CUVT -> XEM DUOC dashboard TAT', paDash.ok, `HTTP ${paDash.status}`);
+    for (const ep of [API_LGC, '/api/receiving', '/api/reports/repair-admin']) {
+      const r = await fetch(BASE + ep, { headers: { Cookie: paCookie } });
+      kiemTra(`⚠️ Ma ngoai CUVT -> ${ep.split('?')[0]} bi tu choi`,
+        r.status === 403, `HTTP ${r.status}`);
+    }
+    const paMe = await fetch(`${BASE}/api/lgc/me`, { headers: { Cookie: paCookie } })
+      .then((r) => r.json());
+    kiemTra('Ma ngoai CUVT -> /api/lgc/me bao lgc = false (giao dien an tab LGC)',
+      paMe.ok === true && paMe.lgc === false, `lgc=${paMe.lgc}`);
 
-    // 4. Ma CUVT nhung mat khau khoi tao sai
+    // 3. Ma CUVT nhung mat khau khoi tao sai
     const saiMk = await dn('CU001', 'linh-tinh');
     kiemTra('Ma CUVT + mat khau khoi tao SAI -> tu choi', saiMk.status === 401, `HTTP ${saiMk.status}`);
 

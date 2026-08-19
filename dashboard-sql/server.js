@@ -5560,7 +5560,10 @@ const authLgc = require('./auth-lgc')({
   query, dataDir: CONFIG.dataDir, logDir: LOG_DIR, demoMode: CONFIG.demoMode,
 });
 
-/** Duong dan thuoc khu vuc LGC (trang + API chi LGC dung). */
+/**
+ * Duong dan CHI DANH CHO NHAN VIEN CUVT (nhom LGC).
+ * Dang nhap thoi CHUA DU - phai dung trung tam. Xem authLgc.laCuvt().
+ */
 function isLgcPath(p) {
   if (/^\/(lgc|kho)(\.html)?\/?$/.test(p)) return true;
   // File scan la CHUNG TU THAT (co chu ky) - phai sau cong LGC y het du lieu
@@ -5569,23 +5572,72 @@ function isLgcPath(p) {
   return p === '/api/pickslip' || p === '/api/receiving' || p === '/api/reports/repair-admin';
 }
 
+/**
+ * Duong dan KHONG CAN dang nhap - phai giu that gon, neu khong thi cong dang
+ * nhap chi la hinh thuc. Chi gom: chinh trang dang nhap va cac API cua no,
+ * tep tinh (css/js/font) va cac duong /admin (da co cong RIENG theo IP).
+ */
+function laDuongMo(p) {
+  if (p === '/lgc-login.html' || p === '/login') return true;
+  if (p === '/api/lgc/login' || p === '/api/lgc/doi-mat-khau'
+      || p === '/api/lgc/me' || p === '/api/lgc/logout') return true;
+  if (p === '/api/whoami' || p === '/api/health') return true;
+  if (p.startsWith('/admin')) return true;              // co adminGuard theo IP
+  if (p.startsWith('/api/admin/')) return true;         // nt
+  // Tep tinh: khong co du lieu nghiep vu nao trong do.
+  return /\.(css|js|svg|png|jpg|jpeg|ico|woff2?|map)$/i.test(p);
+}
+
+/**
+ * CONG DANG NHAP CHO CA CHUONG TRINH.
+ * ---------------------------------------------------------------------------
+ * ⚠️ DOI PHAM VI 18/08/2026 (nghiep vu chot): truoc day cong nay chi chan
+ * nhom LGC, ai go '/' cung xem duoc toan bo dashboard. Nay PHAI DANG NHAP moi
+ * vao duoc dashboard; rieng nhom LGC con phai la nhan vien CUVT.
+ *
+ * Hai muc chan, KHONG duoc lan lon:
+ *   1. Chua dang nhap (hoac chua doi mat khau lan dau) -> chan HET.
+ *   2. Da dang nhap nhung KHONG phai CUVT -> chi chan cac duong isLgcPath().
+ */
 async function lgcGuard(req, res, next) {
-  if (!CONFIG.lgcGate || !isLgcPath(req.path)) return next();
+  if (!CONFIG.lgcGate || laDuongMo(req.path)) return next();
   let ai = null;
   try { ai = await authLgc.aiDangDung(req); } catch (_) { ai = null; }
-  // CHUA doi mat khau lan dau thi CHUA duoc xem du lieu - neu khong thi buoc
-  // doi mat khau chi la hinh thuc, ai cung vao duoc bang mat khau mac dinh.
-  if (ai && !ai.doiMk) return next();
   const ip = String(req.socket.remoteAddress || '').replace(/^::ffff:/, '') || 'unknown';
-  if (req.path.startsWith('/api/')) {
-    return res.status(401).json({
-      error: true, code: ai ? 'LGC_DOI_MK' : 'LGC_LOCKED',
-      message: ai ? 'Bạn cần đổi mật khẩu trước khi xem dữ liệu LGC.'
-        : 'Cần đăng nhập để xem dữ liệu LGC.',
-    });
+  const laApi = req.path.startsWith('/api/');
+
+  // --- (1) CHUA dang nhap, hoac chua doi mat khau lan dau ---
+  // ⚠️ `ai.doiMk` = "CON PHAI DOI mat khau" (cot doi_mk = 1), KHONG phai "da
+  // doi". Doc nham la cong lat nguoc 180 do: chan nguoi da doi, tha nguoi con
+  // dang dung mat khau mac dinh. Da dinh dung loi do khi mo rong cong nay -
+  // tools/gatecheck.js bat duoc ngay.
+  // Chua doi mat khau thi CHUA duoc xem du lieu, neu khong thi buoc doi mat
+  // khau chi la hinh thuc: ai cung vao duoc bang mat khau mac dinh.
+  if (!ai || ai.doiMk) {
+    if (laApi) {
+      return res.status(401).json({
+        error: true, code: ai ? 'LGC_DOI_MK' : 'LGC_LOCKED',
+        message: ai ? 'Bạn cần đổi mật khẩu trước khi xem dữ liệu.'
+          : 'Cần đăng nhập để xem dữ liệu.',
+      });
+    }
+    authLgc.ghiLog(ip, ai ? ai.ma : '', 'FORM', req.originalUrl);
+    return res.sendFile(path.join(__dirname, 'public', 'lgc-login.html'));
   }
-  authLgc.ghiLog(ip, ai ? ai.ma : '', 'FORM', req.originalUrl);
-  return res.sendFile(path.join(__dirname, 'public', 'lgc-login.html'));
+
+  // --- (2) Da dang nhap: nhom LGC con doi dung trung tam ---
+  if (isLgcPath(req.path) && !ai.lgc) {
+    authLgc.ghiLog(ip, ai.ma, 'DENY', `nhom LGC - dept=${ai.department || ''}`);
+    if (laApi) {
+      return res.status(403).json({
+        error: true, code: 'LGC_KHONG_DU_QUYEN',
+        message: `Nhóm LGC chỉ dành cho nhân viên ${authLgc.DEPTS_LGC.join(' / ')}.`
+          + ` Mã của bạn thuộc ${ai.department || 'trung tâm khác'}.`,
+      });
+    }
+    return res.redirect(302, '/');
+  }
+  return next();
 }
 
 // --- HEADER BAO MAT co ban (mo cho ca cong ty thi nen co) ---
@@ -5599,7 +5651,7 @@ app.use((req, res, next) => {
 });
 
 app.use(adminGuard);   // chan truy cap admin tu IP la (truoc static de chan /admin.html)
-app.use(lgcGuard);     // chan trang LGC neu chua nhap ma nhan vien thuoc CUVT
+app.use(lgcGuard);     // BAT BUOC dang nhap cho ca chuong trinh; nhom LGC con doi CUVT
 app.use(express.static(path.join(__dirname, 'public')));
 
 /** Boc route async + xu ly loi tap trung.
@@ -8174,6 +8226,10 @@ app.get('/api/admin/diag/wp-status', h(async (req, res) => {
 app.get(['/wp', '/wp.html', '/rasoat'], (req, res) =>
   res.sendFile(path.join(__dirname, 'public', 'wp.html')));
 
+// Route: /login -> trang dang nhap (dia chi de nho, tro cung mot tep).
+app.get('/login', (req, res) =>
+  res.sendFile(path.join(__dirname, 'public', 'lgc-login.html')));
+
 // Route tien: /admin -> trang admin review log cau hoi chua hieu
 app.get('/admin', (req, res) => res.sendFile(path.join(__dirname, 'public', 'admin.html')));
 
@@ -8182,13 +8238,13 @@ app.get('/admin', (req, res) => res.sendFile(path.join(__dirname, 'public', 'adm
 // ve Dashboard thay vi de mot ban sao thu hai troi tu tu lech voi ban chinh.
 app.get(['/beta', '/beta.html'], (req, res) => res.redirect(301, '/'));
 
-// Route: /lgc -> VAN LA index.html, chi khac diem vao. Frontend thay duong dan
-// la /lgc thi mo thang nhom "LGC" va an cac tab TAT (che do LGC).
-// Lam nhu vay de LGC co mot dia chi rieng de danh dau (bookmark) MA KHONG phai
-// nhan doi trang/dich vu - moi thu van dung chung mot ban ma nguon.
+// Route: /lgc -> VAN LA index.html, chi khac diem vao: frontend thay duong dan
+// la /lgc thi MO SAN tab LGC.
+// ⚠️ DA BO "che do LGC" (an het cac tab TAT). Nghiep vu chot 18/08/2026: LGC
+// quay ve lam MOT TAB cua dashboard, khong con la mot trang rieng nua - nguoi
+// CUVT chi can mot cho de xem tat ca.
 // (/kho la dia chi CU, van giu de link da gui di khong chet.)
-// LUU Y: day chi la don gian hoa GIAO DIEN, KHONG phai phan quyen. Ai go '/'
-// cung van xem duoc day du - dung nhu hien nay (moi don vi deu duoc xem).
+// PHAN QUYEN THAT nam o lgcGuard: duong nay doi dang nhap VA dung trung tam.
 app.get(['/lgc', '/lgc.html', '/kho', '/kho.html'], (req, res) =>
   res.sendFile(path.join(__dirname, 'public', 'index.html')));
 

@@ -71,12 +71,13 @@ const state = {
 };
 
 /**
- * CHE DO LGC (/lgc; /kho van chay - dia chi cu): nhan vien LGC vao THANG nhom
- * "LGC", cac tab TAT cua don vi khac duoc AN di cho do roi. Van la CUNG MOT
- * trang, cung script - chi khac diem vao - nen khong co ban sao thu hai de
- * lech nhau.
+ * Vao bang dia chi /lgc (hoac /kho - dia chi cu) thi MO SAN tab LGC.
+ * ⚠️ DA BO "che do LGC" (an het cac tab TAT). Nghiep vu chot 18/08/2026: LGC
+ * quay ve lam MOT TAB cua dashboard, khong con la mot trang rieng - nguoi CUVT
+ * chi can mot cho de xem tat ca. Dia chi /lgc van giu de link da ghim khong
+ * chet, va de ai muon vao thang nhom LGC thi bot mot cu bam.
  */
-const LGC_ONLY = /^\/(lgc|kho)(\.html)?\/?$/.test(location.pathname);
+const MO_SAN_LGC = /^\/(lgc|kho)(\.html)?\/?$/.test(location.pathname);
 
 let mainTable = null;   // Tabulator bang chinh
 const charts = {};      // luu instance Chart.js
@@ -395,7 +396,13 @@ function renderKPIs(kpis, prev, sparks) {
   const tbSla = Number(kpis.tatXuatTraAvg) || 0;
   const mauSla = tbSla <= target ? '--good' : (tbSla <= target * 1.5 ? '--warning' : '--critical');
   const mauTyLe = kpis.slaTyLe >= 90 ? '--good' : (kpis.slaTyLe >= 70 ? '--warning' : '--critical');
-  const cards = [
+  // ⚠️ XEP THEO NHOM, MOI NHOM MOT HANG (yeu cau nghiep vu 18/08/2026).
+  // Truoc day 12 the do thang mot luoi 6 cot, nen cac the CUNG MOT NHOM bi cat
+  // doi sang hai hang khac nhau (vd TAT install / US return o hang tren, con
+  // TAT CUVT / hoan kho o hang duoi) - nhin ra rat lon xon. Nay moi nhom la
+  // MOT HANG 4 COT co tieu de rieng, khong the bi cat doi nua.
+  const nhom = [
+    { ten: `Chặng đặt mục tiêu — xuất kho → trả US (${target} ngày)`, cards: [
     // --- Chang CO MUC TIEU: xuat kho -> tra US/service (tat_days) ---
     { label: `TAT xuất kho → trả US (mục tiêu ${target}n)`, value: kpis.tatXuatTraAvg,
       prev: prev.tatXuatTraAvg, dir: 'down', unit: 'ngày', accent: mauSla,
@@ -413,29 +420,55 @@ function renderKPIs(kpis, prev, sparks) {
       accent: '--series-5',
       title: `Trung vị (P50): ${kpis.slaP50 ?? 0} ngày. P50 thấp hơn nhiều so với trung bình `
         + 'nghĩa là số ít ca rất chậm đang kéo trung bình lên — xem biểu đồ Phân phối.' },
-    // --- Ba chang thanh phan (de biet nut that nam o chang nao) ---
-    { label: 'TAT install', value: kpis.tatInstallAvg, prev: prev.tatInstallAvg, dir: 'down', unit: 'ngày', accent: '--series-1' },
-    { label: 'TAT US return', value: kpis.tatUsReturnAvg, prev: prev.tatUsReturnAvg, dir: 'down', unit: 'ngày', accent: '--series-8' },
-    { label: 'TAT CUVT', value: kpis.tatCuvtAvg, prev: prev.tatCuvtAvg, dir: 'down', unit: 'ngày', accent: '--series-2' },
-    { label: 'TAT hoàn kho', value: kpis.tatReturnStoreAvg, prev: prev.tatReturnStoreAvg, dir: 'down', unit: 'ngày', accent: '--series-5' },
-    { label: 'Thiết bị xuất kho', value: kpis.countIssued, prev: prev.countIssued, dir: 'neutral', unit: 'thiết bị', accent: '--series-3' },
+    ] },
+
+    // --- Bon chang thanh phan (de biet nut that nam o chang nao) ---
+    // ⚠️ Tong bon chang nay KHAC thẻ dau tien - xem giai thich o dau ham.
+    { ten: 'TAT từng chặng — tìm nút thắt', cards: [
+    { label: 'TAT install', value: kpis.tatInstallAvg, prev: prev.tatInstallAvg, dir: 'down', unit: 'ngày', accent: '--series-1',
+      title: 'Từ lúc xuất kho đến lúc lắp lên tàu.' },
+    { label: 'TAT US return', value: kpis.tatUsReturnAvg, prev: prev.tatUsReturnAvg, dir: 'down', unit: 'ngày', accent: '--series-8',
+      title: 'Từ lúc tháo khỏi tàu đến lúc trả unservice.' },
+    { label: 'TAT CUVT', value: kpis.tatCuvtAvg, prev: prev.tatCuvtAvg, dir: 'down', unit: 'ngày', accent: '--series-2',
+      title: 'Từ lúc trả unservice đến lúc CUVT nhận.' },
+    { label: 'TAT hoàn kho', value: kpis.tatReturnStoreAvg, prev: prev.tatReturnStoreAvg, dir: 'down', unit: 'ngày', accent: '--series-5',
+      title: 'Từ lúc xuất kho đến lúc hoàn kho (phiếu P-CA-…).' },
+    ] },
+
+    // --- San luong & doi ung: bon so nay KHOP NHAU theo dinh nghia ---
+    //     Da doi ung + Chua doi ung = Thiet bi xuat kho
+    //     Ty le doi ung             = Da doi ung / Thiet bi xuat kho
+    { ten: 'Sản lượng & đối ứng', cards: [
+    { label: 'Thiết bị xuất kho', value: kpis.countIssued, prev: prev.countIssued, dir: 'neutral', unit: 'thiết bị', accent: '--series-3',
+      title: `Đã đối ứng ${(kpis.countIssued || 0) - (kpis.countNotReconciled || 0)} + `
+        + `chưa đối ứng ${kpis.countNotReconciled ?? 0} = ${kpis.countIssued ?? 0}.` },
     { label: 'Chưa đối ứng', value: kpis.countNotReconciled, prev: prev.countNotReconciled, dir: 'down', unit: 'thiết bị', accent: '--series-6', spark: 'notReconciled' },
     { label: 'Tỷ lệ đối ứng', value: kpis.reconcileRate, prev: prev.reconcileRate, dir: 'up', unit: '%', accent: '--series-7', spark: 'reconcileRate' },
     // SL da NHAN (reci) / SL da GIAO (del) cua CUVT trong ky (2 so -> khong tinh delta)
-    { label: 'SL nhận / SL giao (CUVT)', value: `${kpis.cntReci ?? 0}/${kpis.cntDel ?? 0}`, unit: '', accent: '--series-7' },
+    { label: 'SL nhận / SL giao (CUVT)', value: `${kpis.cntReci ?? 0}/${kpis.cntDel ?? 0}`, unit: '', accent: '--series-4',
+      title: `CUVT đã NHẬN ${kpis.cntReci ?? 0} / đã GIAO ${kpis.cntDel ?? 0} thiết bị trong kỳ. `
+        + 'Nhận luôn ≤ giao (chỉ nhận được cái đã giao). Station/Kho lọc theo PHIẾU XUẤT.' },
+    ] },
   ];
-  $('#kpiGrid').innerHTML = cards
-    .map((c) => {
-      // Sparkline chi ve khi THUC SU co chuoi thang (bam "Nap xu huong" xong).
-      const sp = c.spark && sparks[c.spark] && sparks[c.spark].length > 1
-        ? sauSpark(sparks[c.spark], cssVar(c.accent)) : '';
-      return `
+
+  const veThe = (c) => {
+    // Sparkline chi ve khi THUC SU co chuoi thang (bam "Nap xu huong" xong).
+    const sp = c.spark && sparks[c.spark] && sparks[c.spark].length > 1
+      ? sauSpark(sparks[c.spark], cssVar(c.accent)) : '';
+    return `
       <div class="kpi" style="--accent:${cssVar(c.accent)}" title="${escapeHtml(c.title || `${c.label}: ${c.value ?? 0} ${c.unit}`)}">
         <div class="kpi-label">${c.label}</div>
         <div class="kpi-value">${c.value ?? 0} <span class="kpi-unit">${c.unit}</span></div>
         <div class="kpi-chan">${c.dir ? kpiDelta(c.value, c.prev, c.dir) : ''}${sp}</div>
       </div>`;
-    })
+  };
+
+  $('#kpiGrid').innerHTML = nhom
+    .map((g) => `
+      <section class="kpi-nhom">
+        <h4 class="kpi-nhom-ten">${escapeHtml(g.ten)}</h4>
+        <div class="kpi-hang">${g.cards.map(veThe).join('')}</div>
+      </section>`)
     .join('');
 }
 
@@ -2430,9 +2463,11 @@ function applyFilterVisibility(view) {
   set('#stationWrap', v.station);
   set('#storeWrap', v.store);
   set('#deptWrap', v.dept);
-  set('#ccWrap', v.cc);
-  set('#cabWrap', v.cab);
-  set('#rangeLabel', v.period); // khong theo ky thi nhan "Thang: ... -> ..." gay hieu nham
+  // ⚠️ HAI O TICH "Bo qua xuat costcenter" / "Bo qua cac kho CAB" DA AN HAN
+  // khoi thanh loc (nghiep vu chot 18/08/2026). KHONG goi set() cho chung nua:
+  // set() se BO lop 'hidden' o cac man hinh co v.cc/v.cab = true, tuc la hai o
+  // do lai hien ra. Gia tri van giu nguyen va van len hang chip "Dang loc".
+  set('#rangeLabel', v.period); // khong theo ky thi nhan "Thang: ..." gay hieu nham
   renderChipBar(view);          // hang chip phai theo dung bo o loc dang hien
 }
 
@@ -2457,43 +2492,30 @@ function switchTab(tab) {
 }
 
 /**
- * Bat CHE DO LGC: an cac tab TAT, doi tieu de, va them mot loi thoat sang
- * dashboard day du (khong khoa cung - nguoi LGC van xem duoc phan con lai).
- * KHONG phai phan quyen: day chi la don gian hoa giao dien. Muon CHAN that
- * thi phai chan o server nhu adminGuard.
+ * NHAN DANG NGUOI DUNG: hien "Xin chao <ten>" + nut Thoat tren thanh dau
+ * trang, va MO tab LGC neu la nhan vien CUVT.
+ *
+ * ⚠️ DAY CHI LA GIAO DIEN. Chan THAT nam o `lgcGuard` phia server: khong dang
+ * nhap thi khong vao duoc gi, va cac duong cua nhom LGC con doi dung trung
+ * tam. Bo 'hidden' bang tay trong trinh duyet KHONG lay duoc du lieu nao.
+ *
+ * @returns {boolean} co duoc dung nhom LGC khong
  */
-function applyLgcOnlyMode() {
-  document.title = 'VAECO · LGC';
-  const h1 = document.querySelector('header h1');
-  const sub = document.querySelector('header .brand-sub');
-  if (h1) h1.textContent = 'LGC';
-  if (sub) sub.textContent = 'VAECO · Logistics Center · Xuất kho · Receiving · Repair Admin';
-  $$('.mainTab').forEach((b) => b.classList.toggle('hidden', b.dataset.tab !== 'lgc'));
-  const nav = document.querySelector('nav .flex');
-  if (nav) {
-    const a = document.createElement('a');
-    a.href = '/';
-    a.className = 'ml-auto self-center text-xs text-muted hover:underline pr-1';
-    a.textContent = 'Xem dashboard TAT đầy đủ →';
-    nav.appendChild(a);
-  }
-  chaoNguoiDungLgc();
-}
-
-/**
- * Hien "Xin chao <ma nhan vien>" + nut Thoat tren thanh dau trang LGC.
- * Vao duoc trang nay nghia la da qua cong ma nhan vien (server kiem tra), nen
- * day chi la hien thi - KHONG phai cho kiem tra quyen o phia trinh duyet.
- */
-async function chaoNguoiDungLgc() {
+async function chaoNguoiDung() {
   let me = null;
-  try { me = await fetch('/api/lgc/me').then((r) => r.json()); } catch (_) { return; }
-  if (!me || !me.ok || !me.ma) return;          // cong dang tat -> khong hien gi
+  try { me = await fetch('/api/lgc/me').then((r) => r.json()); } catch (_) { return false; }
+  if (!me || !me.ok || !me.ma) return false;    // cong dang tat -> khong hien gi
+
+  // Tab LGC chi hien voi nhan vien CUVT (co `lgc` do server tinh - mot nguon
+  // su that duy nhat, giao dien khong tu doan theo ten trung tam).
+  const nutLgc = document.querySelector('.mainTab[data-tab="lgc"]');
+  if (nutLgc) nutLgc.classList.toggle('hidden', !me.lgc);
+
   const host = document.querySelector('header .ml-auto');
-  if (!host) return;
+  if (!host) return !!me.lgc;
   const box = document.createElement('span');
   box.className = 'lgc-chao';
-  // Ten lay tu cot DESCRIPTION cua bang SIGN; khong co ten thi hien ma
+  // Ten lay tu [LASTNAME] + [FIRSTNAME] cua bang SIGN; khong co ten thi hien ma
   const ten = me.ten || me.ma;
   box.innerHTML = `<span>Xin chào <b>${escapeHtml(ten)}</b></span>`;
   box.title = `Mã nhân viên: ${me.ma}${me.department ? ' · ' + me.department : ''}`;
@@ -2501,13 +2523,14 @@ async function chaoNguoiDungLgc() {
   nut.type = 'button';
   nut.className = 'lgc-thoat';
   nut.textContent = 'Thoát';
-  nut.title = 'Quên mã nhân viên trên máy này';
+  nut.title = 'Đăng xuất khỏi máy này';
   nut.addEventListener('click', async () => {
     await fetch('/api/lgc/logout', { method: 'POST' }).catch(() => {});
-    location.href = '/lgc';
+    location.href = '/';
   });
   box.appendChild(nut);
   host.insertBefore(box, host.firstChild);
+  return !!me.lgc;
 }
 
 // --- Nhom LGC: KHONG tu chay truy van ------------------------------------
@@ -3616,7 +3639,7 @@ async function init() {
   // dashboard (vd station=HAN) van con khi sang LGC - nhan vien kho mo len
   // thay so lieu thieu ma khong hieu vi sao. Nay mo /lgc la ba o ve "Tat ca".
   // NGOAI TRU khi link co san tham so loc: do la y muon ro rang cua nguoi gui.
-  if (LGC_ONLY && !['station', 'store', 'department'].some((k) => urlQ.has(k))) {
+  if (MO_SAN_LGC && !['station', 'store', 'department'].some((k) => urlQ.has(k))) {
     state.station = [];
     state.store = [];
     state.department = [];
@@ -3656,7 +3679,7 @@ async function init() {
     // Dua filter len URL -> copy link gui dong nghiep la ho thay dung man hinh nay
     history.replaceState(null, '', `${location.pathname}?${buildQuery()}`);
     reportCache.clear();
-    if (!LGC_ONLY) loadDashboard();
+    loadDashboard();
     if (!$('#tab-reports').classList.contains('hidden')) loadReport(state.currentReport);
     resetLgc(); // LGC khong tu chay lai - nguoi dung bam "Chay kiem tra"
     resetSoSanhThang(); // so sanh thang cung vay: doi bo loc thi so cu sai
@@ -3721,8 +3744,11 @@ async function init() {
   $$('.mainTab').forEach((b) => b.addEventListener('click', () => switchTab(b.dataset.tab)));
   $$('.lgcTab').forEach((b) => b.addEventListener('click', () => switchLgcTab(b.dataset.lgc)));
   $('#lgcRun').addEventListener('click', runLgc);
-  if (LGC_ONLY) applyLgcOnlyMode();
-  switchTab(LGC_ONLY ? 'lgc' : 'dashboard');
+  // Nhan dang nguoi dung TRUOC khi chon tab: phai biet co duoc dung nhom LGC
+  // hay khong roi moi quyet dinh mo tab nao - neu khong, nguoi ngoai CUVT go
+  // /lgc se rot vao mot tab dang an va thay man hinh trong.
+  const duocLgc = await chaoNguoiDung();
+  switchTab(MO_SAN_LGC && duocLgc ? 'lgc' : 'dashboard');
 
   // Report sub-tabs
   $$('.reportTab').forEach((b) => b.addEventListener('click', () => loadReport(b.dataset.report)));
@@ -3745,7 +3771,7 @@ async function init() {
   // thi cac the KPI se nhap nhay mot lan tu 2 ngay (mac dinh) sang so that.
   await napMucTieu();
   await loadFilters(); // nap danh muc roi ve lai nut theo gia tri da khoi phuc
-  if (!LGC_ONLY) loadDashboard();
+  loadDashboard();
 }
 
 // --------------------------------------------------------------------------

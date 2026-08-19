@@ -162,15 +162,20 @@
         </div>
       </div>
 
-      <!-- Bo qua phieu xuat cho costcenter: receiver la so (2 chu so / so thuan), khong phai so tau -->
-      <label id="ccWrap" class="flex items-center gap-1.5 text-sm pb-2 cursor-pointer select-none"
+      <!-- ⚠️ HAI O TICH DUOI DAY DA AN KHOI THANH LOC (nghiep vu chot 18/08/2026):
+           chung it dung va lam thanh loc roi. GIA TRI VAN GIU NGUYEN - bo loc
+           da luu va link cu chay y het nhu truoc.
+           KHONG XOA hai the <input>: script.js van doc/ghi chung, va khi mot
+           trong hai DANG BAT thi hang chip "Đang lọc" hien ro - khong bao gio
+           co bo loc nao chay ngam ma khong ai thay.
+           Muon hien lai: bo lop 'hidden' o hai the <label>. -->
+      <label id="ccWrap" class="hidden items-center gap-1.5 text-sm pb-2 cursor-pointer select-none"
              title="Loại các phiếu xuất có Receiver là số (đúng 2 chữ số hoặc số thuần, ví dụ 15, 1234, 12.5) — không phải số tàu — và tính lại KPI/biểu đồ">
         <input type="checkbox" id="ccToggle" class="w-4 h-4" />
         <span>Bỏ qua xuất costcenter</span>
       </label>
 
-      <!-- Bo qua cac kho khoi noi that / an toan / panel -->
-      <label id="cabWrap" class="flex items-center gap-1.5 text-sm pb-2 cursor-pointer select-none"
+      <label id="cabWrap" class="hidden items-center gap-1.5 text-sm pb-2 cursor-pointer select-none"
              title="Loại hẳn các kho CAB, CAB-TD, P-THA, P-SAF, P-PAN khỏi KPI và mọi báo cáo">
         <input type="checkbox" id="cabToggle" class="w-4 h-4" />
         <span>Bỏ qua các kho CAB</span>
@@ -201,6 +206,24 @@
         <button type="button" id="chipClear" class="chip-clear">Xoá tất cả bộ lọc</button>
       </div>
     </div>
+
+    <!-- ===================== TAB NAV =====================
+         ⚠️ NAM TRONG <header> (header co sticky top-0) theo yeu cau nghiep vu:
+         truoc day nav nam ngoai header nen cuon xuong la MAT thanh tab, muon
+         doi tab phai cuon nguoc len dau trang. -->
+    <nav class="tabbar">
+      <div class="max-w-[1600px] mx-auto px-5">
+        <div class="flex gap-1">
+          <button data-tab="dashboard" class="mainTab">📊 Tổng quan</button>
+          <button data-tab="reports" class="mainTab">📋 Các Báo cáo khác</button>
+          <!-- Nhóm LGC CHỈ dành cho nhân viên CUVT: script.js bỏ 'hidden' sau
+               khi /api/lgc/me trả về lgc = true. Đây chỉ là giao diện — chặn
+               THẬT nằm ở lgcGuard phía server. -->
+          <button data-tab="lgc" class="mainTab hidden">🏬 LGC</button>
+          <button data-tab="partlookup" class="mainTab">🔎 Tra cứu Part On/Off</button>
+        </div>
+      </div>
+    </nav>
   </header>
 
   <!-- Thông báo lỗi -->
@@ -214,23 +237,13 @@
     </div>
   </div>
 
-  <!-- ===================== TAB NAV ===================== -->
-  <nav class="max-w-[1600px] mx-auto px-5 mt-4">
-    <div class="flex gap-1 border-b border-hair">
-      <button data-tab="dashboard" class="mainTab">📊 Tổng quan</button>
-      <button data-tab="reports" class="mainTab">📋 Các Báo cáo khác </button>
-      <!-- LGC đang THỬ NGHIỆM: ẩn khỏi thanh tab, chỉ vào được bằng cách gõ
-           thêm /lgc trên thanh địa chỉ (script.js sẽ bỏ 'hidden' khi ở /lgc). -->
-      <button data-tab="lgc" class="mainTab hidden">🏬 LGC</button>
-      <button data-tab="partlookup" class="mainTab">🔎 Tra cứu Part On/Off</button>
-    </div>
-  </nav>
-
   <main class="max-w-[1600px] mx-auto px-5 py-5">
     <!-- ============ TAB TỔNG QUAN ============ -->
     <section id="tab-dashboard">
       <div id="dashPane">
-      <div id="kpiGrid" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-2 mb-5"></div>
+      <!-- Cac the KPI xep theo NHOM, moi nhom mot hang co tieu de rieng -
+           xem renderKPIs(). Luoi cot dat o .kpi-hang trong style.css. -->
+      <div id="kpiGrid" class="mb-5"></div>
 
       <div class="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-5">
         <div class="card">

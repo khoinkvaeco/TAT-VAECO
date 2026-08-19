@@ -1,13 +1,21 @@
 /**
  * ============================================================================
- *  auth-lgc.js  -  XAC THUC cho trang LGC (chi nhan vien CUVT)
+ *  auth-lgc.js  -  XAC THUC cho TOAN BO chuong trinh
  * ============================================================================
  *  Thay cho "cong nhan dien" cu (chi hoi ma nhan vien, khong co mat khau).
  *
+ *  ⚠️ PHAM VI DA MO RONG (18/08/2026 - nghiep vu chot):
+ *    - TRUOC: chi chan trang LGC, va CHI nhan vien CUVT moi lap duoc tai khoan.
+ *    - NAY  : phai dang nhap moi vao duoc dashboard. MOI nhan vien co ma trong
+ *             bang SIGN deu lap duoc tai khoan va xem duoc dashboard TAT.
+ *             RIENG nhom LGC (Quan ly xuat kho / Receiving / Repair Admin)
+ *             van CHI danh cho nhan vien CUVT - xem co laCuvt.
+ *    Ten file giu nguyen de khong phai sua hang chuc cho tham chieu.
+ *
  *  LUONG:
  *    1. Nhap MA NHAN VIEN + MAT KHAU.
- *    2. Chua co tai khoan -> tra bang SIGN: phai thuoc CUVT moi duoc lap tai
- *       khoan, va mat khau lan dau PHAI la chinh ma nhan vien VIET HOA.
+ *    2. Chua co tai khoan -> tra bang SIGN: co ma trong SIGN la lap duoc, va
+ *       mat khau lan dau PHAI la chinh ma nhan vien VIET HOA.
  *    3. Lap xong -> BAT BUOC doi mat khau ngay (co doi_mk = 1). Chua doi thi
  *       chua vao duoc trang LGC.
  *    4. Ho ten nhan vien = [LASTNAME] + [FIRSTNAME] cua bang SIGN (thu tu
@@ -34,7 +42,12 @@ const path = require('path');
 
 const COOKIE = 'lgc_auth';
 const TTL_MS = 12 * 60 * 60 * 1000;        // ve song 12 gio
-const DEPTS = ['CUVT'];                     // trung tam duoc vao
+// ⚠️ KHONG con danh sach "trung tam duoc dang nhap": MOI nhan vien co trong
+// SIGN deu vao duoc dashboard. Danh sach duoi day chi quyet dinh AI THAY NHOM
+// LGC - dung mot cho duy nhat de khong bao gio lech giua giao dien va server.
+const DEPTS_LGC = ['CUVT'];                 // trung tam duoc dung nhom LGC
+/** Nhan vien nay co duoc dung nhom LGC khong? */
+const laCuvt = (dept) => DEPTS_LGC.includes(String(dept || '').trim().toUpperCase());
 const SAI_TOI_DA = 5;                       // sai lien tiep bao nhieu lan thi khoa
 const KHOA_PHUT = 15;                       // khoa bao lau
 const MK_TOI_THIEU = 6;                     // do dai mat khau toi thieu
@@ -244,11 +257,8 @@ module.exports = function taoAuthLgc({ query, dataDir, logDir, demoMode }) {
         ghiLog(ip, ma, 'DENY', 'khong co trong SIGN');
         return { ok: false, status: 403, message: `Không tìm thấy mã nhân viên “${ma}” trong hệ thống AMOS.` };
       }
-      if (!DEPTS.includes(sign.department)) {
-        ghiLog(ip, ma, 'DENY', `dept=${sign.department}`);
-        return { ok: false, status: 403,
-          message: `Mã “${ma}” thuộc ${sign.department}. Trang LGC chỉ dành cho nhân viên ${DEPTS.join(' / ')}.` };
-      }
+      // ⚠️ KHONG chan theo trung tam nua: co ma trong SIGN la lap duoc tai
+      // khoan. Trung tam chi quyet dinh co THAY nhom LGC hay khong (laCuvt).
       // Mat khau khoi tao PHAI la chinh ma nhan vien VIET HOA
       if (String(matKhau) !== ma) {
         ghiLog(ip, ma, 'DENY', 'mat khau khoi tao sai');
@@ -259,7 +269,8 @@ module.exports = function taoAuthLgc({ query, dataDir, logDir, demoMode }) {
       await themUser({ ma_nv: ma, ten: sign.ten, department: sign.department, mk_hash: bam(ma, muoi), mk_muoi: muoi });
       ghiLog(ip, ma, 'CREATE', `dept=${sign.department}`);
       u = await layUser(ma);
-      return { ok: true, ma, ten: (u && u.ten) || sign.ten, doiMk: true };
+      return { ok: true, ma, ten: (u && u.ten) || sign.ten,
+        department: sign.department, lgc: laCuvt(sign.department), doiMk: true };
     }
 
     // --- Da co tai khoan: kiem tra mat khau ---
@@ -278,7 +289,8 @@ module.exports = function taoAuthLgc({ query, dataDir, logDir, demoMode }) {
     }
     await ghiNhanDung(ma);
     ghiLog(ip, ma, 'ALLOW', `dept=${u.department || ''}`);
-    return { ok: true, ma, ten: u.ten || '', doiMk: !!u.doi_mk };
+    return { ok: true, ma, ten: u.ten || '', department: u.department || '',
+      lgc: laCuvt(u.department), doiMk: !!u.doi_mk };
   }
 
   /** Doi mat khau. Yeu cau biet mat khau cu (ke ca lan doi bat buoc dau tien). */
@@ -392,11 +404,14 @@ module.exports = function taoAuthLgc({ query, dataDir, logDir, demoMode }) {
     if (!ma) return null;
     const u = await layUser(ma).catch(() => null);
     if (!u) return null;
-    return { ma, ten: u.ten || '', doiMk: !!u.doi_mk, department: u.department || '' };
+    // `lgc` = co duoc dung nhom LGC khong. Server dung chinh co nay de chan
+    // (lgcGuard), giao dien dung no de an/hien tab -> mot nguon su that duy nhat.
+    return { ma, ten: u.ten || '', doiMk: !!u.doi_mk,
+      department: u.department || '', lgc: laCuvt(u.department) };
   }
 
   return {
-    COOKIE, TTL_MS, DEPTS, MK_TOI_THIEU,
+    COOKIE, TTL_MS, DEPTS_LGC, laCuvt, MK_TOI_THIEU,
     khoiTao, dangNhap, doiMatKhau, aiDangDung, docVe, taoVe, ghiLog, layUser,
     danhSachUser, moKhoaUser, datLaiMatKhau, SAI_TOI_DA, KHOA_PHUT,
     trangThai: () => ({ sanSang, loiTaoBang }),

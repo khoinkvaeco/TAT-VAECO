@@ -1614,6 +1614,75 @@ luôn là **tập con** của “đã giao”. Nay cả hai lấy từ **một k
 `reci_time` thì thuộc *đã nhận*. Bài kiểm tra chỉ có giá trị khi dữ liệu mẫu tuân đúng quan hệ của
 dữ liệu thật.
 
+## 7q. Đăng nhập cho CẢ chương trình · LGC quay về làm một tab · Thanh tab dính
+
+Bốn thay đổi giao diện + phân quyền chốt ngày **18/08/2026**.
+
+### 1. HAI mức chặn — đừng lẫn lộn
+
+| Mức | Chặn gì | Ai qua được |
+|---|---|---|
+| **1 — Đăng nhập** | **Toàn bộ** chương trình, kể cả dashboard TAT | **Mọi** nhân viên có mã trong bảng `SIGN` |
+| **2 — Trung tâm** | Riêng nhóm **LGC** (Xuất kho · Receiving · Repair Admin · file scan) | Chỉ nhân viên **CUVT** |
+
+Trước đây **ngược lại**: dashboard là công khai (ai gõ địa chỉ cũng xem được) còn *chỉ* CUVT mới
+lập được tài khoản. Nay `auth-lgc.js` bỏ hẳn danh sách “trung tâm được đăng nhập”; danh sách còn
+lại là `DEPTS_LGC = ['CUVT']` và **chỉ** quyết định ai **thấy nhóm LGC**.
+
+Cả hai mức nằm trong `lgcGuard`. Đường **mở** (không cần đăng nhập) giữ thật gọn — nếu không thì
+cổng chỉ là hình thức: trang đăng nhập + API của nó, tệp tĩnh (`.css/.js/.svg/…`), và `/admin*`
+(đã có **cổng riêng theo IP**).
+
+> ⚠️ **Bẫy đã sập một lần khi mở rộng cổng này.** `ai.doiMk` nghĩa là **“CÒN PHẢI đổi mật khẩu”**
+> (`doi_mk = 1`), **không** phải “đã đổi”. Viết `if (!ai || !ai.doiMk)` là **lật ngược 180°**: chặn
+> người đã đổi, thả người vẫn đang dùng mật khẩu mặc định. `tools/gatecheck.js` bắt được ngay.
+
+Giao diện chỉ **ẩn** tab LGC theo cờ `lgc` do `/api/lgc/me` trả về — **một nguồn sự thật duy nhất**,
+trình duyệt không tự đoán theo tên trung tâm. Bỏ `hidden` bằng tay trong DevTools **không** lấy được
+dữ liệu nào: chặn thật nằm ở server.
+
+`tools/gatecheck.js` nay **31 trường hợp**, đã **đo thật** cả hai mức:
+
+* quay lại kiểu “chỉ chặn nhóm LGC” → `✖ 3/31` (trang chủ + `/api/dashboard` + `/api/tat/departments`
+  lại vào được khi chưa đăng nhập);
+* bỏ điều kiện trung tâm → `✖ 3/31` (mã ngoài CUVT gọi được cả 3 API của nhóm LGC, `HTTP 200`).
+
+### 2. LGC quay về làm MỘT TAB của dashboard
+
+Bỏ hẳn “chế độ LGC” (vào `/lgc` thì **ẩn** mọi tab TAT). Nhân viên CUVT nay chỉ cần **một chỗ** để
+xem tất cả. Địa chỉ `/lgc` (và `/kho`) vẫn giữ — chỉ còn nghĩa **“mở sẵn tab LGC”**, để link đã ghim
+không chết. Người ngoài CUVT gõ `/lgc` thì server chuyển về `/` (`302`).
+
+Sau khi đăng nhập, trang tự quay lại **đúng chỗ đang muốn tới**: trang đăng nhập được trả về **ngay
+tại địa chỉ người dùng gõ** (không chuyển hướng), nên `location.pathname` chính là đích.
+
+### 3. Thanh tab nằm TRONG header (dính khi cuộn)
+
+`<nav>` chuyển vào trong `<header>` — header vốn đã `sticky top-0`. Trước đây cuộn xuống là **mất**
+thanh tab, muốn đổi tab phải cuộn ngược lên đầu trang. Kèm theo phải đổi màu chữ tab sang **màu trên
+nền header** (xanh đậm), nếu để nguyên bảng cũ thì thành chữ xám mờ trên nền xanh.
+
+### 4. Thẻ KPI xếp theo NHÓM, mỗi nhóm một hàng
+
+12 thẻ trước đây đổ thẳng vào một lưới 6 cột, nên các thẻ **cùng nhóm bị cắt đôi** sang hai hàng
+khác nhau (*TAT install* / *US return* ở hàng trên, *TAT CUVT* / *hoàn kho* ở hàng dưới). Nay ba
+nhóm, mỗi nhóm **một hàng 4 cột** có tiêu đề riêng:
+
+| Nhóm | Thẻ |
+|---|---|
+| **Chặng đặt mục tiêu — xuất kho → trả US** | TAT xuất kho → trả US · Tỷ lệ đạt mục tiêu · Quá hạn · P90 |
+| **TAT từng chặng — tìm nút thắt** | TAT install · TAT US return · TAT CUVT · TAT hoàn kho |
+| **Sản lượng & đối ứng** | Thiết bị xuất kho · Chưa đối ứng · Tỷ lệ đối ứng · SL nhận/SL giao (CUVT) |
+
+### 5. Ẩn hai ô tích “Bỏ qua xuất costcenter” / “Bỏ qua các kho CAB”
+
+Ẩn khỏi thanh lọc, **giữ nguyên giá trị** — bộ lọc đã lưu và link cũ chạy y hệt như trước. Hai thẻ
+`<input>` **không bị xoá**: `script.js` vẫn đọc/ghi chúng, và khi một trong hai **đang BẬT** thì hàng
+chip *“Đang lọc”* hiện rõ kèm dấu × để bỏ — **không bao giờ có bộ lọc chạy ngầm mà không ai thấy**.
+
+⚠️ `applyFilterVisibility()` **không** được gọi `set('#ccWrap', …)` nữa: hàm đó *bỏ* lớp `hidden` ở
+những màn hình có `v.cc = true`, tức là hai ô lại hiện ra.
+
 ## 7o. Vì sao RETURN vào tab Receiving mà CANCEL thì không
 
 **Nghiệp vụ chốt** — đây là lý do của cả tính năng, không phải chi tiết kỹ thuật:

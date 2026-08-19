@@ -177,14 +177,55 @@ body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
 .kpi-delta.bad     { color: var(--critical); background: color-mix(in srgb, var(--critical) 12%, transparent); }
 .kpi-delta.neutral { color: var(--text-muted); background: var(--hover); }
 
+/* --- Nhom the KPI ---
+   Moi nhom la MOT HANG rieng co tieu de. Truoc day 12 the do thang mot luoi 6
+   cot nen cac the cung nhom bi cat doi sang hai hang khac nhau. */
+.kpi-nhom { margin-bottom: 12px; }
+.kpi-nhom-ten {
+  font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+  color: var(--text-muted); margin: 0 0 6px 2px;
+  display: flex; align-items: center; gap: 8px;
+}
+/* Vach ke keo dai het hang - de mat nhin ra ranh gioi giua cac nhom */
+.kpi-nhom-ten::after {
+  content: ''; flex: 1; height: 1px; background: var(--hair);
+}
+.kpi-hang {
+  display: grid; gap: 8px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+@media (max-width: 1100px) { .kpi-hang { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 560px)  { .kpi-hang { grid-template-columns: 1fr; } }
+
 .chart-box { position: relative; height: 300px; }
 
-/* --- Tabs --- */
+/* --- Tabs ---
+   ⚠️ THANH TAB NAY NAM TRONG <header> (header sticky top-0) theo yeu cau
+   nghiep vu: cuon xuong van doi tab duoc, khong phai cuon nguoc len dau trang.
+   Vi vay mau chu phai la mau TREN NEN HEADER (xanh dam), khong phai mau chu
+   thuong cua trang - de nguyen bang cu la chu tim mo tren nen xanh. */
+.tabbar {
+  background: rgba(0, 0, 0, .16);
+  border-top: 1px solid rgba(255, 255, 255, .10);
+}
 .mainTab {
   padding: 9px 16px; font-size: 14px; font-weight: 600;
-  color: var(--text-muted); border-bottom: 2px solid transparent; background: none;
+  color: rgba(234, 245, 246, .72);
+  border-bottom: 3px solid transparent; background: none;
+  margin-bottom: -3px;            /* de gach chan de len vien duoi cua header */
+  white-space: nowrap;
 }
-.mainTab.active { color: var(--brand-2); border-bottom-color: var(--brand-accent); }
+.mainTab:hover { color: #eaf5f6; background: rgba(255, 255, 255, .06); }
+.mainTab.active {
+  color: #fff;
+  border-bottom-color: var(--brand-accent);
+  background: rgba(255, 255, 255, .08);
+}
+/* Man hinh hep: cho phep truot ngang thay vi xuong dong lon xon */
+@media (max-width: 720px) {
+  .tabbar > div > div { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .mainTab { padding: 8px 12px; font-size: 13px; }
+}
 
 .periodBtn { color: var(--text-secondary); background: var(--surface-1); }
 .brand-header .periodBtn { background: rgba(255,255,255,.1); color: #eaf5f6; border-color: rgba(255,255,255,.2); }

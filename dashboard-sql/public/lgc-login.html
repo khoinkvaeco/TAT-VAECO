@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>LGC · Đăng nhập</title>
+  <title>VAECO · Đăng nhập</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml" />
   <!-- CSS viết thẳng ở đây: trang này phải hiện được kể cả khi mọi thứ khác hỏng. -->
   <style>
@@ -69,8 +69,8 @@
         </svg>
       </div>
       <div>
-        <h1 id="tieuDe">Đăng nhập trang LGC</h1>
-        <div class="phu">VAECO · Logistics Center · dành riêng cho nhân viên CUVT</div>
+        <h1 id="tieuDe">Đăng nhập</h1>
+        <div class="phu">VAECO · Dashboard Báo cáo TAT · Quản lý vật tư khí tài</div>
       </div>
     </div>
 
@@ -112,16 +112,25 @@
     </form>
 
     <div class="chan">
-      Không thuộc CUVT? <a href="/">Xem Dashboard TAT →</a>
+      Mọi nhân viên có mã trong hệ thống AMOS đều đăng nhập được.<br />
+      Nhóm <b>LGC</b> (Xuất kho · Receiving · Repair Admin) chỉ hiện với nhân viên <b>CUVT</b>.
     </div>
   </div>
 
   <script>
     const $ = (s) => document.querySelector(s);
     const bao = (el, loai, chu) => { const b = $(el); b.className = 'bao ' + loai; b.textContent = chu; };
+    /**
+      * Sau khi dang nhap thi ve DUNG CHO nguoi dung dinh den.
+      * Trang dang nhap duoc may chu tra ve NGAY TAI dia chi nguoi dung go
+      * (khong chuyen huong), nen location.pathname chinh la noi ho muon den.
+      */
     const den = () => {
-      const d = new URLSearchParams(location.search).get('den') || '/lgc';
-      return d.startsWith('/') ? d : '/lgc';
+      const d = new URLSearchParams(location.search).get('den');
+      if (d && d.startsWith('/')) return d;
+      const p = location.pathname;
+      if (p === '/lgc-login.html' || p === '/login' || p.startsWith('/api/')) return '/';
+      return p + location.search;
     };
 
     function sangBuocDoiMatKhau(ma, ten, batBuoc) {
@@ -130,7 +139,7 @@
       $('#chao').classList.remove('an');
       $('#tieuDe').textContent = batBuoc ? 'Đổi mật khẩu lần đầu' : 'Đổi mật khẩu';
       $('#chao').innerHTML = `Xin chào <b>${(ten || ma).replace(/[<>&]/g, '')}</b>`
-        + (batBuoc ? ' — bạn cần đổi mật khẩu trước khi vào trang LGC.' : '');
+        + (batBuoc ? ' — bạn cần đổi mật khẩu trước khi vào chương trình.' : '');
       // Mat khau hien tai = ma nhan vien (lan dau) -> dien san cho do phai go lai
       $('#mkCu').value = $('#mk').value;
       $('#mkMoi').focus();
@@ -154,7 +163,7 @@
           return;
         }
         if (d.doiMk) { sangBuocDoiMatKhau(d.ma, d.ten, true); return; }
-        bao('#baoDn', 'ok', `Xin chào ${d.ten || d.ma}. Đang mở trang LGC…`);
+        bao('#baoDn', 'ok', `Xin chào ${d.ten || d.ma}. Đang mở chương trình…`);
         setTimeout(() => { location.href = den(); }, 500);
       } catch (err) {
         bao('#baoDn', 'loi', 'Lỗi kết nối: ' + err.message);
@@ -176,7 +185,7 @@
         });
         const d = await r.json();
         if (!r.ok || d.error) { bao('#baoDoi', 'loi', d.message || 'Không đổi được mật khẩu.'); return; }
-        bao('#baoDoi', 'ok', 'Đã đổi mật khẩu. Đang mở trang LGC…');
+        bao('#baoDoi', 'ok', 'Đã đổi mật khẩu. Đang mở chương trình…');
         setTimeout(() => { location.href = den(); }, 600);
       } catch (err) {
         bao('#baoDoi', 'loi', 'Lỗi kết nối: ' + err.message);
