@@ -71,6 +71,9 @@ const CONFIG = {
   // SCAN_PICKING_DIR_HAN / _SGN / _DAD = thu muc rieng tung station.
   scanPickingDir: (process.env.SCAN_PICKING_DIR || '\\\\10.99.7.7\\picking list\\2026').trim(),
   scanReceivingDir: (process.env.SCAN_RECEIVING_DIR || '\\\\10.99.7.7\\certificates\\2026').trim(),
+  // CHUNG CHI NHAP KHO - thu muc thu ba, dung cho tab "Tra cuu chung tu".
+  // Khong co mac dinh: nghiep vu phai dat o /admin thi tinh nang moi chay.
+  scanChungchiDir: (process.env.SCAN_CHUNGCHI_DIR || '').trim(),
   scanPickingByStation: envTheoStation('SCAN_PICKING_DIR'),
   scanReceivingByStation: envTheoStation('SCAN_RECEIVING_DIR'),
   // Thoi gian toi da cho MOT cau truy van (ms). Truy van qua linked server
@@ -283,6 +286,35 @@ async function buoc(ghi, ten, fn) {
     ghi(`✘ ${ten} — lỗi sau ${Date.now() - t} ms: ${e.message}`);
     throw e;
   }
+}
+
+/**
+ * Do dai thoi gian cho NGUOI DOC: 850 ms · 12,4 giay · 2 phut 05 giay.
+ * Mili giay tho chi de doc buoc nao cham; con dong ket thuc thi nguoi dung can
+ * biet "cho bao lau" - 137954 ms khong tra loi duoc cau do.
+ */
+function doDaiThoiGian(ms) {
+  const n = Math.max(0, Math.round(Number(ms) || 0));
+  if (n < 1000) return `${n} ms`;
+  if (n < 60000) return `${(n / 1000).toFixed(1).replace('.', ',')} giây`;
+  const phut = Math.floor(n / 60000);
+  const giay = Math.round((n % 60000) / 1000);
+  return `${phut} phút ${String(giay).padStart(2, '0')} giây`;
+}
+
+/**
+ * DONG KET THUC CHUAN cho cac nghiep vu nang cua LGC.
+ * Nguoi dung can biet DA XONG LUC MAY GIO va HET BAO LAU - de con so sanh voi
+ * lan chay truoc va biet co dang cho vo ich khong.
+ * @param ghi   ham ghi nhat ky (moNhatKy)
+ * @param t0    Date.now() luc bat dau
+ * @param ten   ten nghiep vu, vd 'Quản lý xuất kho'
+ * @param soDong so dong ket qua
+ */
+function ghiXong(ghi, t0, ten, soDong) {
+  const luc = new Date().toLocaleTimeString('vi-VN', { hour12: false });
+  ghi(`✔ ${ten}: xong lúc ${luc} — hết ${doDaiThoiGian(Date.now() - t0)}`
+    + ` — ${Number(soDong || 0).toLocaleString('vi')} dòng`, true);
 }
 
 // ---------------------------------------------------------------------------
@@ -951,18 +983,23 @@ function loadScanDirs() {
 
   const picking = gop(saved.picking, CONFIG.scanPickingByStation, CONFIG.scanPickingDir);
   const receiving = gop(saved.receiving, CONFIG.scanReceivingByStation, CONFIG.scanReceivingDir);
+  // CHUNG CHI NHAP KHO - loai thu ba, chi dung cho tab "Tra cuu chung tu".
+  // Khong co bien moi truong lui ve: day la thu muc moi, dat o /admin.
+  const chungchi = gop(saved.chungchi, {}, CONFIG.scanChungchiDir);
   const daSua = (luu, st) => !!(luu && typeof luu === 'object' && sach(luu[st]));
+  const cot = (luu) => Object.fromEntries([...SCAN_STATIONS, '*'].map((st) => [st, daSua(luu, st)
+    || (typeof luu === 'string' && st === '*' && !!sach(luu))]));
   return {
     picking,
     receiving,
+    chungchi,
     updatedAt: saved.updatedAt || null,
     updatedBy: saved.updatedBy || null,
     // Cho giao dien biet o nao dang la ban SUA (nguoi dung tu dat)
     custom: {
-      picking: Object.fromEntries([...SCAN_STATIONS, '*'].map((st) => [st, daSua(saved.picking, st)
-        || (typeof saved.picking === 'string' && st === '*' && !!sach(saved.picking))])),
-      receiving: Object.fromEntries([...SCAN_STATIONS, '*'].map((st) => [st, daSua(saved.receiving, st)
-        || (typeof saved.receiving === 'string' && st === '*' && !!sach(saved.receiving))])),
+      picking: cot(saved.picking),
+      receiving: cot(saved.receiving),
+      chungchi: cot(saved.chungchi),
     },
     stations: SCAN_STATIONS,
   };
@@ -986,6 +1023,7 @@ function saveScanDirs(body, ip) {
   saveJsonSafe(SCAN_DIR_FILE, {
     picking: loc(body && body.picking),
     receiving: loc(body && body.receiving),
+    chungchi: loc(body && body.chungchi),
     updatedAt: new Date().toISOString(),
     updatedBy: ip || 'unknown',
   });
@@ -1158,6 +1196,11 @@ function scanState(folder, key) {
  * TOP 0 khong doc dong nao nen re. Ket qua duoc cache theo tien trinh.
  */
 const _remoteColCache = new Map();
+/** Da biet ket qua chua? (khong hoi mang) - de bo qua han buoc do. */
+function daBietCot(fullTable, col) {
+  return _remoteColCache.has(`${fullTable}.${col}`.toLowerCase());
+}
+
 async function remoteHasColumn(fullTable, col) {
   const key = `${fullTable}.${col}`.toLowerCase();
   if (_remoteColCache.has(key)) return _remoteColCache.get(key);
@@ -2833,6 +2876,11 @@ async function qRepairAdmin(range, f, ghi = () => {}) {
  * Ket qua duoc cache theo tien trinh.
  */
 const _dateKindCache = new Map();
+/** Da biet kieu chua? (khong hoi mang) - de bo qua han buoc do. */
+function daBietKieuNgay(fullTable, col) {
+  return _dateKindCache.has(`${fullTable}.${col}`);
+}
+
 async function detectDateKind(fullTable, col, expected) {
   const key = `${fullTable}.${col}`;
   if (_dateKindCache.has(key)) return _dateKindCache.get(key);
@@ -2887,6 +2935,19 @@ async function detectDateKind(fullTable, col, expected) {
  * dieu kien co tham so thuong KHONG duoc day xuong may chu tu xa. Cac so nay do
  * server tu tinh (so ngay AMOS) nen khong co rui ro chen lenh.
  */
+/**
+ * Cau truc hai bang pickslip DA DO XONG chua?
+ * Danh sach nay phai KHOP Y HET voi cac lan do trong pickslipTemp() - thieu
+ * mot cai la lan sau van phai hoi mang mot luot (khong sai so lieu, chi cham).
+ */
+function daBietPickslipSchema() {
+  const H = '[DWH_DB]..[STG_AMOS].[PICKSLIP_HEADER]';
+  const B = '[DWH_DB]..[STG_AMOS].[PICKSLIP_BOOKED]';
+  return daBietKieuNgay(H, 'PICKSLIP_DATE')
+    && daBietCot(H, 'MUTATION') && daBietCot(H, 'MUTATION_TIME') && daBietCot(H, 'BOOKING_TIME')
+    && daBietCot(B, 'MUTATION') && daBietCot(B, 'MUTATION_TIME');
+}
+
 async function pickslipTemp(range, f) {
   // Nghiep vu da xac nhan: PICKSLIP_DATE la SO NGAY AMOS (khong phai datetime).
   const kindH = await detectDateKind(
@@ -3174,9 +3235,26 @@ const returnSeqCache = new Map(); // 'from|to' -> { t, ids }
 /** TTL = TTL cua cache API (cung mot loai du lieu nang doc qua linked server). */
 const RETURN_SEQ_TTL = Math.round(CONFIG.cacheMinutes * 60 * 1000);
 
-async function layReturnSeqnos(range, ghi = () => {}) {
-  const key = `${range.from}|${range.to}`;
-  const hit = returnSeqCache.get(key);
+/** Khoa cache = KY bao cao. KHONG gom bo loc: danh sach nay luon la ban DAY DU. */
+const khoaReturnSeq = (range) => `${range.from}|${range.to}`;
+
+/**
+ * GUI danh sach dong Return vao cache.
+ * Goi tu qPickslip: tab Quan ly xuat kho da keo #ps roi thi tab Receiving
+ * KHONG phai keo lai lan nua - da bi nguoi dung phan anh that ("chay lai lay
+ * du lieu phieu xuat de lay return").
+ * ⚠️ CHI duoc luu ban KHONG AP BO LOC. Cache khoa theo ky thoi, luu ban da loc
+ * station/store la Receiving thieu dong Return ma khong bao gi.
+ */
+function luuReturnSeqnos(range, seqnos) {
+  const ids = [...new Set((seqnos || []).map((v) => idStr(v)).filter((v) => v && v !== '0'))];
+  if (returnSeqCache.size >= 40) returnSeqCache.delete(returnSeqCache.keys().next().value);
+  returnSeqCache.set(khoaReturnSeq(range), { t: Date.now(), ids });
+}
+
+async function layReturnSeqnos(range, ghi = () => {}, boQuaCache = false) {
+  const key = khoaReturnSeq(range);
+  const hit = boQuaCache ? null : returnSeqCache.get(key);
   if (hit && Date.now() - hit.t < RETURN_SEQ_TTL) {
     ghi(`✔ Danh sách dòng Return của kỳ đã có sẵn (${hit.ids.length} dòng) — không hỏi lại phiếu xuất`);
     return hit.ids;
@@ -3193,9 +3271,7 @@ async function layReturnSeqnos(range, ghi = () => {}) {
     ${drop}`, params));
   const bang = sets.find((s) => s.length && 'seq_ret' in s[0]) || [];
   const ids = [...new Set(bang.map((r) => idStr(r.seq_ret)).filter((v) => v && v !== '0'))];
-  // Don cache cu truoc khi chen (tranh phinh RAM khi nguoi dung doi ky lien tuc)
-  if (returnSeqCache.size >= 40) returnSeqCache.delete(returnSeqCache.keys().next().value);
-  returnSeqCache.set(key, { t: Date.now(), ids });
+  luuReturnSeqnos(range, ids);
   return ids;
 }
 
@@ -3424,8 +3500,15 @@ async function enrichPickslipRows(rows, allPicking = [], allReturns = [], ghi = 
  */
 async function qPickslip(range, f, ghi = () => {}) {
   const params = { from: range.from, to: range.to, top: CONFIG.maxRows, ...amosDayParams(range) };
-  const { pull, dept, join, drop } = await buoc(ghi, 'Dò cấu trúc bảng AMOS (MUTATION_TIME…)',
-    () => pickslipTemp(range, f));
+  // ⚠️ CHI DO CAU TRUC KHI CHUA BIET. Ket qua do duoc cache theo tien trinh
+  // (_dateKindCache / _remoteColCache) nen tu lan thu hai tro di khong ton mot
+  // luot hoi nao - nhung buoc `buoc()` van in ra nhat ky, khien nguoi dung
+  // tuong chuong trinh dang do lai moi lan. Da bi phan anh that:
+  // "PICKSLIP_DATE la ngay AMOS, khong can lam dong tac nay".
+  const { pull, dept, join, drop } = daBietPickslipSchema()
+    ? await pickslipTemp(range, f)
+    : await buoc(ghi, 'Dò cấu trúc bảng AMOS (chỉ chạy MỘT lần cho mỗi lần khởi động)',
+      () => pickslipTemp(range, f));
   const w = pickslipWhere(f, dept, params);
 
   const text = `${pull}
@@ -3496,6 +3579,18 @@ async function qPickslip(range, f, ghi = () => {}) {
     ${join} WHERE x.loai = 'RETURN' ${w}
     GROUP BY x.seqno;
 
+    -- [6b] CUNG danh sach dong Return nhung KHONG AP BO LOC nao.
+    --      ⚠️ Muc dich: tab Receiving lay dong Return theo PICKSLIPSEQNO_I tu
+    --      chinh #ps nay (xem layReturnSeqnos). Nguoi dung da chay tab Quan ly
+    --      xuat kho roi ma sang Receiving VAN phai keo lai #ps mot lan nua thi
+    --      rat vo ly - da bi phan anh that. Nay ket qua duoc GUI VAO CACHE de
+    --      Receiving dung lai.
+    --      PHAI la ban KHONG LOC: cache khoa theo KY thoi, neu luu ban da loc
+    --      station/store thi Receiving se thieu dong Return ma khong bao gi.
+    --      Cau nay chay tren #ps da nam o local -> KHONG ton them luot hoi AMOS.
+    SELECT DISTINCT x.seqno AS seq_ret_all
+    FROM #ps x WHERE x.loai = 'RETURN' AND x.seqno IS NOT NULL;
+
     -- [7] KPI THU KHO XUAT BOOKING - gom theo PICKSLIP_HEADER.BOOKING_SIGN
     --     (nguoi thao tac booking xuat kho). Chay tren #ps da o local nen
     --     KHONG ton them luot hoi AMOS nao.
@@ -3536,6 +3631,10 @@ async function qPickslip(range, f, ghi = () => {}) {
       + 'Giờ xuất kho đang sai, báo lại để chỉnh đơn vị.');
     console.warn(`[PICKSLIP] BOOKING_TIME max = ${btMax} (>= 1440) - don vi khong con la phut`);
   }
+
+  // GUI danh sach dong Return (ban KHONG LOC) vao cache de tab Receiving dung
+  // lai - xem giai thich o [6b] va o layReturnSeqnos().
+  luuReturnSeqnos(range, pick('seq_ret_all').map((r) => r.seq_ret));
 
   // --- DOI CHIEU FILE SCAN + PHIEU TRA + TAT RETURN (tinh o Node, khong SQL) ---
   const scan = await buoc(ghi, 'Đối chiếu file scan + tra phiếu trả trong HISTORY + tính TAT',
@@ -3715,7 +3814,7 @@ async function qReceiving(range, f, ghi = () => {}) {
   let retIds = [];
   let loiReturn = '';
   try {
-    retIds = await layReturnSeqnos(range, ghi);
+    retIds = await layReturnSeqnos(range, ghi, !!f.nocache);
   } catch (e) {
     loiReturn = e.message || String(e);
     console.warn('[RECEIVING] Khong lay duoc danh sach dong Return:', loiReturn);
@@ -5331,8 +5430,8 @@ function kpiTable(kpis, prevKpis) {
     ['Thiết bị xuất kho', kpis.countIssued, prevKpis.countIssued],
     ['Chưa đối ứng', kpis.countNotReconciled, prevKpis.countNotReconciled],
     ['Tỷ lệ đối ứng (%)', kpis.reconcileRate, prevKpis.reconcileRate],
-    ['SL nhận (CUVT)', kpis.cntReci, prevKpis.cntReci],
-    ['SL giao (CUVT)', kpis.cntDel, prevKpis.cntDel],
+    ['Nhận US', kpis.cntReci, prevKpis.cntReci],
+    ['Trả US', kpis.cntDel, prevKpis.cntDel],
   ].map((r) => [...r, pct(r[1], r[2])]);
 }
 
@@ -5569,6 +5668,8 @@ function isLgcPath(p) {
   // File scan la CHUNG TU THAT (co chu ky) - phai sau cong LGC y het du lieu
   // sinh ra no; de ngoai cong thi ai trong mang cung tai ve duoc.
   if (p === '/api/scan/tim' || p === '/api/scan/file') return true;
+  // Tra cuu chung tu cung la CHUNG TU THAT -> phai sau cong LGC y het.
+  if (p === '/api/chungtu/tim' || p === '/api/chungtu/file') return true;
   return p === '/api/pickslip' || p === '/api/receiving' || p === '/api/reports/repair-admin';
 }
 
@@ -5875,6 +5976,11 @@ function readFilters(q) {
     excludeCC: ['1', 'true'].includes((q.excludeCC || '').trim().toLowerCase()),
     // Checkbox "Bo qua cac kho CAB" - loai han cac kho o CAB_STORES
     excludeCab: ['1', 'true'].includes((q.excludeCab || '').trim().toLowerCase()),
+    // Nut "Tai lai" tren giao dien gui ?nocache=1. Ngoai cache response theo
+    // URL, co nay con bo qua CAC CACHE NOI BO (vd danh sach dong Return dung
+    // chung giua tab xuat kho va Receiving) - "hoi lai SQL Server" phai co
+    // nghia la hoi lai THAT, khong con lop dem nao con sot lai.
+    nocache: ['1', 'true'].includes((q.nocache || '').trim().toLowerCase()),
   };
 }
 
@@ -6509,9 +6615,10 @@ app.get(
     const f = readFilters(req.query);
     if (CONFIG.demoMode) return res.json(DEMO.pickslip(range, f));
     const ghi = moNhatKy(req.query.job);
+    const t0 = Date.now();
     try {
       const kq = await qPickslip(range, f, ghi);
-      ghi(`✔ Xong — ${(kq.rows || []).length.toLocaleString('vi')} dòng`, true);
+      ghiXong(ghi, t0, 'Quản lý xuất kho', (kq.rows || []).length);
       res.json(kq);
     } catch (e) {
       dongNhatKy(req.query.job, `✘ Lỗi: ${e.message}`);
@@ -6528,9 +6635,10 @@ app.get(
     const f = readFilters(req.query);
     if (CONFIG.demoMode) return res.json(DEMO.receiving(range, f));
     const ghi = moNhatKy(req.query.job);
+    const t0 = Date.now();
     try {
       const kq = await qReceiving(range, f, ghi);
-      ghi(`✔ Xong — ${(kq.rows || []).length.toLocaleString('vi')} dòng`, true);
+      ghiXong(ghi, t0, 'Receiving', (kq.rows || []).length);
       res.json(kq);
     } catch (e) {
       dongNhatKy(req.query.job, `✘ Lỗi: ${e.message}`);
@@ -6546,9 +6654,10 @@ app.get(
 /** Gom trang thai ca hai loai thu muc de tra ve cho giao dien. */
 async function trangThaiScan() {
   const dirs = loadScanDirs();
-  const [pk, rc] = await Promise.all([
+  const [pk, rc, cc] = await Promise.all([
     loadScanIndex(dirs.picking, 'prefix'),
     loadScanIndex(dirs.receiving, 'full'),
+    loadScanIndex(dirs.chungchi, 'full'),
   ]);
   const bang = (index, duong, custom) => Object.fromEntries(
     [...SCAN_STATIONS, '*'].map((st) => [st, {
@@ -6561,6 +6670,9 @@ async function trangThaiScan() {
     stations: SCAN_STATIONS,
     picking: bang(pk, dirs.picking, dirs.custom.picking),
     receiving: bang(rc, dirs.receiving, dirs.custom.receiving),
+    chungchi: bang(cc, dirs.chungchi, dirs.custom.chungchi),
+    // Ten hien tren giao dien - de /admin va tab tra cuu goi cung mot ten
+    tenLoai: Object.fromEntries(Object.entries(SCAN_LOAI).map(([k, v]) => [k, v.ten])),
     updatedAt: dirs.updatedAt,
     updatedBy: dirs.updatedBy,
   };
@@ -6605,7 +6717,7 @@ app.post('/api/admin/kpi-config', h(async (req, res) => {
 
 app.post('/api/admin/scan-config', h(async (req, res) => {
   const b = req.body || {};
-  for (const k of ['picking', 'receiving']) {
+  for (const k of LOAI_CHUNG_TU_KEYS) {
     if (b[k] === undefined) continue;
     if (typeof b[k] !== 'object' || Array.isArray(b[k])) {
       return res.status(400).json({
@@ -6640,9 +6752,14 @@ app.post('/api/admin/scan-config', h(async (req, res) => {
 //  scan. Bai kiem tools/scancheck.js chung minh ca hai lop.
 // ---------------------------------------------------------------------------
 const SCAN_LOAI = {
-  picking: { mode: 'prefix', lay: (d) => d.picking },
-  receiving: { mode: 'full', lay: (d) => d.receiving },
+  picking: { mode: 'prefix', lay: (d) => d.picking, ten: 'Phiếu xuất' },
+  receiving: { mode: 'full', lay: (d) => d.receiving, ten: 'Phiếu nhập' },
+  // Loai thu ba, CHI dung cho tab "Tra cuu chung tu" (khong doi chieu voi dong
+  // du lieu nao). Che do 'full': ten file la chinh so chung chi.
+  chungchi: { mode: 'full', lay: (d) => d.chungchi, ten: 'Chứng chỉ nhập kho' },
 };
+/** Khoa cua ba loai chung tu - dung chung cho ca cau hinh /admin lan tra cuu. */
+const LOAI_CHUNG_TU_KEYS = Object.keys(SCAN_LOAI);
 
 /** Cac dang ten file co the co cua mot khoa (receiving co the co tien to R-). */
 function scanKhoaUngVien(loai, ma) {
@@ -6725,6 +6842,143 @@ app.get('/api/scan/file', h(async (req, res) => {
     if (e && !res.headersSent) {
       console.warn(`[SCAN] Khong gui duoc file ${abs}: ${e.message}`);
       res.status(404).json({ error: true, message: 'Không mở được file scan.' });
+    }
+  });
+}));
+
+// ---------------------------------------------------------------------------
+// TRA CUU CHUNG TU (phieu xuat · phieu nhap · chung chi nhap kho)
+// ---------------------------------------------------------------------------
+//  Khac han /api/scan/*: o day KHONG xuat phat tu mot dong du lieu nao ca -
+//  nguoi dung go MOT SO vao va chuong trinh tim TUONG DOI trong thu muc.
+//
+//  Ba diem nghiep vu:
+//    1. So nguoi dung go co the co DAU PHAN CACH HANG NGHIN (1'234'567 khi
+//       copy tu Excel, hoac 1.234.567 / 1 234 567). Phai bo cac dau do TRUOC
+//       khi tim, neu khong thi go dung so van khong ra gi.
+//    2. Tim TUONG DOI (chua chuoi), khong phai khop tuyet doi - nguoi dung
+//       thuong chi nho vai chu so cuoi.
+//    3. Tra ve DANH SACH de nguoi dung tu chon, khong tu y mo dai mot cai.
+//
+//  BAO MAT: dung lai NGUYEN VEN hai lop cua /api/scan/file - ten file chi
+//  duoc lay tu danh sach THAT cua thu muc, va duong dan tuyet doi phai nam
+//  trong thu muc da cau hinh. Xem tools/scancheck.js.
+// ---------------------------------------------------------------------------
+
+/**
+ * Bo dau phan cach hang nghin nam GIUA hai chu so: 1'234'567 -> 1234567.
+ * Chi bo khi dau do KEP GIUA hai chu so, nen 'P-CA-159080' hay 'R-132197'
+ * khong bi dong toi.
+ */
+function chuanHoaSoChungTu(raw) {
+  return String(raw == null ? '' : raw)
+    .trim()
+    .replace(/(\d)[\s'’`.,](?=\d)/g, '$1');
+}
+
+/** So ky tu toi thieu de tim - go 1 ky tu ma tra ve ca thu muc thi vo dung. */
+const CT_TOI_THIEU = 3;
+/** Tra ve toi da bao nhieu ket qua (bang dai qua thi cung khong ai doc). */
+const CT_TOI_DA = 200;
+
+/**
+ * Tim TUONG DOI trong mot thu muc chung tu.
+ * @returns {{ok:boolean, dir:string, files:string[], tong:number, loi:string}}
+ */
+function timChungTu(index, station, tuKhoa) {
+  const folder = index[stationCode(station)] || index['*'];
+  if (!folder) return { ok: false, dir: '', files: [], tong: 0, loi: 'Chưa cấu hình thư mục cho station này.' };
+  if (!folder.ok) return { ok: false, dir: folder.dir, files: [], tong: 0, loi: folder.error || 'Không đọc được thư mục.' };
+  const tk = String(tuKhoa || '').toLowerCase();
+  const ra = [];
+  // Duyet CHINH danh sach ten file that (khong duyet khoa da bi cat got):
+  // nguoi dung nho so nao thi so do nam trong TEN FILE.
+  for (const ds of folder.tenFile.values()) {
+    for (const f of ds) {
+      const ten = String(f);
+      // So sanh ca ten goc lan ten da bo dau phan cach, de tim duoc ca khi
+      // CHINH TEN FILE co dau phan cach.
+      if (ten.toLowerCase().includes(tk)
+        || chuanHoaSoChungTu(ten).toLowerCase().includes(tk)) ra.push(ten);
+    }
+  }
+  ra.sort((a, b) => a.localeCompare(b, 'vi'));
+  return { ok: true, dir: folder.dir, files: ra.slice(0, CT_TOI_DA), tong: ra.length, loi: '' };
+}
+
+/** Doc + kiem tham so chung cua hai API tra cuu chung tu. */
+async function chungTuTheoYeuCau(q) {
+  const loai = String(q.loai || '').trim().toLowerCase();
+  const cf = SCAN_LOAI[loai];
+  if (!cf) {
+    return { http: 400, body: { error: true,
+      message: `Tham số "loai" phải là một trong: ${LOAI_CHUNG_TU_KEYS.join(' · ')}.` } };
+  }
+  const so = chuanHoaSoChungTu(q.so);
+  if (so.length < CT_TOI_THIEU) {
+    return { http: 400, body: { error: true,
+      message: `Nhập ít nhất ${CT_TOI_THIEU} ký tự để tra cứu.` } };
+  }
+  if (CONFIG.demoMode) {
+    // DEMO: khong co thu muc that -> bia vai ten de chay thu duoc ca luong.
+    return { demo: true, dir: '(demo)', so,
+      files: [`${so}.pdf`, `${so}-1.pdf`, `${so}-2.pdf`], tong: 3 };
+  }
+  const dirs = loadScanDirs();
+  const index = await loadScanIndex(cf.lay(dirs), cf.mode);
+  const kq = timChungTu(index, q.station, so);
+  if (!kq.ok) return { http: 404, body: { error: true, message: kq.loi, dir: kq.dir } };
+  return { dir: kq.dir, files: kq.files, tong: kq.tong, so };
+}
+
+app.get('/api/chungtu/tim', h(async (req, res) => {
+  const kq = await chungTuTheoYeuCau(req.query);
+  if (kq.http) return res.status(kq.http).json(kq.body);
+  res.json({
+    ok: true, demo: !!kq.demo, so: kq.so,
+    files: kq.files, soFile: kq.files.length, tong: kq.tong,
+    // Bang bi cat -> phai noi ra, khong de nguoi dung tuong da het
+    biCat: kq.tong > kq.files.length, toiDa: CT_TOI_DA,
+  });
+}));
+
+app.get('/api/chungtu/file', h(async (req, res) => {
+  const kq = await chungTuTheoYeuCau(req.query);
+  if (kq.http) return res.status(kq.http).json(kq.body);
+  const ten = String(req.query.ten || '').trim();
+  // LOP 1: ten file PHAI nam trong danh sach THAT ma thu muc vua tra ve.
+  // ⚠️ Day la lop chan chinh: ten file KHONG BAO GIO duoc ghep thang vao
+  // duong dan. Xem giai thich dai o /api/scan/file.
+  if (!ten || !kq.files.includes(ten)) {
+    return res.status(404).json({ error: true, message: 'Không tìm thấy chứng từ này.' });
+  }
+  const taiVe = ['1', 'true'].includes(String(req.query.tai || '').toLowerCase());
+  if (CONFIG.demoMode) {
+    const pdf = Buffer.from(
+      '%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n'
+      + '2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n'
+      + '3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 100]>>endobj\n'
+      + 'trailer<</Root 1 0 R>>\n%%EOF\n', 'latin1');
+    res.set('Content-Type', 'application/pdf');
+    res.set('Content-Disposition',
+      `${taiVe ? 'attachment' : 'inline'}; filename="${ten.replace(/[^\w.\-]/g, '_')}"`);
+    return res.send(pdf);
+  }
+  // LOP 2 (chot lai, khong phu thuoc lop 1): duong dan tuyet doi PHAI nam
+  // trong thu muc da cau hinh.
+  const goc = path.resolve(kq.dir);
+  const abs = path.resolve(goc, ten);
+  if (abs !== goc && !abs.startsWith(goc + path.sep)) {
+    console.warn(`[CHUNGTU] CHAN duong dan ra ngoai thu muc: ${abs}`);
+    return res.status(400).json({ error: true, message: 'Tên file không hợp lệ.' });
+  }
+  res.set('Content-Type', 'application/pdf');
+  res.set('Content-Disposition',
+    `${taiVe ? 'attachment' : 'inline'}; filename="${path.basename(abs).replace(/[^\w.\-]/g, '_')}"`);
+  res.sendFile(abs, (e) => {
+    if (e && !res.headersSent) {
+      console.warn(`[CHUNGTU] Khong gui duoc file ${abs}: ${e.message}`);
+      res.status(404).json({ error: true, message: 'Không mở được chứng từ.' });
     }
   });
 }));
@@ -6846,6 +7100,17 @@ const REPORTS = {
   'repair-admin': { live: qRepairAdmin, demo: 'repairAdmin' },
 };
 
+/** Ten nghiep vu hien o dong ket thuc cua nhat ky (xem ghiXong). */
+const TEN_BAO_CAO = {
+  'repair-admin': 'Repair Admin',
+  'returned-unservice': 'Trả unservice',
+  'not-reconciled': 'Chưa đối ứng',
+  'issued-not-installed': 'Xuất kho chưa lắp',
+  'removed-not-returned': 'Tháo chưa trả US',
+  'return-store-tat': 'TAT hoàn kho',
+  other: 'Other',
+};
+
 app.get(
   '/api/reports/:name',
   cached(TTL_NANG, async (req, res) => {
@@ -6854,6 +7119,7 @@ app.get(
     const range = resolveRange(req.query);
     const f = readFilters(req.query);
     const ghi = moNhatKy(req.query.job);
+    const t0 = Date.now();
     // Bao cao nao chua ghi nhat ky rieng thi it nhat cung co dong mo dau, de
     // nguoi dung thay chuong trinh DANG chay chu khong phai dung im.
     ghi(`Báo cáo: ${req.params.name} — kỳ ${range.label}. Đang hỏi SQL Server…`);
@@ -6861,7 +7127,7 @@ app.get(
       const data = (CONFIG.demoMode && def.demo)
         ? DEMO[def.demo](range, f)
         : await def.live(range, f, ghi);
-      ghi(`✔ Xong — ${data.length.toLocaleString('vi')} dòng`, true);
+      ghiXong(ghi, t0, TEN_BAO_CAO[req.params.name] || `Báo cáo ${req.params.name}`, data.length);
       res.json({ rows: data, count: data.length, range });
     } catch (e) {
       dongNhatKy(req.query.job, `✘ Lỗi: ${e.message}`);

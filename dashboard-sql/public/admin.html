@@ -169,7 +169,8 @@
         </span>
       </div>
       <div class="note" style="margin-top:8px">
-        Dùng để đối chiếu <b>phiếu đã scan hay chưa</b> ở tab <b>LGC ▸ Quản lý xuất kho</b> và <b>LGC ▸ Receiving</b>.
+        Dùng để đối chiếu <b>phiếu đã scan hay chưa</b> ở tab <b>LGC ▸ Quản lý xuất kho</b> và <b>LGC ▸ Receiving</b>,
+        và để <b>tra cứu chứng từ</b> ở tab <b>LGC ▸ Tra cứu chứng từ</b>.
         <b>MỖI STATION MỘT THƯ MỤC RIÊNG</b> — đúng như công cụ AMOS_GUI (ô <i>Station</i> và ô <i>Thư mục</i>
         nằm cạnh nhau, đổi station thì đổi luôn thư mục). Dashboard xem được nhiều station cùng lúc nên
         tra cứu <b>theo station của từng phiếu</b>; station nào chưa khai riêng thì dùng dòng <b>Mặc định</b>.<br>
@@ -183,6 +184,7 @@
             <th style="padding:6px;width:90px">Station</th>
             <th style="padding:6px">Picking list <span style="font-weight:400;color:var(--muted)">— tên file <code>&lt;PICKING_LISTNO_I&gt;-….pdf</code>; phiếu trả dùng <code>&lt;HISTORYNO_I&gt;</code></span></th>
             <th style="padding:6px">Receiving <span style="font-weight:400;color:var(--muted)">— tên file <code>&lt;VOUCHERNO&gt;.pdf</code> (đã bỏ <code>R-</code>)</span></th>
+            <th style="padding:6px">Chứng chỉ nhập kho <span style="font-weight:400;color:var(--muted)">— chỉ dùng cho tab <i>Tra cứu chứng từ</i>; để trống là tắt</span></th>
           </tr>
         </table>
       </div>
@@ -599,7 +601,8 @@
         tr.style.borderBottom = '1px dashed var(--hair)';
         tr.innerHTML = `<td style="padding:6px;font-weight:600;vertical-align:top">${esc(r.nhan)}</td>`
           + `<td style="padding:6px">${scanO('picking', r.st, d.picking && d.picking[r.st])}</td>`
-          + `<td style="padding:6px">${scanO('receiving', r.st, d.receiving && d.receiving[r.st])}</td>`;
+          + `<td style="padding:6px">${scanO('receiving', r.st, d.receiving && d.receiving[r.st])}</td>`
+          + `<td style="padding:6px">${scanO('chungchi', r.st, d.chungchi && d.chungchi[r.st])}</td>`;
       }
       $('#scanUpdated').textContent = d.updatedAt
         ? `sửa lần cuối ${d.updatedAt.slice(0, 16).replace('T', ' ')} từ IP ${d.updatedBy || '?'}`
@@ -620,9 +623,9 @@
     }
 
     function thuThapScan() {
-      const ra = { picking: {}, receiving: {} };
+      const ra = { picking: {}, receiving: {}, chungchi: {} };
       for (const r of SCAN_ROWS) {
-        for (const loai of ['picking', 'receiving']) {
+        for (const loai of ['picking', 'receiving', 'chungchi']) {
           const el = $(`#scan-${loai}-${scanRowKey(r.st)}`);
           if (el) ra[loai][r.st] = el.value.trim();
         }

@@ -411,8 +411,11 @@
         <button data-lgc="pickslip" class="lgcTab active">📦 Quản lý xuất kho</button>
         <button data-lgc="receiving" class="lgcTab">📥 Receiving</button>
         <button data-lgc="repair" class="lgcTab">🛠 Repair Admin</button>
+        <button data-lgc="chungtu" class="lgcTab">🔍 Tra cứu chứng từ</button>
         <!-- KHÔNG tự chạy truy vấn khi mở tab: các truy vấn này nặng (linked
-             server), người dùng chọn kỳ/Station xong mới bấm nút này. -->
+             server), người dùng chọn kỳ/Station xong mới bấm nút này.
+             Tab "Tra cứu chứng từ" KHÔNG dùng nút này (nó chỉ đọc thư mục,
+             không hỏi SQL) nên script.js sẽ ẩn nút khi mở tab đó. -->
         <button id="lgcRun" class="btn-accent ml-auto">▶ Chạy kiểm tra</button>
       </div>
 
@@ -574,6 +577,47 @@
         </div>
       </div>
     </div><!-- /#lgc-repair -->
+
+    <!-- ---------- LGC ▸ Tra cứu chứng từ ----------
+         KHÁC HẲN ba tab trên: KHÔNG hỏi SQL Server, chỉ đọc thư mục file scan
+         đã cấu hình ở trang /admin. Vì vậy nó KHÔNG đi qua nút "Chạy kiểm tra"
+         và cũng không phụ thuộc Kỳ báo cáo. -->
+    <div id="lgc-chungtu" class="hidden">
+      <div class="card">
+        <h3 class="card-title mb-1">🔍 Tra cứu chứng từ</h3>
+        <p class="text-xs text-muted mb-3">
+          Gõ <b>số chứng từ</b> rồi bấm Tìm. Dấu phân cách hàng nghìn
+          (<code>1'234'567</code>, <code>1.234.567</code>) được <b>bỏ tự động</b>.
+          Tìm <b>tương đối</b> — chỉ cần nhớ vài chữ số cũng ra.
+          Thư mục của từng loại cấu hình ở trang <a href="/admin.html" target="_blank">Quản trị</a>.
+        </p>
+        <div class="flex items-end gap-3 flex-wrap mb-3">
+          <div>
+            <label class="flabel" for="ctLoai">Loại chứng từ</label>
+            <select id="ctLoai" class="finput min-w-[180px]">
+              <option value="picking">Phiếu xuất</option>
+              <option value="receiving">Phiếu nhập</option>
+              <option value="chungchi">Chứng chỉ nhập kho</option>
+            </select>
+          </div>
+          <div>
+            <label class="flabel" for="ctStation">Station</label>
+            <select id="ctStation" class="finput min-w-[120px]">
+              <option value="HAN">HAN</option>
+              <option value="SGN">SGN</option>
+              <option value="DAD">DAD</option>
+            </select>
+          </div>
+          <div class="grow">
+            <label class="flabel" for="ctSo">Số chứng từ</label>
+            <input id="ctSo" type="text" class="finput w-full max-w-[320px]"
+                   placeholder="VD: 649020 hoặc 1'234'567" autocomplete="off" />
+          </div>
+          <button id="ctTim" class="btn-accent">🔍 Tìm</button>
+        </div>
+        <div id="ctOut"></div>
+      </div>
+    </div><!-- /#lgc-chungtu -->
     </section>
 
     <!-- ============ TAB TRA CỨU PART ON/OFF ============ -->

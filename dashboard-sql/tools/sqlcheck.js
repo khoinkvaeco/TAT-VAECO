@@ -33,7 +33,20 @@ const ENDPOINTS = [
   '/api/reports/removed-not-returned', '/api/reports/not-reconciled',
   '/api/reports/manual-pair', '/api/reports/removed-before-installed',
   '/api/reports/other', '/api/reports/return-store-tat', '/api/reports/repair-admin',
-  '/api/pickslip', '/api/receiving',
+  // ⚠️ `nocache=1` cho /api/receiving: tab Quan ly xuat kho chay TRUOC trong
+  // danh sach nay va no GUI danh sach dong Return vao cache dung chung, nen
+  // neu khong bo cache thi Receiving se KHONG sinh cau lay seq_ret va LUAT 5
+  // bao thieu cot. Bo cache o day vua giu duoc luat, vua kiem luon: nut
+  // "Tai lai" phai hoi lai THAT chu khong an vao lop dem nao.
+  // ⚠️ THU TU BA DONG NAY QUAN TRONG, dung doi:
+  //   1. /api/pickslip          -> keo #ps va GUI danh sach dong Return vao cache
+  //   2. /api/receiving         -> phai DUNG LAI cache do, KHONG keo lai #ps (LUAT 8)
+  //   3. /api/receiving?nocache -> bo moi lop dem, nen PHAI sinh lai cau
+  //      lay seq_ret (LUAT 5) - vua giu duoc luat, vua kiem luon rang nut
+  //      "Tai lai" hoi lai THAT chu khong an vao lop dem nao.
+  // Dat (3) truoc (2) la bai kiem MAT TAC DUNG: chinh (3) se nap cache, nen (2)
+  // van "dat" ke ca khi qPickslip khong he gui cache. Da dinh dung loi do.
+  '/api/pickslip', '/api/receiving', '/api/receiving?nocache=1',
   '/api/wp?wp=SQLCHECK-WP',
   '/api/wp/tim?station=SGN&wpStatus=11', '/api/wp/tim?station=SGN&wpStatus=-2&tuNgay=2026-01-01',
   // Goi them MOT LUOT CO BO LOC station/store: menh de loc chi duoc sinh ra khi
@@ -193,7 +206,7 @@ function findWriteOutsideAppTables(sql) {
  * ton tai va SQL Server BAO LOI NGAY khi chay that, chu khong am tham sai.
  */
 const COT_BAT_BUOC = {
-  '/api/receiving': [
+  '/api/receiving?nocache=1': [
     // Phan loai Receive/Return + so phieu hien thi + so goc de doi chieu
     'loai', 'voucherno', 'voucherno_goc',
     // Tach so dong theo loai cho the KPI cua tab
@@ -222,6 +235,30 @@ const COT_BAT_BUOC = {
  * ngay ca khi cot da bi doi ten. Da thu that luc chung minh luat nay.
  */
 const reCot = (ten) => new RegExp(`\\bAS\\s+\\[?${ten}\\]?\\b`, 'i');
+
+/**
+ * LUAT 8: TAB RECEIVING PHAI DUNG LAI DANH SACH DONG RETURN CUA TAB XUAT KHO.
+ * ---------------------------------------------------------------------------
+ * ⚠️ SINH RA TU MOT PHAN ANH THAT (19/08/2026): "toi da chay lay du lieu o
+ * phieu xuat nhung qua tab receive thi log van hien chay lai lay du lieu phieu
+ * xuat de lay return".
+ *
+ * Keo #ps la buoc NANG NHAT cua ca chuong trinh (hai bang AMOS qua linked
+ * server). Chay lai lan hai cho cung mot ky la lang phi thay ro tren man hinh.
+ * qPickslip nay gui danh sach dong Return (ban KHONG loc) vao cache dung chung
+ * (luuReturnSeqnos), Receiving doc lai tu do.
+ *
+ * Bai kiem: sau khi /api/pickslip da chay, /api/receiving (KHONG co nocache)
+ * KHONG duoc sinh cau `INTO #ps` nao nua.
+ */
+function soiDungLaiReturn(theoEndpoint) {
+  const sql = (theoEndpoint.get('/api/receiving') || []).join('\n');
+  if (!sql) return ['/api/receiving: KHONG bat duoc cau SQL nao'];
+  return /INTO\s+#ps\b/i.test(sql)
+    ? ['/api/receiving van KEO LAI #ps du /api/pickslip vua chay xong - '
+      + 'danh sach dong Return phai duoc dung lai qua cache (xem luuReturnSeqnos)']
+    : [];
+}
 
 function soiCotBatBuoc(theoEndpoint) {
   const loi = [];
@@ -321,8 +358,10 @@ const RULES = [
     tim: findHaiCotNgayTrongPull },
   { ten: 'Ham gom chua subquery (Msg 130)', tim: findAggWithSubquery },
   { ten: 'APPLY vao linked server', tim: findApplyOnLinkedServer },
-  // Luat 5 chay MOT LAN tren toan bo (khong theo tung cau) - xem duoi main()
+  // Luat 5 va 8 chay MOT LAN tren toan bo (khong theo tung cau) - xem main()
   { ten: 'Cau SQL thieu cot ma Node/giao dien doc', tim: () => [] },
+  { ten: 'Receiving keo lai #ps du tab xuat kho vua chay (lang phi luot hoi AMOS)',
+    tim: () => [] },
   // canhBao = chi nhac, khong lam TRUOT (xem giai thich o findFuncInRemoteWhere)
   { ten: 'Ham trong WHERE gui xuong linked server (cham gap ~21 lan)',
     tim: findFuncInRemoteWhere, canhBao: true },
@@ -404,6 +443,10 @@ async function main() {
 
   for (const h of soiCotBatBuoc(theoEndpoint)) {
     loi.push({ rule: 'Cau SQL thieu cot ma Node/giao dien doc', chiTiet: h, sql: '' });
+  }
+  for (const h of soiDungLaiReturn(theoEndpoint)) {
+    loi.push({ rule: 'Receiving keo lai #ps du tab xuat kho vua chay (lang phi luot hoi AMOS)',
+      chiTiet: h, sql: '' });
   }
 
   console.log(`Da soi ${daSoi.size} cau SQL khac nhau (${lines.length} luot goi).`);

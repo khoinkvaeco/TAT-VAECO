@@ -139,6 +139,13 @@ async function main() {
     fs.writeFileSync(path.join(thuMuc, '649020-1.pdf'), '%PDF-1.4\nmot\n%%EOF\n');
     fs.writeFileSync(path.join(thuMuc, '649020-2.pdf'), '%PDF-1.4\nhai\n%%EOF\n');
     fs.writeFileSync(path.join(tmp, 'bi-mat.txt'), 'KHONG DUOC LO RA NGOAI');
+    // Thu muc CHUNG CHI NHAP KHO - phuc vu tab "Tra cuu chung tu".
+    // Ten file co dau phan cach hang nghin de kiem luon phan chuan hoa so.
+    const thuMucCc = path.join(tmp, 'chungchi');
+    fs.mkdirSync(thuMucCc);
+    fs.writeFileSync(path.join(thuMucCc, "1'234'567.pdf"), '%PDF-1.4\ncc-mot\n%%EOF\n');
+    fs.writeFileSync(path.join(thuMucCc, '7654321.pdf'), '%PDF-1.4\ncc-hai\n%%EOF\n');
+    fs.writeFileSync(path.join(thuMucCc, 'CC-9990001.pdf'), '%PDF-1.4\ncc-ba\n%%EOF\n');
 
     const P3 = PORT + 2;
     const B3 = `http://127.0.0.1:${P3}`;
@@ -147,6 +154,7 @@ async function main() {
       env: {
         ...process.env, DEMO_MODE: 'false', PORT: String(P3), LGC_GATE: 'false',
         DATA_DIR: path.join(tmp, 'data'), SCAN_PICKING_DIR: thuMuc,
+        SCAN_CHUNGCHI_DIR: thuMucCc,
       },
       stdio: 'ignore',
     });
@@ -194,6 +202,61 @@ async function main() {
         const body = await r.text();
         kiemTra(`Thư mục thật — chặn: ${ten}`,
           !r.ok && !body.includes('KHONG DUOC LO RA NGOAI'), `HTTP ${r.status}`);
+      }
+
+      // ================= TRA CUU CHUNG TU (/api/chungtu/*) =================
+      // ⚠️ Duong nay cung cho nguoi dung chi ra TEN FILE roi may chu doc file
+      // do gui ve - dung loai lo hong voi /api/scan/file. PHAI kiem RIENG:
+      // hai duong dung chung y tuong nhung la HAI DOAN MA khac nhau, sua mot
+      // ben khong tu sua ben kia.
+      const ct = (q) => `${B3}/api/chungtu/tim?loai=chungchi&station=HAN&${q}`;
+      const ctFile = (q) => `${B3}/api/chungtu/file?loai=chungchi&station=HAN&${q}`;
+
+      // 1) Bo dau phan cach hang nghin: go "1'234'567" phai ra file
+      const c1 = await (await fetch(ct(`so=${encodeURIComponent("1'234'567")}`))).json();
+      kiemTra('Chứng từ: bỏ dấu phân cách hàng nghìn khi tìm',
+        c1.ok && c1.files.includes("1'234'567.pdf"), JSON.stringify(c1.files || []));
+      // 2) Go so THUAN (khong dau) cung ra dung file do
+      const c2 = await (await fetch(ct('so=1234567'))).json();
+      kiemTra('Chứng từ: gõ số thuần vẫn ra file có dấu phân cách trong tên',
+        c2.ok && c2.files.includes("1'234'567.pdf"), JSON.stringify(c2.files || []));
+      // 3) Tim TUONG DOI: chi go vai chu so cuoi
+      const c3 = await (await fetch(ct('so=54321'))).json();
+      kiemTra('Chứng từ: tìm tương đối (chỉ gõ vài chữ số)',
+        c3.ok && c3.files.includes('7654321.pdf'), JSON.stringify(c3.files || []));
+      // 4) Khong khop -> rong, KHONG phai loi
+      const c4 = await (await fetch(ct('so=000111222'))).json();
+      kiemTra('Chứng từ: không khớp thì trả danh sách rỗng',
+        c4.ok && c4.files.length === 0, `${(c4.files || []).length} file`);
+      // 5) Qua ngan -> tu choi (neu khong thi go 1 ky tu la tra ve ca thu muc)
+      const c5 = await fetch(ct('so=1'));
+      kiemTra('Chứng từ: gõ dưới 3 ký tự thì từ chối', c5.status === 400, `HTTP ${c5.status}`);
+      // 6) Loai khong hop le -> tu choi
+      const c6 = await fetch(`${B3}/api/chungtu/tim?loai=linh-tinh&station=HAN&so=1234567`);
+      kiemTra('Chứng từ: loại không hợp lệ thì từ chối', c6.status === 400, `HTTP ${c6.status}`);
+      // 7) Mo dung file
+      const c7 = await fetch(ctFile('so=7654321&ten=7654321.pdf'));
+      const b7 = await c7.text();
+      kiemTra('Chứng từ: mở đúng file được chọn', c7.ok && b7.includes('cc-hai'), `HTTP ${c7.status}`);
+      // 8) Tai ve -> phai la attachment
+      const c8 = await fetch(ctFile('so=7654321&ten=7654321.pdf&tai=1'));
+      kiemTra('Chứng từ: “Tải về” trả Content-Disposition attachment',
+        (c8.headers.get('content-disposition') || '').startsWith('attachment'),
+        c8.headers.get('content-disposition') || '');
+      // 9) ⚠️ DIEM CHINH: ten file KHONG nam trong ket qua tim -> TUYET DOI
+      //    khong duoc phuc vu, du duong dan duoc bo doi kieu gi.
+      for (const [ten, hiem] of [
+        ['lùi một cấp ra file bí mật', '../bi-mat.txt'],
+        ['lùi một cấp, dấu gạch ngược', '..\\bi-mat.txt'],
+        ['lùi nhiều cấp', '../../../../etc/passwd'],
+        ['đường dẫn tuyệt đối tới chính file bí mật', path.join(tmp, 'bi-mat.txt')],
+        ['file CÓ THẬT trong thư mục nhưng KHÔNG khớp số đang tìm', '7654321.pdf'],
+      ]) {
+        const r = await fetch(ctFile(`so=1234567&ten=${encodeURIComponent(hiem)}`));
+        const body2 = await r.text();
+        kiemTra(`Chứng từ — chặn: ${ten}`,
+          !r.ok && !body2.includes('KHONG DUOC LO RA NGOAI') && !body2.includes('cc-hai'),
+          `HTTP ${r.status}`);
       }
     } finally {
       srv3.kill();

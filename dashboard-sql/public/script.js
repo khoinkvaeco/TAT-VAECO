@@ -445,9 +445,13 @@ function renderKPIs(kpis, prev, sparks) {
     { label: 'Chưa đối ứng', value: kpis.countNotReconciled, prev: prev.countNotReconciled, dir: 'down', unit: 'thiết bị', accent: '--series-6', spark: 'notReconciled' },
     { label: 'Tỷ lệ đối ứng', value: kpis.reconcileRate, prev: prev.reconcileRate, dir: 'up', unit: '%', accent: '--series-7', spark: 'reconcileRate' },
     // SL da NHAN (reci) / SL da GIAO (del) cua CUVT trong ky (2 so -> khong tinh delta)
-    { label: 'SL nhận / SL giao (CUVT)', value: `${kpis.cntReci ?? 0}/${kpis.cntDel ?? 0}`, unit: '', accent: '--series-4',
-      title: `CUVT đã NHẬN ${kpis.cntReci ?? 0} / đã GIAO ${kpis.cntDel ?? 0} thiết bị trong kỳ. `
-        + 'Nhận luôn ≤ giao (chỉ nhận được cái đã giao). Station/Kho lọc theo PHIẾU XUẤT.' },
+    // NHAN US = so thiet bi CUVT DA NHAN (real_us1.reci_time hop le)
+    // TRA US  = so thiet bi DA TRA unservice trong ky (real_us1.del_time)
+    { label: 'Nhận US / Trả US', value: `${kpis.cntReci ?? 0}/${kpis.cntDel ?? 0}`, unit: 'thiết bị', accent: '--series-4',
+      title: `Đã NHẬN US ${kpis.cntReci ?? 0} / đã TRẢ US ${kpis.cntDel ?? 0} thiết bị trong kỳ. `
+        + 'Trả US = đơn vị trả thiết bị unservice về (mốc del_time); '
+        + 'Nhận US = CUVT đã nhận thiết bị đó (mốc reci_time). '
+        + 'Nhận luôn ≤ trả — chỉ nhận được cái đã trả. Station/Kho lọc theo PHIẾU XUẤT.' },
     ] },
   ];
 
@@ -2375,6 +2379,9 @@ const FILTER_VIEWS = {
   'lgc:receiving': { period: 1, station: 1, store: 1, dept: 0, cc: 0 },
   // Repair Admin la ANH CHUP HIEN TRANG: khong theo ky, chi loc station/store.
   'lgc:repair': { period: 0, station: 1, store: 1, dept: 0, cc: 0 },
+  // Tra cuu chung tu KHONG hoi SQL, chi doc thu muc file scan: khong dung o
+  // loc nao ben tren ca (co o Loai / Station / So rieng trong tab).
+  'lgc:chungtu': { period: 0, station: 0, store: 0, dept: 0, cc: 0 },
   // Tra cuu Part On/Off co o tim rieng, khong dung o loc nao ben tren.
   partlookup: { period: 0, station: 0, store: 0, dept: 0, cc: 0 },
 };
@@ -2538,24 +2545,35 @@ async function chaoNguoiDung() {
 // bo loc) chi hien man hinh "chua chay"; nguoi dung chon ky/station xong bam
 // "Chay kiem tra" thi moi goi API. `lgcRan` nho tab con nao DA chay voi bo loc
 // hien tai - doi bo loc thi xoa het de khoi doc nham so lieu cu.
-const LGC_TABS = ['pickslip', 'receiving', 'repair'];
+const LGC_TABS = ['pickslip', 'receiving', 'repair', 'chungtu'];
 const LGC_TAB_NAME = {
   pickslip: 'Quản lý xuất kho', receiving: 'Receiving', repair: 'Repair Admin',
+  chungtu: 'Tra cứu chứng từ',
 };
+// Tab con KHONG hoi SQL Server: khong co man hinh "chua chay", khong co nut
+// "Chay kiem tra", va khong bi reset khi doi bo loc.
+const LGC_TABS_KHONG_SQL = ['chungtu'];
 const lgcRan = {};
 
 /** Hien noi dung tab con neu DA chay, nguoc lai hien the "chua chay". */
 function renderLgcPanes() {
   const sub = state.lgcTab;
-  const ran = !!lgcRan[sub];
+  // Tab khong hoi SQL thi LUON hien noi dung: bat nguoi dung bam "Chay kiem
+  // tra" de doc mot thu muc file la vo nghia.
+  const khongSql = LGC_TABS_KHONG_SQL.includes(sub);
+  const ran = khongSql || !!lgcRan[sub];
   $('#lgcIdle').classList.toggle('hidden', ran);
   $('#lgcIdleName').textContent = LGC_TAB_NAME[sub] || sub;
+  const nut = $('#lgcRun');
+  if (nut) nut.classList.toggle('hidden', khongSql);
   LGC_TABS.forEach((t) => $(`#lgc-${t}`).classList.toggle('hidden', !(ran && t === sub)));
 }
 
 /** Danh dau moi tab con LGC la CHUA CHAY (dung khi doi bo loc). */
 function resetLgc() {
-  LGC_TABS.forEach((t) => { lgcRan[t] = false; });
+  // Tab khong hoi SQL khong phu thuoc bo loc -> khong reset (dang xem ket qua
+  // tra cuu mà đổi station ở thanh lọc thì mất kết quả là rất khó chịu).
+  LGC_TABS.filter((t) => !LGC_TABS_KHONG_SQL.includes(t)).forEach((t) => { lgcRan[t] = false; });
   if (!$('#tab-lgc').classList.contains('hidden')) renderLgcPanes();
 }
 
@@ -2567,6 +2585,99 @@ function switchLgcTab(sub) {
   $$('.lgcTab').forEach((b) => b.classList.toggle('active', b.dataset.lgc === sub));
   applyFilterVisibility('lgc:' + sub);
   renderLgcPanes();
+}
+
+// --------------------------------------------------------------------------
+// LGC ▸ TRA CUU CHUNG TU
+// --------------------------------------------------------------------------
+//  KHONG hoi SQL Server - chi doc thu muc file scan da cau hinh o /admin.
+//  Ba loai: phieu xuat (picking) · phieu nhap (receiving) · chung chi nhap
+//  kho (chungchi).
+// --------------------------------------------------------------------------
+
+/**
+ * Bo dau phan cach hang nghin nam GIUA hai chu so: 1'234'567 -> 1234567.
+ * ⚠️ PHAI GIONG HET ham cung ten o server (chuanHoaSoChungTu) - hai ban lech
+ * nhau la o tim hien mot dang con ket qua tra ve theo dang khac.
+ * Chi bo khi dau do KEP GIUA hai chu so, nen 'P-CA-159080' khong bi dong toi.
+ */
+function chuanHoaSoChungTu(raw) {
+  return String(raw == null ? '' : raw).trim().replace(/(\d)[\s'’`.,](?=\d)/g, '$1');
+}
+
+const CT_TOI_THIEU = 3;
+
+/** Ve ket qua tra cuu (hoac thong bao trong / loi). */
+function veKetQuaChungTu(kq, loai, station) {
+  const host = $('#ctOut');
+  if (!host) return;
+  if (!kq || !kq.files || !kq.files.length) {
+    host.innerHTML = '<p class="text-sm text-muted">Không tìm thấy chứng từ nào khớp.</p>';
+    return;
+  }
+  const q = (ten, tai) => `/api/chungtu/file?loai=${encodeURIComponent(loai)}`
+    + `&station=${encodeURIComponent(station)}&so=${encodeURIComponent(kq.so)}`
+    + `&ten=${encodeURIComponent(ten)}${tai ? '&tai=1' : ''}`;
+  const dong = kq.files.map((f) => `
+    <li class="ct-dong">
+      <span class="ct-ten" title="${escapeHtml(f)}">📄 ${escapeHtml(f)}</span>
+      <span class="ct-nut">
+        <a href="${q(f, false)}" target="_blank" rel="noopener" class="ct-xem">Xem</a>
+        <a href="${q(f, true)}" class="ct-tai">⬇ Tải về</a>
+      </span>
+    </li>`).join('');
+  const batCat = kq.biCat
+    ? `<p class="text-xs text-muted mt-2">⚠ Còn ${(kq.tong - kq.files.length).toLocaleString('vi')} `
+      + `kết quả nữa chưa hiện (giới hạn ${kq.toiDa}). Gõ thêm chữ số để thu hẹp.</p>`
+    : '';
+  host.innerHTML = `<p class="text-sm text-secondary mb-2">Tìm thấy `
+    + `<b>${kq.tong.toLocaleString('vi')}</b> chứng từ khớp “<b>${escapeHtml(kq.so)}</b>”`
+    + `${kq.demo ? ' <i>(dữ liệu demo)</i>' : ''}.</p>`
+    + `<ul class="ct-ds">${dong}</ul>${batCat}`;
+}
+
+async function timChungTu() {
+  const loai = $('#ctLoai').value;
+  const station = $('#ctStation').value;
+  const oSo = $('#ctSo');
+  // Chuan hoa NGAY TREN O NHAP de nguoi dung THAY chuong trinh da bo dau phan
+  // cach - khong phai doan xem no co hieu hay khong.
+  const so = chuanHoaSoChungTu(oSo.value);
+  oSo.value = so;
+  const host = $('#ctOut');
+  if (so.length < CT_TOI_THIEU) {
+    host.innerHTML = `<p class="text-sm text-muted">Nhập ít nhất ${CT_TOI_THIEU} ký tự để tra cứu.</p>`;
+    return;
+  }
+  const nut = $('#ctTim');
+  nut.disabled = true;
+  host.innerHTML = '<p class="text-sm text-muted">Đang tìm trong thư mục…</p>';
+  try {
+    const r = await fetch(`/api/chungtu/tim?loai=${encodeURIComponent(loai)}`
+      + `&station=${encodeURIComponent(station)}&so=${encodeURIComponent(so)}`);
+    const d = await r.json();
+    if (!r.ok || d.error) {
+      host.innerHTML = `<p class="text-sm" style="color:var(--critical)">⚠ ${escapeHtml(d.message || 'Không tra cứu được.')}</p>`;
+      return;
+    }
+    veKetQuaChungTu(d, loai, station);
+  } catch (e) {
+    host.innerHTML = `<p class="text-sm" style="color:var(--critical)">⚠ Lỗi kết nối: ${escapeHtml(e.message)}</p>`;
+  } finally {
+    nut.disabled = false;
+  }
+}
+
+function initChungTu() {
+  const nut = $('#ctTim');
+  if (!nut) return;
+  nut.addEventListener('click', timChungTu);
+  // Enter trong o so = bam Tim (thao tac tu nhien nhat cua viec tra cuu)
+  $('#ctSo').addEventListener('keydown', (e) => { if (e.key === 'Enter') timChungTu(); });
+  // Doi loai / station khi DANG co ket qua -> tim lai ngay cho khoi phai bam
+  ['#ctLoai', '#ctStation'].forEach((sel) => $(sel).addEventListener('change', () => {
+    if (chuanHoaSoChungTu($('#ctSo').value).length >= CT_TOI_THIEU) timChungTu();
+  }));
 }
 
 /** Bam "Chay kiem tra": chay truy van cho tab con dang mo. */
@@ -3766,6 +3877,7 @@ async function init() {
   initPartLookup();
   initPickslip();
   initReceiving();
+  initChungTu();
   checkHealth();
   // Muc tieu KPI phai co TRUOC khi ve dashboard - ve xong moi biet muc tieu
   // thi cac the KPI se nhap nhay mot lan tu 2 ngay (mac dinh) sang so that.

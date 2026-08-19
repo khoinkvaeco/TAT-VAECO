@@ -1614,6 +1614,109 @@ luôn là **tập con** của “đã giao”. Nay cả hai lấy từ **một k
 `reci_time` thì thuộc *đã nhận*. Bài kiểm tra chỉ có giá trị khi dữ liệu mẫu tuân đúng quan hệ của
 dữ liệu thật.
 
+## 7r. Tab *Tra cứu chứng từ* · bỏ dò lại schema · thời gian hoàn thành · dùng lại dữ liệu phiếu xuất
+
+Năm việc chốt ngày **19/08/2026**.
+
+### 1. Thẻ KPI đổi tên: *Nhận US / Trả US*
+
+| Số | Nguồn | Nghĩa nghiệp vụ |
+|---|---|---|
+| **Trả US** | `real_us1.del_time` trong kỳ | đơn vị **trả** thiết bị unservice về |
+| **Nhận US** | `real_us1.reci_time` hợp lệ | CUVT **đã nhận** thiết bị đó |
+
+Cách tính không đổi — chỉ đổi tên cho đúng từ nghiệp vụ (trước là *“SL nhận / SL giao (CUVT)”*).
+Đẳng thức **Nhận US ≤ Trả US** vẫn được `admincheck` canh.
+
+### 2. Không dò lại cấu trúc bảng AMOS mỗi lần chạy
+
+`PICKSLIP_DATE` là **số ngày AMOS** — nghiệp vụ đã chốt, không cần dò lại. Kết quả dò vốn *đã*
+được cache theo tiến trình (`_dateKindCache` / `_remoteColCache`), nhưng bước `buoc()` **vẫn in ra
+nhật ký**, khiến người dùng tưởng chương trình dò lại mỗi lần. Nay `daBietPickslipSchema()` kiểm
+tra trước: biết rồi thì **bỏ hẳn** bước đó, không log, không chờ.
+
+> ⚠️ Danh sách trong `daBietPickslipSchema()` phải **khớp y hệt** các lần dò trong `pickslipTemp()`.
+> Thiếu một cái thì lần sau vẫn tốn một lượt hỏi mạng (không sai số liệu, chỉ chậm).
+
+### 3. Dòng kết thúc có GIỜ XONG và HẾT BAO LÂU
+
+Trước đây chỉ có `✔ Xong — 1.234 dòng`. Nay:
+
+```
+✔ Receiving: xong lúc 14:29:07 — hết 1 phút 12 giây — 1.234 dòng
+```
+
+Áp cho **Quản lý xuất kho · Receiving · Repair Admin** (và mọi báo cáo khác — bảng `TEN_BAO_CAO`
+cho tên nghiệp vụ). `doDaiThoiGian()` đọc cho người: `850 ms` · `12,4 giây` · `2 phút 05 giây` —
+`137954 ms` không trả lời được câu *“chờ bao lâu”*.
+
+### 4. Receiving DÙNG LẠI dữ liệu phiếu xuất, không kéo `#ps` lần hai
+
+**Phản ánh thật:** *“tôi đã chạy lấy dữ liệu ở phiếu xuất nhưng qua tab receive thì log vẫn chạy
+lại lấy dữ liệu phiếu xuất để lấy return”*.
+
+Đúng: `returnSeqCache` chỉ được **`layReturnSeqnos` (bên Receiving)** ghi vào; `qPickslip` chạy
+xong không gửi gì cả, nên tab Receiving vẫn phải kéo `#ps` một lần nữa — bước **nặng nhất** của cả
+chương trình.
+
+Nay `qPickslip` có thêm câu **[6b]**: cùng danh sách dòng Return nhưng **không áp bộ lọc nào**,
+chạy trên `#ps` đã ở local nên **không tốn thêm lượt hỏi AMOS**, rồi gửi vào cache dùng chung.
+
+> ⚠️ **Phải là bản KHÔNG lọc.** Cache khoá theo **kỳ** thôi; lưu bản đã lọc station/store thì
+> Receiving sẽ thiếu dòng Return mà không báo gì.
+
+Kèm theo: `?nocache=1` (nút **↻ Tải lại**) nay bỏ qua **cả cache nội bộ** này — *“hỏi lại SQL
+Server”* phải có nghĩa là hỏi lại **thật**, không còn lớp đệm nào sót lại.
+
+**LUẬT 8 của `sqlcheck`** canh điều này: sau khi `/api/pickslip` chạy, `/api/receiving` (không
+`nocache`) **không được** sinh câu `INTO #ps` nào nữa.
+
+> ⚠️ **Thứ tự ba endpoint trong `ENDPOINTS` là một phần của bài kiểm, đừng đổi:**
+> `pickslip` → `receiving` → `receiving?nocache=1`. Đặt `?nocache=1` lên trước thì **chính nó** nạp
+> cache, nên `/api/receiving` vẫn “đạt” kể cả khi `qPickslip` không hề gửi cache — bài kiểm mất tác
+> dụng hoàn toàn. **Đã dính đúng lỗi đó**: lần đầu gài lại bug thì luật báo ✔; sau khi sửa thứ tự
+> mới báo ✖ đúng như mong đợi.
+
+### 5. Tab mới: LGC ▸ *Tra cứu chứng từ*
+
+Khác hẳn ba tab kia: **không hỏi SQL Server**, chỉ đọc thư mục file scan → không đi qua nút
+*▶ Chạy kiểm tra*, không phụ thuộc Kỳ báo cáo, và không bị xoá kết quả khi đổi bộ lọc.
+
+Ba loại chứng từ, thư mục cấu hình ở trang `/admin` (cột thứ ba của bảng *Thư mục file scan PDF*):
+
+| Loại | Khoá | Thư mục |
+|---|---|---|
+| Phiếu xuất | `picking` | dùng chung với đối chiếu scan phiếu xuất |
+| Phiếu nhập | `receiving` | dùng chung với đối chiếu scan phiếu nhập |
+| **Chứng chỉ nhập kho** | `chungchi` | **mới** — để trống là tắt tính năng cho loại này |
+
+**Ba điểm nghiệp vụ:**
+
+1. **Bỏ dấu phân cách hàng nghìn.** Số copy từ Excel hay ra dạng `1'234'567` (cũng chấp nhận
+   `1.234.567` · `1 234 567`). `chuanHoaSoChungTu()` chỉ bỏ dấu khi nó **kẹp giữa hai chữ số**, nên
+   `P-CA-159080` và `R-132197` không bị đụng tới. Ô nhập được chuẩn hoá **ngay trên màn hình** để
+   người dùng *thấy* chương trình đã bỏ dấu.
+2. **Tìm tương đối** (chứa chuỗi) — người dùng thường chỉ nhớ vài chữ số cuối. Tối thiểu **3 ký
+   tự** (gõ 1 ký tự mà trả về cả thư mục thì vô dụng), tối đa **200 kết quả** và **nói rõ** khi bị
+   cắt bớt.
+3. **Trả danh sách để người dùng tự chọn** — mỗi dòng có **Xem** (mở tab mới) và **⬇ Tải về**.
+
+**Bảo mật — dùng lại nguyên vẹn hai lớp của `/api/scan/file`:**
+
+* **Lớp 1** — tên file chỉ được lấy từ **danh sách thật** mà thư mục vừa trả về; tên người dùng gửi
+  lên **không bao giờ** được ghép thẳng vào đường dẫn.
+* **Lớp 2** — đường dẫn tuyệt đối phải nằm trong thư mục đã cấu hình.
+
+⚠️ Hai đường (`/api/scan/file` và `/api/chungtu/file`) **cùng ý tưởng nhưng là hai đoạn mã khác
+nhau** — sửa một bên không tự sửa bên kia, nên `tools/scancheck.js` kiểm **riêng** cả hai (nay **36
+trường hợp**). Đã **đo thật**:
+
+* tháo **lớp 1** → `✖ 1/36` (mở được file có thật trong thư mục nhưng **không khớp số đang tìm**);
+* tháo **cả hai lớp** → `✖ 4/36` và file bí mật ngoài thư mục **rò ra `HTTP 200`**.
+
+Có cả trường hợp *“file CÓ THẬT trong thư mục nhưng KHÔNG khớp số đang tìm”* — lớp 2 một mình
+**không** chặn được nó, vì file đó nằm đúng trong thư mục.
+
 ## 7q. Đăng nhập cho CẢ chương trình · LGC quay về làm một tab · Thanh tab dính
 
 Bốn thay đổi giao diện + phân quyền chốt ngày **18/08/2026**.
@@ -1787,6 +1890,8 @@ trả đều báo “chưa scan” oan**.
 | `GET /api/pickslip` | Tab *Quản lý xuất kho*: KPI + 4 biểu đồ + bảng chi tiết, kèm **đối chiếu file scan**, **phiếu trả** và **TAT return**. Trả thêm `scanFolder` (đường dẫn, số file PDF đọc được, lỗi nếu có). |
 | `GET /api/receiving` | Tab *Receiving*: phiếu nhập kho (`HISTORY` `VM='B1'`, đã loại phiếu hủy nhập `CR`) + đối chiếu file scan theo `VOUCHERNO`. Trả thêm `scanFolder`. |
 | `GET /api/scan-config` | Đường dẫn 2 thư mục file scan + **trạng thái thật** (đọc được bao nhiêu file PDF / lỗi gì) + `canEdit`. **Mọi máy xem được.** |
+| `GET /api/chungtu/tim` | Tra cứu chứng từ theo số (`loai` = picking · receiving · chungchi, `station`, `so`). Bỏ dấu phân cách hàng nghìn, tìm **tương đối**, tối thiểu 3 ký tự, tối đa 200 kết quả. **Sau cổng LGC.** |
+| `GET /api/chungtu/file` | Trả về chính file (`…&ten=`, thêm `&tai=1` để tải về). Tên file phải nằm trong kết quả tìm — xem §7r. **Sau cổng LGC.** |
 | `GET /api/scan/tim` | Liệt kê file PDF ứng với một phiếu (`loai`, `station`, `ma`). **Sau cổng LGC.** |
 | `GET /api/scan/file` | Trả về chính file PDF (`loai`, `station`, `ma`, `ten`). Tên file phải nằm trong danh sách thật của thư mục — xem §6c. **Sau cổng LGC.** |
 | `GET /api/admin/diag/receiving-loai` | Đếm dòng `HISTORY` theo (`VM` × tiền tố `VOUCHERNO`) để đối chiếu phân loại Receive/Return trên dữ liệu thật. **Chỉ IP quản trị.** |

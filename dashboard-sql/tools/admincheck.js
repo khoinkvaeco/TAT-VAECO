@@ -159,7 +159,7 @@ async function main() {
     kiemTra('Mẫu số SLA không vượt quá số thiết bị đã đối ứng',
       kAll.slaN <= daDoiUng, `${kAll.slaN} ≤ ${daDoiUng}`);
     // KHONG THE nhan nhieu hon so da giao - dang thuc tuyet doi.
-    kiemTra('SL nhận (CUVT) ≤ SL giao (CUVT)',
+    kiemTra('Nhận US ≤ Trả US',
       kAll.cntReci <= kAll.cntDel, `${kAll.cntReci} ≤ ${kAll.cntDel}`);
     // ⚠️ DAU VET CHINH XAC CUA LOI DA XAY RA: bat bo loc Station/Kho vao thi
     // "SL giao" sap gan het (593 -> 2) trong khi "Thiet bi xuat kho" hau nhu
@@ -178,7 +178,7 @@ async function main() {
     kiemTra('Lọc Station: KPI nào cũng chỉ nhỏ đi, không cái nào sập riêng',
       kLoc.countIssued <= kAll.countIssued && kLoc.cntDel <= kAll.cntDel,
       `xuất kho ${kAll.countIssued}→${kLoc.countIssued} · giao ${kAll.cntDel}→${kLoc.cntDel}`);
-    kiemTra('⚠️ Lọc Station KHÔNG được làm "SL giao" sập trong khi "Thiết bị xuất kho" thì không',
+    kiemTra('⚠️ Lọc Station KHÔNG được làm "Trả US" sập trong khi "Thiết bị xuất kho" thì không',
       rXuat < 0.05 || rGiao >= rXuat / 10,
       `còn lại: xuất kho ${(rXuat * 100).toFixed(1)}% · giao ${(rGiao * 100).toFixed(1)}%`);
 
